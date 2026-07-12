@@ -11,7 +11,7 @@ software. It is not a DLSS, FSR, or frame-generation clone.
 
 ## Current boundary
 
-Version 0.2 remains advisory-only:
+Version 0.3 remains advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -73,9 +73,10 @@ binary built from this repository or another binary you explicitly trust.
 ## Present hook lab
 
 The native build also contains a controlled D3D11 hook lab. An owned target
-loads the hook DLL cooperatively, the DLL intercepts only
-`IDXGISwapChain::Present`, and detach restores the exact original vtable entry
-before the DLL can be unloaded.
+loads the hook DLL cooperatively. The DLL observes `IDXGISwapChain::Present`,
+buffer and texture creation, write-oriented `Map/Unmap`, `UpdateSubresource`,
+and `CopyResource`. Detach restores every current original vtable entry before
+the DLL can be unloaded.
 
 ```powershell
 native/build/Release/fluidruntime-hook-target.exe `
@@ -85,6 +86,14 @@ native/build/Release/fluidruntime-hook-target.exe `
   --out artifacts/present-hook-lab.json
 ```
 
+The deterministic workload performs six resource copies. Three repeat an
+unchanged source/destination generation and are reported as candidates, never
+skipped. The expected result is 49,152 bytes copied and 24,576 bytes potentially
+avoidable.
+
 This is not remote injection and is not intended for protected or anti-cheat
-processes. It exists to verify hook observation, concurrent-call draining, and
-rollback in software we own before any external-process work is considered.
+processes. It exists to verify resource observation, runtime thunk transitions,
+concurrent-call draining, and rollback in software we own before any
+external-process work is considered. Candidate detection currently assumes the
+controlled workload; GPU shader/UAV writes and resource release tracking are
+not covered yet.

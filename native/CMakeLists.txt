@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.2.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.3.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -21,10 +21,13 @@ target_link_libraries(fluidruntime-native-probe PRIVATE pdh psapi)
 
 add_library(fluidruntime-present-hook SHARED src/present_hook.cpp)
 configure_fluidruntime_native_target(fluidruntime-present-hook)
+target_compile_definitions(fluidruntime-present-hook PRIVATE FLUIDRUNTIME_HOOK_EXPORTS)
+target_include_directories(fluidruntime-present-hook PRIVATE include)
 target_link_libraries(fluidruntime-present-hook PRIVATE dxgi)
 
 add_executable(fluidruntime-hook-target src/hook_target.cpp)
 configure_fluidruntime_native_target(fluidruntime-hook-target)
+target_include_directories(fluidruntime-hook-target PRIVATE include)
 target_link_libraries(fluidruntime-hook-target PRIVATE d3d11 dxgi)
 
 enable_testing()
