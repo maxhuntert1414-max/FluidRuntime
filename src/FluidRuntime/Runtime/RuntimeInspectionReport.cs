@@ -1,3 +1,4 @@
+using FluidRuntime.Native;
 using FluidRuntime.Telemetry;
 
 namespace FluidRuntime.Runtime;
@@ -7,7 +8,9 @@ public sealed record RuntimeInspectionReport(
     DateTimeOffset GeneratedAtUtc,
     string SourceLedger,
     string Application,
+    bool LedgerTargetMatched,
     TelemetrySummary Telemetry,
     IReadOnlyList<TelemetrySnapshot> Samples,
+    NativeProbeReport? NativeProbe,
     RuntimeDecisionPlan DecisionPlan,
     string Disclaimer);

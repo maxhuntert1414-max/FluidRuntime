@@ -1,4 +1,5 @@
 using FluidRuntime.Contracts;
+using FluidRuntime.Native;
 using FluidRuntime.Telemetry;
 
 namespace FluidRuntime.Runtime;
@@ -9,7 +10,10 @@ public sealed class RuntimeDecisionEngine
     private const double CpuPeakPressureThreshold = 85d;
     private const double HostMemoryPressureThreshold = 85d;
 
-    public RuntimeDecisionPlan Build(FluidGatewayLedger ledger, TelemetrySummary telemetry)
+    public RuntimeDecisionPlan Build(
+        FluidGatewayLedger ledger,
+        TelemetrySummary telemetry,
+        NativeProbeReport? nativeProbe = null)
     {
         FluidGatewayLedgerLoader.Validate(ledger);
         ArgumentNullException.ThrowIfNull(telemetry);
@@ -55,6 +59,14 @@ public sealed class RuntimeDecisionEngine
             ledger.MemoryReliefTargetMb > 0 ||
             telemetry.MaximumHostMemoryPressurePercent >= HostMemoryPressureThreshold)
         {
+            var memoryEvidence = new Dictionary<string, double>
+            {
+                ["host_memory_pressure_percent"] = telemetry.MaximumHostMemoryPressurePercent,
+                ["memory_relief_target_mb"] = ledger.MemoryReliefTargetMb,
+                ["ledger_surface_blocked"] = ramVramBlocked ? 1 : 0
+            };
+            AddNativeGpuEvidence(memoryEvidence, nativeProbe);
+
             actions.Add(new RuntimeActionCandidate(
                 "prototype-ram-vram-residency-control",
                 "ram-vram",
@@ -63,12 +75,7 @@ public sealed class RuntimeDecisionEngine
                 RequiresNativeBackend: true,
                 RequiresPrivilege: true,
                 Blocked: true,
-                Evidence: new Dictionary<string, double>
-                {
-                    ["host_memory_pressure_percent"] = telemetry.MaximumHostMemoryPressurePercent,
-                    ["memory_relief_target_mb"] = ledger.MemoryReliefTargetMb,
-                    ["ledger_surface_blocked"] = ramVramBlocked ? 1 : 0
-                }));
+                Evidence: memoryEvidence));
         }
 
         if (ledger.NativeBlockerScore > 0 && actions.All(action => !action.RequiresNativeBackend))
@@ -91,7 +98,8 @@ public sealed class RuntimeDecisionEngine
         {
             ledger.WastePressureScore,
             telemetry.AverageCpuPercent,
-            telemetry.MaximumHostMemoryPressurePercent
+            telemetry.MaximumHostMemoryPressurePercent,
+            Math.Min(nativeProbe?.Gpu.EngineUtilizationSumPercent ?? 0, 100)
         }.Max(), 2);
 
         var policy = actions.Any(action => action.RequiresNativeBackend)
@@ -99,7 +107,7 @@ public sealed class RuntimeDecisionEngine
             : "continue-observation";
 
         return new RuntimeDecisionPlan(
-            "fluidruntime-decision-plan-v0.1",
+            "fluidruntime-decision-plan-v0.2",
             DryRun: true,
             WouldModifySystem: false,
             ExecutionGuard: "advisory-only",
@@ -107,5 +115,24 @@ public sealed class RuntimeDecisionEngine
             CombinedPressureScore: combinedPressure,
             NativePromotionAllowed: false,
             Actions: actions);
+    }
+
+    private static void AddNativeGpuEvidence(
+        IDictionary<string, double> evidence,
+        NativeProbeReport? nativeProbe)
+    {
+        const double bytesPerMegabyte = 1024d * 1024d;
+        if (nativeProbe?.Gpu.LocalUsageBytes is double localUsage)
+        {
+            evidence["gpu_local_usage_mb"] = Math.Round(localUsage / bytesPerMegabyte, 2);
+        }
+        if (nativeProbe?.Gpu.SharedUsageBytes is double sharedUsage)
+        {
+            evidence["gpu_shared_usage_mb"] = Math.Round(sharedUsage / bytesPerMegabyte, 2);
+        }
+        if (nativeProbe?.Gpu.EngineUtilizationSumPercent is double utilization)
+        {
+            evidence["gpu_engine_utilization_sum_percent"] = utilization;
+        }
     }
 }

@@ -34,6 +34,41 @@ public sealed class RuntimeOptionsTests
     }
 
     [Fact]
+    public void Parse_accepts_native_probe_path()
+    {
+        var options = RuntimeOptions.Parse(
+            [
+                "inspect",
+                "--ledger", "ledger.json",
+                "--native-probe", "native-probe.exe",
+                "--out", "report.json"
+            ]);
+
+        Assert.Equal("native-probe.exe", options.NativeProbePath);
+    }
+
+    [Fact]
+    public void Parse_requires_explicit_boolean_for_target_mismatch_override()
+    {
+        var options = RuntimeOptions.Parse(
+            [
+                "inspect",
+                "--ledger", "ledger.json",
+                "--allow-ledger-target-mismatch", "true",
+                "--out", "report.json"
+            ]);
+
+        Assert.True(options.AllowLedgerTargetMismatch);
+        Assert.Throws<ArgumentException>(() => RuntimeOptions.Parse(
+            [
+                "inspect",
+                "--ledger", "ledger.json",
+                "--allow-ledger-target-mismatch", "yes",
+                "--out", "report.json"
+            ]));
+    }
+
+    [Fact]
     public void Parse_rejects_unknown_option()
     {
         Assert.Throws<ArgumentException>(() => RuntimeOptions.Parse(

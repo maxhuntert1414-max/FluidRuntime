@@ -5,11 +5,15 @@ public sealed record RuntimeOptions(
     int ProcessId,
     int SampleCount,
     int IntervalMs,
-    string OutputPath)
+    string OutputPath,
+    string? NativeProbePath,
+    bool AllowLedgerTargetMismatch)
 {
     public const string Usage =
         "Usage: fluidruntime inspect --ledger <ledger.json> --out <report.json> " +
-        "[--pid <id>] [--samples <count>] [--interval-ms <milliseconds>]";
+        "[--pid <id>] [--samples <count>] [--interval-ms <milliseconds>] " +
+        "[--native-probe <fluidruntime-native-probe.exe>] " +
+        "[--allow-ledger-target-mismatch <true|false>]";
 
     public static RuntimeOptions Parse(string[] args)
     {
@@ -25,6 +29,8 @@ public sealed record RuntimeOptions(
         var processId = Environment.ProcessId;
         var sampleCount = 3;
         var intervalMs = 250;
+        string? nativeProbePath = null;
+        var allowLedgerTargetMismatch = false;
 
         for (var index = 1; index < args.Length; index += 2)
         {
@@ -51,6 +57,16 @@ public sealed record RuntimeOptions(
                 case "--interval-ms":
                     intervalMs = ParsePositiveInt(value, "--interval-ms");
                     break;
+                case "--native-probe":
+                    nativeProbePath = value;
+                    break;
+                case "--allow-ledger-target-mismatch":
+                    if (!bool.TryParse(value, out allowLedgerTargetMismatch))
+                    {
+                        throw new ArgumentException(
+                            "--allow-ledger-target-mismatch must be true or false.");
+                    }
+                    break;
                 default:
                     throw new ArgumentException($"Unknown option '{args[index]}'. {Usage}");
             }
@@ -66,7 +82,14 @@ public sealed record RuntimeOptions(
             throw new ArgumentOutOfRangeException(nameof(args), "--samples must be 100 or less.");
         }
 
-        return new RuntimeOptions(ledgerPath, processId, sampleCount, intervalMs, outputPath);
+        return new RuntimeOptions(
+            ledgerPath,
+            processId,
+            sampleCount,
+            intervalMs,
+            outputPath,
+            nativeProbePath,
+            allowLedgerTargetMismatch);
     }
 
     private static int ParsePositiveInt(string value, string option)

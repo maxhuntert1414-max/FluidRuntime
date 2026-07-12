@@ -1,4 +1,5 @@
 using FluidRuntime.Contracts;
+using FluidRuntime.Native;
 using FluidRuntime.Runtime;
 using FluidRuntime.Telemetry;
 
@@ -30,7 +31,22 @@ public sealed class RuntimeDecisionEngineTests
             NativeBlockedSurfaces = ["ram-vram"]
         };
 
-        var plan = _engine.Build(ledger, Telemetry(hostMemoryPressure: 72));
+        var nativeProbe = new NativeProbeReport
+        {
+            Mode = "fluidruntime-native-probe-v0.2",
+            ReadOnly = true,
+            ProcessId = 42,
+            Gpu = new NativeGpuSnapshot
+            {
+                LocalUsageBytes = 256 * 1024 * 1024,
+                SharedUsageBytes = 32 * 1024 * 1024,
+                EngineUtilizationSumPercent = 61.5
+            }
+        };
+        var plan = _engine.Build(
+            ledger,
+            Telemetry(hostMemoryPressure: 72),
+            nativeProbe);
 
         var candidate = Assert.Single(
             plan.Actions,
@@ -38,6 +54,9 @@ public sealed class RuntimeDecisionEngineTests
         Assert.True(candidate.Blocked);
         Assert.Equal(168, candidate.Evidence["memory_relief_target_mb"]);
         Assert.Equal(1, candidate.Evidence["ledger_surface_blocked"]);
+        Assert.Equal(256, candidate.Evidence["gpu_local_usage_mb"]);
+        Assert.Equal(32, candidate.Evidence["gpu_shared_usage_mb"]);
+        Assert.Equal(61.5, candidate.Evidence["gpu_engine_utilization_sum_percent"]);
     }
 
     [Fact]

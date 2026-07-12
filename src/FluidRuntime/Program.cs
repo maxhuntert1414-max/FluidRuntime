@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FluidRuntime.Cli;
 using FluidRuntime.Contracts;
+using FluidRuntime.Native;
 using FluidRuntime.Runtime;
 using FluidRuntime.Telemetry;
 
@@ -20,6 +21,15 @@ public static class RuntimeApplication
         {
             var options = RuntimeOptions.Parse(args);
             var ledger = FluidGatewayLedgerLoader.Load(options.LedgerPath);
+            NativeProbeReport? nativeProbe = null;
+            if (!string.IsNullOrWhiteSpace(options.NativeProbePath))
+            {
+                nativeProbe = await new NativeProbeClient().ProbeAsync(
+                    options.NativeProbePath,
+                    options.ProcessId,
+                    options.IntervalMs);
+            }
+
             var inspector = new RuntimeInspector(
                 new WindowsProcessTelemetrySampler(),
                 new RuntimeDecisionEngine());
@@ -29,7 +39,9 @@ public static class RuntimeApplication
                 options.LedgerPath,
                 options.ProcessId,
                 options.SampleCount,
-                TimeSpan.FromMilliseconds(options.IntervalMs));
+                TimeSpan.FromMilliseconds(options.IntervalMs),
+                nativeProbe,
+                options.AllowLedgerTargetMismatch);
 
             var outputPath = Path.GetFullPath(options.OutputPath);
             var outputDirectory = Path.GetDirectoryName(outputPath);
@@ -52,6 +64,19 @@ public static class RuntimeApplication
                 $"Decision: {report.DecisionPlan.Policy}; " +
                 $"pressure={report.DecisionPlan.CombinedPressureScore:0.##}; " +
                 $"actions={report.DecisionPlan.Actions.Count}.");
+            if (!report.LedgerTargetMatched)
+            {
+                Console.WriteLine("Ledger target mismatch: control recommendations are held.");
+            }
+            if (report.NativeProbe?.Capabilities.GpuProcessMemory == true &&
+                report.NativeProbe.Gpu.LocalUsageBytes is double localUsageBytes)
+            {
+                var localMb = localUsageBytes / (1024d * 1024d);
+                Console.WriteLine(
+                    $"Native GPU probe: local={localMb:0.##} MB; " +
+                    $"engines={report.NativeProbe.Gpu.EngineInstanceCount}; " +
+                    $"utilization-sum={report.NativeProbe.Gpu.EngineUtilizationSumPercent:0.###}%.");
+            }
             Console.WriteLine($"Report: {outputPath}");
             return 0;
         }

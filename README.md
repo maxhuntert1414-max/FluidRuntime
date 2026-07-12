@@ -11,7 +11,7 @@ software. It is not a DLSS, FSR, or frame-generation clone.
 
 ## Current boundary
 
-Version 0.1 is advisory-only:
+Version 0.2 remains advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -20,6 +20,10 @@ Version 0.1 is advisory-only:
 - never changes process priority, affinity, RAM/VRAM residency, GPU queues,
   drivers, games, or OS state.
 
+The v0.2 native probe is also read-only. It adds per-process Windows process
+memory and GPU performance-counter telemetry through a small C++ executable.
+It does not inject a DLL, install a driver, or write into the target process.
+
 ## Run
 
 ```powershell
@@ -27,11 +31,16 @@ dotnet run --project src/FluidRuntime -- inspect `
   --ledger samples/gpu-wait-ledger.json `
   --samples 3 `
   --interval-ms 250 `
+  --native-probe native/build/Release/fluidruntime-native-probe.exe `
+  --allow-ledger-target-mismatch true `
   --out artifacts/runtime-report.json
 ```
 
 Omit `--pid` to inspect the FluidRuntime process itself. Supply a PID only for
-a process you are authorized to observe.
+a process you are authorized to observe. The bundled sample ledger describes a
+synthetic game, so its example explicitly allows a target mismatch and holds
+all trace-derived recommendations. Real monitoring rejects mismatched ledger
+and process identities by default.
 
 ## Verify
 
@@ -42,3 +51,40 @@ dotnet build FluidRuntime.slnx -c Release
 
 The synthetic trace baseline in `data/` comes from FluidGateway test fixtures.
 It is development evidence, not a benchmark captured from a real game.
+
+## Native probe
+
+Configure and build with the CMake bundled in Visual Studio Build Tools:
+
+```powershell
+cmake -S native -B native/build -A x64
+cmake --build native/build --config Release
+ctest --test-dir native/build -C Release --output-on-failure
+native/build/Release/fluidruntime-native-probe.exe --self-test
+```
+
+The probe emits a versioned JSON document to stdout. GPU counters may be
+unavailable for processes with no active WDDM GPU allocation; that is reported
+as missing telemetry instead of being converted into a fake zero.
+
+`--native-probe` executes the path supplied by the operator. Use only a probe
+binary built from this repository or another binary you explicitly trust.
+
+## Present hook lab
+
+The native build also contains a controlled D3D11 hook lab. An owned target
+loads the hook DLL cooperatively, the DLL intercepts only
+`IDXGISwapChain::Present`, and detach restores the exact original vtable entry
+before the DLL can be unloaded.
+
+```powershell
+native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --frames 120 `
+  --hardware `
+  --out artifacts/present-hook-lab.json
+```
+
+This is not remote injection and is not intended for protected or anti-cheat
+processes. It exists to verify hook observation, concurrent-call draining, and
+rollback in software we own before any external-process work is considered.

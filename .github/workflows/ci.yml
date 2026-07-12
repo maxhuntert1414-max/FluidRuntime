@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test managed runtime
+        run: dotnet test FluidRuntime.slnx -c Release
+      - name: Configure native probe
+        run: cmake -S native -B native/build -A x64
+      - name: Build native probe
+        run: cmake --build native/build --config Release
+      - name: Test native probe
+        run: ctest --test-dir native/build -C Release --output-on-failure

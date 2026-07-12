@@ -2,6 +2,7 @@ bin/
 obj/
 TestResults/
 artifacts/
+native/build/
 *.user
 *.suo
 .vs/
