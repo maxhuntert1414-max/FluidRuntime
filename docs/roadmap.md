@@ -15,16 +15,12 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - **v0.4:** low-overhead shared-memory event streaming into the managed runtime,
   cross-language ABI validation, overrun detection, and exact native/managed
   agreement checks.
+- **v0.5:** explicit owned-target copy elision limited to one redundant D3D11
+  copy, two-process baseline comparison, post-detach buffer/texture readback,
+  exact content comparison, stable content hashes, and fail-closed rollback
+  checks.
 
 ## Next Milestones
-
-### v0.5: First Measured Intervention
-
-- Add an explicit opt-in mode only to the owned D3D11 hook target.
-- Skip one proven redundant `CopyResource` operation.
-- Verify destination equivalence and fail closed when state is uncertain.
-- Measure copy count, bytes, CPU cost, GPU timing, pacing, and rollback against
-  an untouched baseline.
 
 ### v0.6: Trustworthy Resource State
 
@@ -33,6 +29,8 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.
 - Add longer stress, race, and fault-injection tests.
+- Add repeated-run statistics and GPU timestamp queries before making any
+  performance claim.
 
 ### v0.7: Controlled External Observation
 

@@ -38,6 +38,9 @@ public static class HookLabCommand
                 $"Copies: {report.CopyResourceBytes} bytes observed; " +
                 $"{report.RedundantCopyBytes} bytes ({report.AvoidableCopySharePercent:0.##}%) " +
                 "classified as redundant candidates.");
+            Console.WriteLine(
+                $"Forwarded: {report.ForwardedCopyCount}; skipped: " +
+                $"{report.SkippedCopyCount} ({report.SkippedCopyBytes} bytes).");
             Console.WriteLine($"Report: {outputPath}");
             return 0;
         }

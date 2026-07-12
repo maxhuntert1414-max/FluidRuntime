@@ -104,8 +104,13 @@ std::atomic<std::uint64_t> g_copy_resource_count{0};
 std::atomic<std::uint64_t> g_copy_resource_bytes_estimated{0};
 std::atomic<std::uint64_t> g_redundant_copy_candidate_count{0};
 std::atomic<std::uint64_t> g_redundant_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_forwarded_copy_count{0};
+std::atomic<std::uint64_t> g_forwarded_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_skipped_copy_count{0};
+std::atomic<std::uint64_t> g_skipped_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_hook_refresh_count{0};
 std::atomic<std::uint64_t> g_hook_refresh_failure_count{0};
+std::atomic<std::uint32_t> g_max_skipped_copy_count{0};
 
 std::unordered_map<ID3D11Resource*, ResourceState> g_resources;
 std::unordered_map<ID3D11Resource*, LastCopy> g_last_copies;
@@ -455,6 +460,10 @@ void reset_metrics_and_resources() {
     g_copy_resource_bytes_estimated.store(0, std::memory_order_relaxed);
     g_redundant_copy_candidate_count.store(0, std::memory_order_relaxed);
     g_redundant_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_forwarded_copy_count.store(0, std::memory_order_relaxed);
+    g_forwarded_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_skipped_copy_count.store(0, std::memory_order_relaxed);
+    g_skipped_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_hook_refresh_count.store(0, std::memory_order_relaxed);
     g_hook_refresh_failure_count.store(0, std::memory_order_relaxed);
 
@@ -696,6 +705,11 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     if (original == nullptr) {
         return;
     }
+    if (destination == nullptr || source == nullptr) {
+        original(context, destination, source);
+        refresh_context_hook_slots();
+        return;
+    }
 
     bool redundant_candidate = false;
     std::uint64_t copy_bytes = 0;
@@ -720,8 +734,28 @@ void STDMETHODCALLTYPE hooked_copy_resource(
             previous_copy->second.destination_generation == destination_state.generation;
     }
 
-    original(context, destination, source);
-    refresh_context_hook_slots();
+    bool skipped_copy = false;
+    const auto skip_limit = g_max_skipped_copy_count.load(std::memory_order_acquire);
+    if (redundant_candidate && copy_bytes != 0 && skip_limit != 0) {
+        auto skipped_count = g_skipped_copy_count.load(std::memory_order_relaxed);
+        while (skipped_count < skip_limit &&
+               !g_skipped_copy_count.compare_exchange_weak(
+                   skipped_count,
+                   skipped_count + 1,
+                   std::memory_order_acq_rel,
+                   std::memory_order_relaxed)) {
+        }
+        skipped_copy = skipped_count < skip_limit;
+    }
+
+    if (skipped_copy) {
+        g_skipped_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
+    } else {
+        original(context, destination, source);
+        refresh_context_hook_slots();
+        g_forwarded_copy_count.fetch_add(1, std::memory_order_relaxed);
+        g_forwarded_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
+    }
     g_copy_resource_count.fetch_add(1, std::memory_order_relaxed);
     g_copy_resource_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
     if (redundant_candidate) {
@@ -741,13 +775,20 @@ void STDMETHODCALLTYPE hooked_copy_resource(
             .destination_generation = destination_generation,
         };
     }
+    std::uint32_t event_flags = 0;
+    if (redundant_candidate) {
+        event_flags |= fluid_hook_event_flag_redundant_candidate;
+    }
+    if (skipped_copy) {
+        event_flags |= fluid_hook_event_flag_copy_skipped;
+    }
     emit_hook_event(
         FluidHookEventTypeV1::copy_resource,
         destination_id,
         source_id,
         copy_bytes,
         destination_generation,
-        redundant_candidate ? fluid_hook_event_flag_redundant_candidate : 0);
+        event_flags);
 }
 
 void clear_original_functions() {
@@ -763,8 +804,30 @@ void clear_original_functions() {
 } // namespace
 
 HRESULT WINAPI FluidHookAttach(IDXGISwapChain* swap_chain) {
+    return FluidHookAttachEx(swap_chain, nullptr);
+}
+
+HRESULT WINAPI FluidHookAttachEx(
+    IDXGISwapChain* swap_chain,
+    const FluidHookAttachOptionsV1* options) {
     if (swap_chain == nullptr) {
         return E_POINTER;
+    }
+
+    std::uint32_t max_skipped_copy_count = 0;
+    if (options != nullptr) {
+        if (options->struct_size < sizeof(FluidHookAttachOptionsV1) ||
+            options->abi_version != fluid_hook_attach_options_abi_version ||
+            (options->flags & ~fluid_hook_attach_flag_skip_first_redundant_copy) != 0) {
+            return E_INVALIDARG;
+        }
+        const auto skip_enabled =
+            (options->flags & fluid_hook_attach_flag_skip_first_redundant_copy) != 0;
+        if ((skip_enabled && options->max_skipped_copy_count != 1) ||
+            (!skip_enabled && options->max_skipped_copy_count != 0)) {
+            return E_INVALIDARG;
+        }
+        max_skipped_copy_count = options->max_skipped_copy_count;
     }
 
     const std::lock_guard hook_lock(g_hook_mutex);
@@ -849,10 +912,12 @@ HRESULT WINAPI FluidHookAttach(IDXGISwapChain* swap_chain) {
     g_original_update_subresource.store(
         reinterpret_cast<UpdateSubresourceFunction>(slots[6].original),
         std::memory_order_release);
+    g_max_skipped_copy_count.store(max_skipped_copy_count, std::memory_order_release);
     reset_metrics_and_resources();
     if (!initialize_event_ring()) {
         const auto ring_error = GetLastError();
         clear_original_functions();
+        g_max_skipped_copy_count.store(0, std::memory_order_release);
         return HRESULT_FROM_WIN32(ring_error);
     }
 
@@ -870,6 +935,7 @@ HRESULT WINAPI FluidHookAttach(IDXGISwapChain* swap_chain) {
             }
             clear_original_functions();
             close_event_ring();
+            g_max_skipped_copy_count.store(0, std::memory_order_release);
             return HRESULT_FROM_WIN32(patch_error);
         }
     }
@@ -930,6 +996,7 @@ HRESULT WINAPI FluidHookDetach() {
     g_installed_hook_count = 0;
     g_hook_slots = {};
     clear_original_functions();
+    g_max_skipped_copy_count.store(0, std::memory_order_release);
     g_detaching.store(false, std::memory_order_release);
     {
         const std::lock_guard resource_lock(g_resource_mutex);
@@ -978,6 +1045,12 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_redundant_copy_candidate_count.load(std::memory_order_relaxed);
     result.redundant_copy_bytes_estimated =
         g_redundant_copy_bytes_estimated.load(std::memory_order_relaxed);
+    result.forwarded_copy_count = g_forwarded_copy_count.load(std::memory_order_relaxed);
+    result.forwarded_copy_bytes_estimated =
+        g_forwarded_copy_bytes_estimated.load(std::memory_order_relaxed);
+    result.skipped_copy_count = g_skipped_copy_count.load(std::memory_order_relaxed);
+    result.skipped_copy_bytes_estimated =
+        g_skipped_copy_bytes_estimated.load(std::memory_order_relaxed);
     {
         const std::lock_guard resource_lock(g_resource_mutex);
         result.tracked_resource_count = g_resources.size();

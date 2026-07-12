@@ -21,6 +21,18 @@ public sealed class HookLabRunnerTests
     }
 
     [Fact]
+    public void Deterministic_workload_accepts_only_the_first_redundant_copy_as_skipped()
+    {
+        var events = BuildDeterministicWorkload();
+        events[6] = events[6] with { Flags = 3 };
+
+        Assert.True(HookLabRunner.MatchesDeterministicWorkload(events, 1, true));
+
+        events[9] = events[9] with { Flags = 3 };
+        Assert.False(HookLabRunner.MatchesDeterministicWorkload(events, 1, true));
+    }
+
+    [Fact]
     public void Deterministic_workload_rejects_order_generation_flags_and_refresh_drift()
     {
         var reordered = BuildDeterministicWorkload();

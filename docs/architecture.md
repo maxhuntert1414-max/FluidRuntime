@@ -14,7 +14,7 @@ flowchart LR
     D3D[D3D11 cooperative hook] --> R[Shared-memory event ring]
     R --> MR
     MR --> P[Validated control plan]
-    P -. future opt-in actuation .-> D3D
+    P -. owned lab opt-in only .-> D3D
 ```
 
 ## Components
@@ -32,7 +32,7 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.4 publishes 64-byte events into a 1,024-slot named shared-memory ring.
+Version 0.5 publishes 64-byte events into a 1,024-slot named shared-memory ring.
 The mapping is local to the Windows session and named for the target PID. The
 header and event layouts are versioned independently from the report schema.
 
@@ -60,19 +60,25 @@ Events contain opaque resource IDs, never raw resource pointer addresses.
 ## Safety Boundary
 
 The current hook is loaded cooperatively by a process we own. It does not
-perform remote injection, skip copies, mutate frame data, install a driver, or
-target protected and anti-cheat processes. Detach restores current vtable
-entries and waits for in-flight hook calls before the DLL can be unloaded.
+perform remote injection, mutate output frame data, install a driver, or target
+protected and anti-cheat processes. Detach restores current vtable entries and
+waits for in-flight hook calls before the DLL can be unloaded.
 
-The first optimization will remain inside the owned deterministic target. It
-must be explicit opt-in, prove output equivalence, measure before and after,
-and retain immediate rollback before any external process experiment exists.
+Version 0.5 adds `FluidHookAttachEx` with an immutable, versioned option that can
+skip at most the first redundant `CopyResource`. The normal `FluidHookAttach`
+path remains observe-only. The managed comparison runs baseline and optimized
+targets in separate processes, validates the skipped event flag and native
+snapshot, detaches the hook, and only then performs buffer/texture readback.
+Logical bytes are compared exactly and also hashed for the report while texture
+row padding is ignored. Any count, byte, digest, or rollback mismatch fails the
+run closed.
 
 ## Known Limits
 
 - D3D11 only; D3D12 and Vulkan are not instrumented yet.
 - Resource release, shader/UAV writes, subresource copies, fences, and aliasing
   are not yet part of the resource-generation model.
-- A repeated copy is a candidate, not proof that removal is safe.
+- A repeated copy is a candidate, not proof that removal is safe outside the
+  deterministic owned workload.
 - The lab supports one active hook attachment per process mapping lifetime.
 - CPU scheduling and RAM/VRAM residency actions are still advisory.

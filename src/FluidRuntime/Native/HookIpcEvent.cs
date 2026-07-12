@@ -25,4 +25,7 @@ public sealed record HookIpcEvent(
 {
     public bool IsRedundantCopyCandidate =>
         Type == HookEventType.CopyResource && (Flags & 1) != 0;
+
+    public bool WasCopySkipped =>
+        Type == HookEventType.CopyResource && (Flags & 2) != 0;
 }

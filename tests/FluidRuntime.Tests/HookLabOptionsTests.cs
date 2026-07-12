@@ -18,6 +18,7 @@ public sealed class HookLabOptionsTests
         Assert.Equal(120, options.FrameCount);
         Assert.Equal(1000, options.HoldMs);
         Assert.False(options.UseHardware);
+        Assert.False(options.SkipFirstRedundantCopy);
     }
 
     [Fact]
@@ -37,6 +38,29 @@ public sealed class HookLabOptionsTests
         Assert.Equal(300, options.FrameCount);
         Assert.Equal(1500, options.HoldMs);
         Assert.True(options.UseHardware);
+        Assert.False(options.SkipFirstRedundantCopy);
+    }
+
+    [Fact]
+    public void ParseCopyElision_uses_two_run_defaults_and_rejects_single_run_skip()
+    {
+        var options = HookLabOptions.ParseCopyElision(
+            [
+                "copy-elision-lab",
+                "--target", "target.exe",
+                "--hook", "hook.dll",
+                "--out", "report.json"
+            ]);
+
+        Assert.False(options.SkipFirstRedundantCopy);
+        Assert.Throws<ArgumentException>(() => HookLabOptions.ParseCopyElision(
+            [
+                "copy-elision-lab",
+                "--target", "target.exe",
+                "--hook", "hook.dll",
+                "--skip-first-redundant-copy", "true",
+                "--out", "report.json"
+            ]));
     }
 
     [Fact]

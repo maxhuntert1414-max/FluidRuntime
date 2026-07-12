@@ -27,3 +27,10 @@ jobs:
           --hook native/build/Release/fluidruntime-present-hook.dll
           --frames 120 --hold-ms 500 --hardware false
           --out artifacts/hook-ipc-ci.json
+      - name: Test cooperative copy elision
+        run: >-
+          dotnet run --project src/FluidRuntime -c Release --no-build -- copy-elision-lab
+          --target native/build/Release/fluidruntime-hook-target.exe
+          --hook native/build/Release/fluidruntime-present-hook.dll
+          --frames 120 --hold-ms 500 --hardware false
+          --out artifacts/copy-elision-ci.json

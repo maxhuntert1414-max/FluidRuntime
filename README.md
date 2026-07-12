@@ -14,7 +14,7 @@ Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md)
 
 ## Current boundary
 
-Version 0.4 remains advisory-only:
+Version 0.5 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -23,6 +23,13 @@ Version 0.4 remains advisory-only:
 - streams owned D3D11 hook events into the managed runtime through shared memory;
 - never changes process priority, affinity, RAM/VRAM residency, GPU queues,
   drivers, games, or OS state.
+
+It also contains the first deliberately narrow actuation experiment. The
+`copy-elision-lab` command runs two instances of the owned deterministic target,
+then allows the optimized instance to skip at most one proven redundant
+`CopyResource`. The command fails unless readback hashes, event accounting, and
+hook rollback agree across baseline and optimized runs. This is not enabled for
+external software.
 
 The v0.2 native probe is also read-only. It adds per-process Windows process
 memory and GPU performance-counter telemetry through a small C++ executable.
@@ -92,8 +99,8 @@ native/build/Release/fluidruntime-hook-target.exe `
 
 The deterministic workload performs six resource copies. Three repeat an
 unchanged source/destination generation and are reported as candidates, never
-skipped. The expected result is 49,152 bytes copied and 24,576 bytes potentially
-avoidable.
+skipped by the default mode. The expected result is 49,152 bytes observed and
+24,576 bytes classified as potentially avoidable.
 
 Run the managed IPC lab to consume those events while the target is alive:
 
@@ -114,9 +121,28 @@ exact deterministic event order, resource IDs and source/destination pairs,
 generations, flags, copy counts, and byte estimates against the target snapshot
 before accepting a report.
 
+Run the first controlled before/after intervention:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- copy-elision-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --frames 300 `
+  --hold-ms 500 `
+  --hardware true `
+  --out artifacts/copy-elision-comparison.json
+```
+
+The baseline forwards all six copies. The optimized run observes the same six,
+forwards five, and skips the first redundant 4,096-byte buffer copy. After hook
+detach, the target reads buffer and texture contents back through staging
+resources, compares logical bytes exactly, and computes stable FNV-1a hashes for
+the report. A timing delta is reported for transparency, but this tiny synthetic
+workload is a correctness experiment, not a performance benchmark.
+
 This is not remote injection and is not intended for protected or anti-cheat
 processes. It exists to verify resource observation, runtime thunk transitions,
 concurrent-call draining, and rollback in software we own before any
-external-process work is considered. Candidate detection currently assumes the
-controlled workload; GPU shader/UAV writes and resource release tracking are
-not covered yet.
+external-process work is considered. Candidate detection and copy elision
+currently assume the controlled workload; GPU shader/UAV writes and resource
+release tracking are not covered yet.

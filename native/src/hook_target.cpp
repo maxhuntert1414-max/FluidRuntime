@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -25,6 +26,10 @@ constexpr std::uint64_t kExpectedCopyCount = 6;
 constexpr std::uint64_t kExpectedCopyBytes = 49152;
 constexpr std::uint64_t kExpectedRedundantCopyCount = 3;
 constexpr std::uint64_t kExpectedRedundantCopyBytes = 24576;
+constexpr std::uint64_t kExpectedSkippedCopyCount = 1;
+constexpr std::uint64_t kExpectedSkippedCopyBytes = kBufferBytes;
+constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 struct Options {
     std::wstring hook_path;
@@ -32,6 +37,7 @@ struct Options {
     unsigned long frames{60};
     unsigned long hold_ms{};
     bool use_hardware{};
+    bool skip_first_redundant_copy{};
 };
 
 struct WorkloadResources {
@@ -40,6 +46,23 @@ struct WorkloadResources {
     ComPtr<ID3D11Buffer> dynamic_buffer;
     ComPtr<ID3D11Texture2D> source_texture;
     ComPtr<ID3D11Texture2D> destination_texture;
+};
+
+struct ContentVerification {
+    bool readback_succeeded{};
+    bool buffer_contents_equal{};
+    bool texture_contents_equal{};
+    std::uint64_t source_buffer_hash{};
+    std::uint64_t destination_buffer_hash{};
+    std::uint64_t source_texture_hash{};
+    std::uint64_t destination_texture_hash{};
+};
+
+struct TimingMetrics {
+    std::uint64_t qpc_frequency{};
+    std::uint64_t workload_qpc_ticks{};
+    std::uint64_t present_qpc_ticks{};
+    std::uint64_t readback_qpc_ticks{};
 };
 
 LRESULT CALLBACK window_procedure(
@@ -81,6 +104,8 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
             options.hold_ms = *hold_ms;
         } else if (argument == L"--hardware") {
             options.use_hardware = true;
+        } else if (argument == L"--skip-first-redundant-copy") {
+            options.skip_first_redundant_copy = true;
         } else {
             return std::nullopt;
         }
@@ -97,6 +122,145 @@ std::string hresult_hex(HRESULT result) {
     output << "0x" << std::uppercase << std::hex << std::setw(8)
            << std::setfill('0') << static_cast<unsigned long>(result);
     return output.str();
+}
+
+std::string uint64_hex(std::uint64_t value) {
+    std::ostringstream output;
+    output << std::hex << std::setw(16) << std::setfill('0') << value;
+    return output.str();
+}
+
+std::uint64_t hash_bytes(
+    std::uint64_t hash,
+    const void* data,
+    size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (size_t index = 0; index < size; ++index) {
+        hash ^= bytes[index];
+        hash *= kFnvPrime;
+    }
+    return hash;
+}
+
+std::optional<std::vector<unsigned char>> readback_buffer(
+    ID3D11Device* device,
+    ID3D11DeviceContext* context,
+    ID3D11Buffer* buffer) {
+    if (device == nullptr || context == nullptr || buffer == nullptr) {
+        return std::nullopt;
+    }
+
+    D3D11_BUFFER_DESC description{};
+    buffer->GetDesc(&description);
+    description.Usage = D3D11_USAGE_STAGING;
+    description.BindFlags = 0;
+    description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    description.MiscFlags = 0;
+    description.StructureByteStride = 0;
+    ComPtr<ID3D11Buffer> staging;
+    if (FAILED(device->CreateBuffer(&description, nullptr, &staging))) {
+        return std::nullopt;
+    }
+
+    context->CopyResource(staging.Get(), buffer);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        return std::nullopt;
+    }
+    std::vector<unsigned char> data(description.ByteWidth);
+    std::memcpy(data.data(), mapped.pData, data.size());
+    context->Unmap(staging.Get(), 0);
+    return data;
+}
+
+std::optional<std::vector<unsigned char>> readback_texture(
+    ID3D11Device* device,
+    ID3D11DeviceContext* context,
+    ID3D11Texture2D* texture) {
+    if (device == nullptr || context == nullptr || texture == nullptr) {
+        return std::nullopt;
+    }
+
+    D3D11_TEXTURE2D_DESC description{};
+    texture->GetDesc(&description);
+    if (description.Format != DXGI_FORMAT_R8G8B8A8_UNORM ||
+        description.MipLevels != 1 ||
+        description.ArraySize != 1) {
+        return std::nullopt;
+    }
+    description.Usage = D3D11_USAGE_STAGING;
+    description.BindFlags = 0;
+    description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    description.MiscFlags = 0;
+    ComPtr<ID3D11Texture2D> staging;
+    if (FAILED(device->CreateTexture2D(&description, nullptr, &staging))) {
+        return std::nullopt;
+    }
+
+    context->CopyResource(staging.Get(), texture);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+        return std::nullopt;
+    }
+    const auto logical_row_bytes = static_cast<size_t>(description.Width) * 4;
+    std::vector<unsigned char> data(logical_row_bytes * description.Height);
+    const auto* row = static_cast<const unsigned char*>(mapped.pData);
+    for (UINT y = 0; y < description.Height; ++y) {
+        std::memcpy(data.data() + y * logical_row_bytes, row, logical_row_bytes);
+        row += mapped.RowPitch;
+    }
+    context->Unmap(staging.Get(), 0);
+    return data;
+}
+
+ContentVerification verify_workload_content(
+    ID3D11Device* device,
+    ID3D11DeviceContext* context,
+    const WorkloadResources& resources) {
+    ContentVerification result;
+    const auto source_buffer = readback_buffer(
+        device,
+        context,
+        resources.source_buffer.Get());
+    const auto destination_buffer = readback_buffer(
+        device,
+        context,
+        resources.destination_buffer.Get());
+    const auto source_texture = readback_texture(
+        device,
+        context,
+        resources.source_texture.Get());
+    const auto destination_texture = readback_texture(
+        device,
+        context,
+        resources.destination_texture.Get());
+    result.readback_succeeded = source_buffer.has_value() &&
+        destination_buffer.has_value() &&
+        source_texture.has_value() &&
+        destination_texture.has_value();
+    if (!result.readback_succeeded) {
+        return result;
+    }
+
+    result.source_buffer_hash = hash_bytes(
+        kFnvOffsetBasis,
+        source_buffer->data(),
+        source_buffer->size());
+    result.destination_buffer_hash = hash_bytes(
+        kFnvOffsetBasis,
+        destination_buffer->data(),
+        destination_buffer->size());
+    result.source_texture_hash = hash_bytes(
+        kFnvOffsetBasis,
+        source_texture->data(),
+        source_texture->size());
+    result.destination_texture_hash = hash_bytes(
+        kFnvOffsetBasis,
+        destination_texture->data(),
+        destination_texture->size());
+    result.buffer_contents_equal = *source_buffer == *destination_buffer;
+    result.texture_contents_equal = *source_texture == *destination_texture;
+    return result;
 }
 
 bool warm_up_context(ID3D11Device* device, ID3D11DeviceContext* context) {
@@ -241,7 +405,15 @@ bool run_resource_workload(
     return true;
 }
 
-bool snapshot_matches_workload(const FluidHookSnapshotV1& snapshot) {
+bool snapshot_matches_workload(
+    const FluidHookSnapshotV1& snapshot,
+    const Options& options) {
+    const auto expected_skipped_count = options.skip_first_redundant_copy
+        ? kExpectedSkippedCopyCount
+        : 0;
+    const auto expected_skipped_bytes = options.skip_first_redundant_copy
+        ? kExpectedSkippedCopyBytes
+        : 0;
     return snapshot.abi_version == fluid_hook_snapshot_abi_version &&
         snapshot.create_buffer_count == 3 &&
         snapshot.buffer_bytes_requested == 3 * kBufferBytes &&
@@ -254,6 +426,11 @@ bool snapshot_matches_workload(const FluidHookSnapshotV1& snapshot) {
         snapshot.copy_resource_bytes_estimated == kExpectedCopyBytes &&
         snapshot.redundant_copy_candidate_count == kExpectedRedundantCopyCount &&
         snapshot.redundant_copy_bytes_estimated == kExpectedRedundantCopyBytes &&
+        snapshot.forwarded_copy_count == kExpectedCopyCount - expected_skipped_count &&
+        snapshot.forwarded_copy_bytes_estimated ==
+            kExpectedCopyBytes - expected_skipped_bytes &&
+        snapshot.skipped_copy_count == expected_skipped_count &&
+        snapshot.skipped_copy_bytes_estimated == expected_skipped_bytes &&
         snapshot.tracked_resource_count == 5 &&
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >= snapshot.present_count + 14 &&
@@ -271,16 +448,25 @@ std::string build_report(
     bool resource_workload_succeeded,
     bool resource_metrics_matched,
     bool context_vtable_pointer_stable,
-    bool context_copy_entry_stable) {
+    bool context_copy_entry_stable,
+    const ContentVerification& content,
+    const TimingMetrics& timing) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.4\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.5\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
-           << "  \"read_only_hook\": true,\n"
+           << "  \"read_only_hook\": "
+           << (options.skip_first_redundant_copy ? "false" : "true") << ",\n"
            << "  \"would_modify_frame_data\": false,\n"
-           << "  \"would_skip_copies\": false,\n"
+           << "  \"would_skip_copies\": "
+           << (options.skip_first_redundant_copy ? "true" : "false") << ",\n"
+           << "  \"optimization_requested\": "
+           << (options.skip_first_redundant_copy ? "true" : "false") << ",\n"
+           << "  \"optimization_kind\": \"skip-first-redundant-copy-resource\",\n"
+           << "  \"max_skipped_copy_count\": "
+           << (options.skip_first_redundant_copy ? 1 : 0) << ",\n"
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
            << "  \"requested_presents\": " << options.frames << ",\n"
@@ -298,6 +484,27 @@ std::string build_report(
            << (context_copy_entry_stable ? "true" : "false") << ",\n"
            << "  \"original_pointer_restored\": "
            << (original_pointer_restored ? "true" : "false") << ",\n"
+           << "  \"content_readback_succeeded\": "
+           << (content.readback_succeeded ? "true" : "false") << ",\n"
+           << "  \"buffer_contents_equal\": "
+           << (content.buffer_contents_equal ? "true" : "false") << ",\n"
+           << "  \"texture_contents_equal\": "
+           << (content.texture_contents_equal ? "true" : "false") << ",\n"
+           << "  \"hash_algorithm\": \"fnv1a64\",\n"
+           << "  \"source_buffer_hash\": \""
+           << uint64_hex(content.source_buffer_hash) << "\",\n"
+           << "  \"destination_buffer_hash\": \""
+           << uint64_hex(content.destination_buffer_hash) << "\",\n"
+           << "  \"source_texture_hash\": \""
+           << uint64_hex(content.source_texture_hash) << "\",\n"
+           << "  \"destination_texture_hash\": \""
+           << uint64_hex(content.destination_texture_hash) << "\",\n"
+           << "  \"timing\": {\n"
+           << "    \"qpc_frequency\": " << timing.qpc_frequency << ",\n"
+           << "    \"workload_qpc_ticks\": " << timing.workload_qpc_ticks << ",\n"
+           << "    \"present_qpc_ticks\": " << timing.present_qpc_ticks << ",\n"
+           << "    \"readback_qpc_ticks\": " << timing.readback_qpc_ticks << "\n"
+           << "  },\n"
            << "  \"resources\": {\n"
            << "    \"create_buffer_count\": " << snapshot.create_buffer_count << ",\n"
            << "    \"buffer_bytes_requested\": " << snapshot.buffer_bytes_requested << ",\n"
@@ -314,6 +521,12 @@ std::string build_report(
            << snapshot.redundant_copy_candidate_count << ",\n"
            << "    \"redundant_copy_bytes_estimated\": "
            << snapshot.redundant_copy_bytes_estimated << ",\n"
+           << "    \"forwarded_copy_count\": " << snapshot.forwarded_copy_count << ",\n"
+           << "    \"forwarded_copy_bytes_estimated\": "
+           << snapshot.forwarded_copy_bytes_estimated << ",\n"
+           << "    \"skipped_copy_count\": " << snapshot.skipped_copy_count << ",\n"
+           << "    \"skipped_copy_bytes_estimated\": "
+           << snapshot.skipped_copy_bytes_estimated << ",\n"
            << "    \"tracked_resource_count\": " << snapshot.tracked_resource_count << ",\n"
            << "    \"hook_refresh_count\": " << snapshot.hook_refresh_count << ",\n"
            << "    \"hook_refresh_failure_count\": "
@@ -335,7 +548,8 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!options.has_value()) {
         std::wcerr << L"Usage: fluidruntime-hook-target --hook <dll> "
                       L"[--frames <count>] [--hold-ms <milliseconds>] "
-                      L"[--out <report.json>] [--hardware]\n";
+                      L"[--out <report.json>] [--hardware] "
+                      L"[--skip-first-redundant-copy]\n";
         return 2;
     }
 
@@ -441,13 +655,15 @@ int wmain(int argc, wchar_t* argv[]) {
 
     const auto attach = reinterpret_cast<FluidHookAttachFunction>(
         GetProcAddress(hook_module, "FluidHookAttach"));
+    const auto attach_ex = reinterpret_cast<FluidHookAttachExFunction>(
+        GetProcAddress(hook_module, "FluidHookAttachEx"));
     const auto detach = reinterpret_cast<FluidHookDetachFunction>(
         GetProcAddress(hook_module, "FluidHookDetach"));
     const auto is_attached = reinterpret_cast<FluidHookIsAttachedFunction>(
         GetProcAddress(hook_module, "FluidHookIsAttached"));
     const auto read_snapshot = reinterpret_cast<FluidHookReadSnapshotFunction>(
         GetProcAddress(hook_module, "FluidHookReadSnapshot"));
-    if (attach == nullptr || detach == nullptr ||
+    if (attach == nullptr || attach_ex == nullptr || detach == nullptr ||
         is_attached == nullptr || read_snapshot == nullptr) {
         FreeLibrary(hook_module);
         DestroyWindow(window);
@@ -456,10 +672,25 @@ int wmain(int argc, wchar_t* argv[]) {
         return 5;
     }
 
-    const auto attach_result = attach(swap_chain.Get());
+    FluidHookAttachOptionsV1 attach_options{};
+    attach_options.struct_size = sizeof(attach_options);
+    attach_options.abi_version = fluid_hook_attach_options_abi_version;
+    attach_options.flags = fluid_hook_attach_flag_skip_first_redundant_copy;
+    attach_options.max_skipped_copy_count = 1;
+    const auto attach_result = options->skip_first_redundant_copy
+        ? attach_ex(swap_chain.Get(), &attach_options)
+        : attach(swap_chain.Get());
+    LARGE_INTEGER qpc_frequency{};
+    QueryPerformanceFrequency(&qpc_frequency);
+    TimingMetrics timing{
+        .qpc_frequency = static_cast<std::uint64_t>(qpc_frequency.QuadPart),
+    };
     WorkloadResources workload_resources;
     bool context_vtable_pointer_stable = false;
     bool context_copy_entry_stable = false;
+    LARGE_INTEGER workload_start{};
+    LARGE_INTEGER workload_end{};
+    QueryPerformanceCounter(&workload_start);
     const auto resource_workload_succeeded =
         SUCCEEDED(attach_result) &&
         is_attached() != FALSE &&
@@ -469,14 +700,23 @@ int wmain(int argc, wchar_t* argv[]) {
             workload_resources,
             context_vtable_pointer_stable,
             context_copy_entry_stable);
+    QueryPerformanceCounter(&workload_end);
+    timing.workload_qpc_ticks = static_cast<std::uint64_t>(
+        workload_end.QuadPart - workload_start.QuadPart);
 
     bool render_succeeded = resource_workload_succeeded;
+    LARGE_INTEGER present_start{};
+    LARGE_INTEGER present_end{};
+    QueryPerformanceCounter(&present_start);
     for (unsigned long frame = 0; render_succeeded && frame < options->frames; ++frame) {
         const float red = static_cast<float>(frame % 60) / 60.0F;
         const float color[]{red, 0.2F, 1.0F - red, 1.0F};
         context->ClearRenderTargetView(render_target.Get(), color);
         render_succeeded = SUCCEEDED(swap_chain->Present(0, 0));
     }
+    QueryPerformanceCounter(&present_end);
+    timing.present_qpc_ticks = static_cast<std::uint64_t>(
+        present_end.QuadPart - present_start.QuadPart);
 
     if (options->hold_ms != 0) {
         Sleep(options->hold_ms);
@@ -486,10 +726,19 @@ int wmain(int argc, wchar_t* argv[]) {
     snapshot.struct_size = sizeof(snapshot);
     const auto snapshot_result = read_snapshot(&snapshot);
     const auto resource_metrics_matched =
-        SUCCEEDED(snapshot_result) && snapshot_matches_workload(snapshot);
+        SUCCEEDED(snapshot_result) && snapshot_matches_workload(snapshot, *options);
     const auto detach_result = detach();
     const auto original_pointer_restored =
         SUCCEEDED(detach_result) && is_attached() == FALSE;
+    LARGE_INTEGER readback_start{};
+    LARGE_INTEGER readback_end{};
+    QueryPerformanceCounter(&readback_start);
+    const auto content = original_pointer_restored
+        ? verify_workload_content(device.Get(), context.Get(), workload_resources)
+        : ContentVerification{};
+    QueryPerformanceCounter(&readback_end);
+    timing.readback_qpc_ticks = static_cast<std::uint64_t>(
+        readback_end.QuadPart - readback_start.QuadPart);
 
     const auto report = build_report(
         *options,
@@ -502,7 +751,9 @@ int wmain(int argc, wchar_t* argv[]) {
         resource_workload_succeeded,
         resource_metrics_matched,
         context_vtable_pointer_stable,
-        context_copy_entry_stable);
+        context_copy_entry_stable,
+        content,
+        timing);
     std::cout << report;
     if (!options->output_path.empty()) {
         std::ofstream output(options->output_path, std::ios::binary);
@@ -522,6 +773,9 @@ int wmain(int argc, wchar_t* argv[]) {
         resource_workload_succeeded &&
         resource_metrics_matched &&
         original_pointer_restored &&
+        content.readback_succeeded &&
+        content.buffer_contents_equal &&
+        content.texture_contents_equal &&
         snapshot.present_count == options->frames;
     return passed ? 0 : 6;
 }

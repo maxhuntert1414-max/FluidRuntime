@@ -33,6 +33,10 @@ public sealed class HookLabRunner
         {
             startInfo.ArgumentList.Add("--hardware");
         }
+        if (options.SkipFirstRedundantCopy)
+        {
+            startInfo.ArgumentList.Add("--skip-first-redundant-copy");
+        }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Unable to start the hook lab target.");
@@ -64,7 +68,7 @@ public sealed class HookLabRunner
 
         using var targetDocument = JsonDocument.Parse(stdout);
         var targetReport = targetDocument.RootElement.Clone();
-        ValidateTargetReport(targetReport);
+        ValidateTargetReport(targetReport, options.SkipFirstRedundantCopy);
 
         var eventTypeCounts = events
             .GroupBy(item => item.Type)
@@ -74,6 +78,9 @@ public sealed class HookLabRunner
             .ToArray();
         var redundantCopyEvents = copyEvents
             .Where(item => item.IsRedundantCopyCandidate)
+            .ToArray();
+        var skippedCopyEvents = copyEvents
+            .Where(item => item.WasCopySkipped)
             .ToArray();
         var copyBytes = copyEvents.Aggregate(0UL, (total, item) => total + item.SizeBytes);
         var redundantBytes = redundantCopyEvents.Aggregate(
@@ -85,14 +92,20 @@ public sealed class HookLabRunner
             events,
             copyEvents,
             redundantCopyEvents,
+            skippedCopyEvents,
             copyBytes,
             redundantBytes,
-            reader);
+            reader,
+            options.SkipFirstRedundantCopy);
+
+        var resources = targetReport.GetProperty("resources");
+        var timing = targetReport.GetProperty("timing");
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.4",
-            ReadOnly: true,
+            "fluidruntime-hook-ipc-lab-v0.5",
+            ReadOnly: !options.SkipFirstRedundantCopy,
             WouldModifySystem: false,
+            CopyElisionEnabled: options.SkipFirstRedundantCopy,
             TargetProcessId: process.Id,
             RingName: reader.MappingName,
             RingAbiVersion: reader.AbiVersion,
@@ -107,6 +120,23 @@ public sealed class HookLabRunner
             AvoidableCopySharePercent: copyBytes == 0
                 ? 0
                 : Math.Round(redundantBytes * 100d / copyBytes, 2),
+            ForwardedCopyCount: resources.GetProperty("forwarded_copy_count").GetInt64(),
+            ForwardedCopyBytes:
+                resources.GetProperty("forwarded_copy_bytes_estimated").GetUInt64(),
+            SkippedCopyCount: resources.GetProperty("skipped_copy_count").GetInt64(),
+            SkippedCopyBytes:
+                resources.GetProperty("skipped_copy_bytes_estimated").GetUInt64(),
+            ContentEquivalent:
+                targetReport.GetProperty("buffer_contents_equal").GetBoolean() &&
+                targetReport.GetProperty("texture_contents_equal").GetBoolean(),
+            RollbackRestored:
+                targetReport.GetProperty("original_pointer_restored").GetBoolean(),
+            DestinationBufferHash:
+                targetReport.GetProperty("destination_buffer_hash").GetString() ?? string.Empty,
+            DestinationTextureHash:
+                targetReport.GetProperty("destination_texture_hash").GetString() ?? string.Empty,
+            QpcFrequencyFromTarget: timing.GetProperty("qpc_frequency").GetUInt64(),
+            WorkloadQpcTicks: timing.GetProperty("workload_qpc_ticks").GetUInt64(),
             TargetReport: targetReport);
     }
 
@@ -142,14 +172,18 @@ public sealed class HookLabRunner
             $"Native hook ring for PID {process.Id} did not become available.");
     }
 
-    private static void ValidateTargetReport(JsonElement report)
+    private static void ValidateTargetReport(JsonElement report, bool copyElisionEnabled)
     {
-        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.4" ||
-            !report.GetProperty("read_only_hook").GetBoolean() ||
+        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.5" ||
+            report.GetProperty("read_only_hook").GetBoolean() == copyElisionEnabled ||
             report.GetProperty("would_modify_frame_data").GetBoolean() ||
-            report.GetProperty("would_skip_copies").GetBoolean() ||
+            report.GetProperty("would_skip_copies").GetBoolean() != copyElisionEnabled ||
+            report.GetProperty("optimization_requested").GetBoolean() != copyElisionEnabled ||
             !report.GetProperty("resource_metrics_matched").GetBoolean() ||
-            !report.GetProperty("original_pointer_restored").GetBoolean())
+            !report.GetProperty("original_pointer_restored").GetBoolean() ||
+            !report.GetProperty("content_readback_succeeded").GetBoolean() ||
+            !report.GetProperty("buffer_contents_equal").GetBoolean() ||
+            !report.GetProperty("texture_contents_equal").GetBoolean())
         {
             throw new InvalidDataException("Hook target report violated the read-only lab contract.");
         }
@@ -160,9 +194,11 @@ public sealed class HookLabRunner
         IReadOnlyList<HookIpcEvent> events,
         IReadOnlyCollection<HookIpcEvent> copyEvents,
         IReadOnlyCollection<HookIpcEvent> redundantCopyEvents,
+        IReadOnlyCollection<HookIpcEvent> skippedCopyEvents,
         ulong copyBytes,
         ulong redundantBytes,
-        HookRingReader reader)
+        HookRingReader reader,
+        bool copyElisionEnabled)
     {
         var resources = targetReport.GetProperty("resources");
         var expectedEventCount = resources.GetProperty("ipc_event_count").GetInt64();
@@ -170,7 +206,10 @@ public sealed class HookLabRunner
         var knownEventTypes = events.All(item => Enum.IsDefined(item.Type));
         var workloadMatches = MatchesDeterministicWorkload(
             events,
-            targetReport.GetProperty("observed_presents").GetInt64());
+            targetReport.GetProperty("observed_presents").GetInt64(),
+            copyElisionEnabled);
+        var expectedSkippedCount = copyElisionEnabled ? 1 : 0;
+        var expectedSkippedBytes = copyElisionEnabled ? 4096UL : 0UL;
         var eventTypesMatch =
             CountEvents(events, HookEventType.Present) ==
                 targetReport.GetProperty("observed_presents").GetInt64() &&
@@ -199,6 +238,16 @@ public sealed class HookLabRunner
                 resources.GetProperty("redundant_copy_candidate_count").GetInt64() ||
             redundantBytes !=
                 resources.GetProperty("redundant_copy_bytes_estimated").GetUInt64() ||
+            skippedCopyEvents.Count != expectedSkippedCount ||
+            skippedCopyEvents.Aggregate(0UL, (total, item) => total + item.SizeBytes) !=
+                expectedSkippedBytes ||
+            resources.GetProperty("skipped_copy_count").GetInt64() != expectedSkippedCount ||
+            resources.GetProperty("skipped_copy_bytes_estimated").GetUInt64() !=
+                expectedSkippedBytes ||
+            resources.GetProperty("forwarded_copy_count").GetInt64() !=
+                copyEvents.Count - expectedSkippedCount ||
+            resources.GetProperty("forwarded_copy_bytes_estimated").GetUInt64() !=
+                copyBytes - expectedSkippedBytes ||
             reader.LostSequenceCount != 0 ||
             reader.NativeOverrunCount != 0)
         {
@@ -214,7 +263,8 @@ public sealed class HookLabRunner
 
     internal static bool MatchesDeterministicWorkload(
         IReadOnlyList<HookIpcEvent> events,
-        long expectedPresentCount)
+        long expectedPresentCount,
+        bool copyElisionEnabled = false)
     {
         if (expectedPresentCount < 0 ||
             events.Any(item => item.QpcTicks <= 0 || item.ThreadId == 0))
@@ -230,7 +280,8 @@ public sealed class HookLabRunner
             (HookEventType.MapWrite, 3UL, 0UL, 4096UL, 0UL, 4U),
             (HookEventType.UnmapWrite, 3UL, 0UL, 4096UL, 1UL, 0U),
             (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 1UL, 0U),
-            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 2UL, 1U),
+            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 2UL,
+                copyElisionEnabled ? 3U : 1U),
             (HookEventType.UpdateSubresource, 1UL, 0UL, 4096UL, 2UL, 0U),
             (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 3UL, 0U),
             (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 4UL, 1U),

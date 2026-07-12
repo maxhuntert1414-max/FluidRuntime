@@ -5,7 +5,8 @@
 
 #include <cstdint>
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 3;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 4;
+constexpr std::uint32_t fluid_hook_attach_options_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
 constexpr std::uint32_t fluid_hook_ring_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
@@ -23,6 +24,15 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
+constexpr std::uint32_t fluid_hook_event_flag_copy_skipped = 2;
+constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
+
+struct FluidHookAttachOptionsV1 {
+    std::uint32_t struct_size;
+    std::uint32_t abi_version;
+    std::uint32_t flags;
+    std::uint32_t max_skipped_copy_count;
+};
 
 struct alignas(64) FluidHookRingHeaderV1 {
     std::uint32_t magic;
@@ -72,6 +82,10 @@ struct FluidHookSnapshotV1 {
     std::uint64_t copy_resource_bytes_estimated;
     std::uint64_t redundant_copy_candidate_count;
     std::uint64_t redundant_copy_bytes_estimated;
+    std::uint64_t forwarded_copy_count;
+    std::uint64_t forwarded_copy_bytes_estimated;
+    std::uint64_t skipped_copy_count;
+    std::uint64_t skipped_copy_bytes_estimated;
     std::uint64_t tracked_resource_count;
     std::uint64_t hook_refresh_count;
     std::uint64_t hook_refresh_failure_count;
@@ -86,12 +100,18 @@ struct FluidHookSnapshotV1 {
 #endif
 
 FLUID_HOOK_API HRESULT WINAPI FluidHookAttach(IDXGISwapChain* swap_chain);
+FLUID_HOOK_API HRESULT WINAPI FluidHookAttachEx(
+    IDXGISwapChain* swap_chain,
+    const FluidHookAttachOptionsV1* options);
 FLUID_HOOK_API HRESULT WINAPI FluidHookDetach();
 FLUID_HOOK_API std::uint64_t WINAPI FluidHookPresentCount();
 FLUID_HOOK_API BOOL WINAPI FluidHookIsAttached();
 FLUID_HOOK_API HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot);
 
 using FluidHookAttachFunction = HRESULT(WINAPI*)(IDXGISwapChain*);
+using FluidHookAttachExFunction = HRESULT(WINAPI*)(
+    IDXGISwapChain*,
+    const FluidHookAttachOptionsV1*);
 using FluidHookDetachFunction = HRESULT(WINAPI*)();
 using FluidHookPresentCountFunction = std::uint64_t(WINAPI*)();
 using FluidHookIsAttachedFunction = BOOL(WINAPI*)();

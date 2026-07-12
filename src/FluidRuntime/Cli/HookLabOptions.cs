@@ -6,20 +6,42 @@ public sealed record HookLabOptions(
     string OutputPath,
     int FrameCount,
     int HoldMs,
-    bool UseHardware)
+    bool UseHardware,
+    bool SkipFirstRedundantCopy)
 {
     public const string Usage =
         "Usage: fluidruntime hook-lab --target <hook-target.exe> --hook <hook.dll> " +
         "--out <report.json> [--frames <count>] [--hold-ms <milliseconds>] " +
         "[--hardware <true|false>]";
 
+    public const string CopyElisionUsage =
+        "Usage: fluidruntime copy-elision-lab --target <hook-target.exe> " +
+        "--hook <hook.dll> --out <report.json> [--frames <count>] " +
+        "[--hold-ms <milliseconds>] [--hardware <true|false>]";
+
     public static HookLabOptions Parse(string[] args)
+    {
+        return ParseCore(args, "hook-lab", Usage);
+    }
+
+    public static HookLabOptions ParseCopyElision(string[] args)
+    {
+        return ParseCore(
+            args,
+            "copy-elision-lab",
+            CopyElisionUsage);
+    }
+
+    private static HookLabOptions ParseCore(
+        string[] args,
+        string command,
+        string usage)
     {
         ArgumentNullException.ThrowIfNull(args);
         if (args.Length == 0 ||
-            !string.Equals(args[0], "hook-lab", StringComparison.OrdinalIgnoreCase))
+            !string.Equals(args[0], command, StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException(Usage);
+            throw new ArgumentException(usage);
         }
 
         string? targetPath = null;
@@ -28,6 +50,7 @@ public sealed record HookLabOptions(
         var frameCount = 120;
         var holdMs = 1000;
         var useHardware = false;
+        var skipFirstRedundantCopy = false;
 
         for (var index = 1; index < args.Length; index += 2)
         {
@@ -61,7 +84,7 @@ public sealed record HookLabOptions(
                     }
                     break;
                 default:
-                    throw new ArgumentException($"Unknown option '{args[index]}'. {Usage}");
+                    throw new ArgumentException($"Unknown option '{args[index]}'. {usage}");
             }
         }
 
@@ -69,7 +92,7 @@ public sealed record HookLabOptions(
             string.IsNullOrWhiteSpace(hookPath) ||
             string.IsNullOrWhiteSpace(outputPath))
         {
-            throw new ArgumentException($"--target, --hook, and --out are required. {Usage}");
+            throw new ArgumentException($"--target, --hook, and --out are required. {usage}");
         }
 
         return new HookLabOptions(
@@ -78,7 +101,8 @@ public sealed record HookLabOptions(
             outputPath,
             frameCount,
             holdMs,
-            useHardware);
+            useHardware,
+            skipFirstRedundantCopy);
     }
 
     private static int ParsePositiveInt(string value, string option, int maximum)

@@ -28,7 +28,7 @@ public sealed class HookRingReaderTests
             MemoryMappedFileAccess.ReadWrite);
         WriteHeader(writer, capacity);
         WriteEvent(writer, 0, HookEventType.Present, sizeBytes: 0, flags: 0);
-        WriteEvent(writer, 1, HookEventType.CopyResource, sizeBytes: 4096, flags: 1);
+        WriteEvent(writer, 1, HookEventType.CopyResource, sizeBytes: 4096, flags: 3);
         writer.Write(16, 2L);
 
         using var reader = HookRingReader.Open(mappingName);
@@ -39,6 +39,7 @@ public sealed class HookRingReaderTests
         Assert.Equal(HookEventType.CopyResource, events[1].Type);
         Assert.Equal(4096UL, events[1].SizeBytes);
         Assert.True(events[1].IsRedundantCopyCandidate);
+        Assert.True(events[1].WasCopySkipped);
         Assert.Equal(2, writer.ReadInt64(24));
         Assert.Equal(0, reader.LostSequenceCount);
     }
