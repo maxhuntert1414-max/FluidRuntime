@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic-development-baseline",
+  "source": "FluidGateway v0.61 fixture registry",
+  "real_capture": false,
+  "records": [
+    {
+      "id": "e7e9c6ba901f",
+      "label": "fixture-clean",
+      "application": "CleanGame.exe",
+      "frames": 8,
+      "approx_fps": 59.97001499250374,
+      "findings": [],
+      "management_actions": [],
+      "max_finding_score": 0,
+      "max_management_priority": 0
+    },
+    {
+      "id": "a59e421ff056",
+      "label": "fixture-copy_present",
+      "application": "CopyGame.exe",
+      "frames": 5,
+      "approx_fps": 60.02400960384153,
+      "findings": [
+        "presentation-copy-path",
+        "composition-waste",
+        "excessive-presentation-latency"
+      ],
+      "management_actions": [
+        "zero-copy-presentation-route",
+        "ram-vram-residency-manager"
+      ],
+      "max_finding_score": 90,
+      "max_management_priority": 95
+    },
+    {
+      "id": "c718018895fe",
+      "label": "fixture-gpu_wait",
+      "application": "BubbleGame.exe",
+      "frames": 5,
+      "approx_fps": 60.02400960384153,
+      "findings": ["gpu-bubbles"],
+      "management_actions": [
+        "gpu-work-prefetch-budget",
+        "early-handoff-scheduler",
+        "ram-vram-residency-manager"
+      ],
+      "max_finding_score": 63,
+      "max_management_priority": 69
+    },
+    {
+      "id": "fa55ab5dbc52",
+      "label": "fixture-high_present_wait",
+      "application": "WaitGame.exe",
+      "frames": 5,
+      "approx_fps": 60.02400960384153,
+      "findings": ["cpu-present-wait"],
+      "management_actions": [
+        "adaptive-frame-queue-depth",
+        "early-handoff-scheduler"
+      ],
+      "max_finding_score": 69,
+      "max_management_priority": 77
+    },
+    {
+      "id": "7f916a8a0de7",
+      "label": "fixture-irregular_pacing",
+      "application": "StutterGame.exe",
+      "frames": 6,
+      "approx_fps": 36.36363636363636,
+      "findings": ["unstable-frame-pacing"],
+      "management_actions": [
+        "pacing-stability-controller",
+        "ram-vram-residency-manager"
+      ],
+      "max_finding_score": 100,
+      "max_management_priority": 100
+    },
+    {
+      "id": "18822ef521f7",
+      "label": "fixture-missing_columns",
+      "application": "TinyGame.exe",
+      "frames": 3,
+      "approx_fps": 60.12024048096192,
+      "findings": [],
+      "management_actions": [],
+      "max_finding_score": 0,
+      "max_management_priority": 0
+    },
+    {
+      "id": "b17c398be1d2",
+      "label": "fixture-na_values",
+      "application": "DropGame.exe",
+      "frames": 4,
+      "approx_fps": 59.97001499250374,
+      "findings": ["undisplayed-frames"],
+      "management_actions": ["ram-vram-residency-manager"],
+      "max_finding_score": 80,
+      "max_management_priority": 82
+    }
+  ]
+}
