@@ -1008,6 +1008,20 @@ HRESULT WINAPI FluidHookDetach() {
     return S_OK;
 }
 
+HRESULT WINAPI FluidHookRefresh() {
+    const std::lock_guard hook_lock(g_hook_mutex);
+    if (g_installed_hook_count == 0) {
+        return S_FALSE;
+    }
+
+    const auto failures_before =
+        g_hook_refresh_failure_count.load(std::memory_order_relaxed);
+    refresh_context_hook_slots();
+    return g_hook_refresh_failure_count.load(std::memory_order_relaxed) == failures_before
+        ? S_OK
+        : E_FAIL;
+}
+
 std::uint64_t WINAPI FluidHookPresentCount() {
     return g_present_count.load(std::memory_order_relaxed);
 }

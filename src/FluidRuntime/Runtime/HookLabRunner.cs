@@ -29,6 +29,8 @@ public sealed class HookLabRunner
         startInfo.ArgumentList.Add(options.FrameCount.ToString());
         startInfo.ArgumentList.Add("--hold-ms");
         startInfo.ArgumentList.Add(options.HoldMs.ToString());
+        startInfo.ArgumentList.Add("--gpu-timeout-ms");
+        startInfo.ArgumentList.Add(options.GpuTimeoutMs.ToString());
         if (options.UseHardware)
         {
             startInfo.ArgumentList.Add("--hardware");
@@ -100,12 +102,26 @@ public sealed class HookLabRunner
 
         var resources = targetReport.GetProperty("resources");
         var timing = targetReport.GetProperty("timing");
+        var adapter = targetReport.GetProperty("adapter");
+        var gpuTimingValid = timing.GetProperty("gpu_timing_valid").GetBoolean();
+        var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
+        var gpuWorkloadTicks = timing.GetProperty("gpu_workload_ticks").GetUInt64();
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.5",
+            "fluidruntime-hook-ipc-lab-v0.6",
             ReadOnly: !options.SkipFirstRedundantCopy,
             WouldModifySystem: false,
             CopyElisionEnabled: options.SkipFirstRedundantCopy,
+            RenderDriver: targetReport.GetProperty("render_driver").GetString() ?? string.Empty,
+            AdapterIdentityAvailable: adapter.GetProperty("available").GetBoolean(),
+            AdapterDescription: adapter.GetProperty("description").GetString() ?? string.Empty,
+            AdapterVendorId: adapter.GetProperty("vendor_id").GetUInt32(),
+            AdapterDeviceId: adapter.GetProperty("device_id").GetUInt32(),
+            AdapterDedicatedVideoMemory:
+                adapter.GetProperty("dedicated_video_memory").GetUInt64(),
+            AdapterSharedSystemMemory:
+                adapter.GetProperty("shared_system_memory").GetUInt64(),
+            AdapterLuid: adapter.GetProperty("luid").GetString() ?? string.Empty,
             TargetProcessId: process.Id,
             RingName: reader.MappingName,
             RingAbiVersion: reader.AbiVersion,
@@ -137,6 +153,16 @@ public sealed class HookLabRunner
                 targetReport.GetProperty("destination_texture_hash").GetString() ?? string.Empty,
             QpcFrequencyFromTarget: timing.GetProperty("qpc_frequency").GetUInt64(),
             WorkloadQpcTicks: timing.GetProperty("workload_qpc_ticks").GetUInt64(),
+            GpuTimingSupported: timing.GetProperty("gpu_timing_supported").GetBoolean(),
+            GpuTimingValid: gpuTimingValid,
+            GpuTimingStatus: GpuTimingStatus(timing),
+            GpuTimingDisjoint: timing.GetProperty("gpu_timing_disjoint").GetBoolean(),
+            GpuQueryTimedOut: timing.GetProperty("gpu_query_timed_out").GetBoolean(),
+            GpuFrequency: gpuFrequency,
+            GpuWorkloadTicks: gpuWorkloadTicks,
+            GpuWorkloadMicroseconds: gpuTimingValid
+                ? Math.Round(gpuWorkloadTicks * 1_000_000d / gpuFrequency, 3)
+                : null,
             TargetReport: targetReport);
     }
 
@@ -174,7 +200,13 @@ public sealed class HookLabRunner
 
     private static void ValidateTargetReport(JsonElement report, bool copyElisionEnabled)
     {
-        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.5" ||
+        var timing = report.GetProperty("timing");
+        var gpuTimingSupported = timing.GetProperty("gpu_timing_supported").GetBoolean();
+        var gpuTimingValid = timing.GetProperty("gpu_timing_valid").GetBoolean();
+        var gpuTimingDisjoint = timing.GetProperty("gpu_timing_disjoint").GetBoolean();
+        var gpuQueryTimedOut = timing.GetProperty("gpu_query_timed_out").GetBoolean();
+        var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
+        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.6" ||
             report.GetProperty("read_only_hook").GetBoolean() == copyElisionEnabled ||
             report.GetProperty("would_modify_frame_data").GetBoolean() ||
             report.GetProperty("would_skip_copies").GetBoolean() != copyElisionEnabled ||
@@ -183,7 +215,10 @@ public sealed class HookLabRunner
             !report.GetProperty("original_pointer_restored").GetBoolean() ||
             !report.GetProperty("content_readback_succeeded").GetBoolean() ||
             !report.GetProperty("buffer_contents_equal").GetBoolean() ||
-            !report.GetProperty("texture_contents_equal").GetBoolean())
+            !report.GetProperty("texture_contents_equal").GetBoolean() ||
+            report.GetProperty("refresh_hresult").GetString() != "0x00000000" ||
+            (gpuTimingValid &&
+                (!gpuTimingSupported || gpuTimingDisjoint || gpuQueryTimedOut || gpuFrequency == 0)))
         {
             throw new InvalidDataException("Hook target report violated the read-only lab contract.");
         }
@@ -260,6 +295,29 @@ public sealed class HookLabRunner
         IEnumerable<HookIpcEvent> events,
         HookEventType eventType) =>
         events.LongCount(item => item.Type == eventType);
+
+    private static string GpuTimingStatus(JsonElement timing)
+    {
+        if (timing.GetProperty("gpu_timing_valid").GetBoolean())
+        {
+            return "valid";
+        }
+        if (!timing.GetProperty("gpu_timing_supported").GetBoolean())
+        {
+            return "unsupported";
+        }
+        if (timing.GetProperty("gpu_query_timed_out").GetBoolean())
+        {
+            return "timeout";
+        }
+        if (timing.GetProperty("gpu_timing_disjoint").GetBoolean())
+        {
+            return "disjoint";
+        }
+        return timing.GetProperty("gpu_frequency").GetUInt64() == 0
+            ? "frequency-zero"
+            : "unavailable";
+    }
 
     internal static bool MatchesDeterministicWorkload(
         IReadOnlyList<HookIpcEvent> events,

@@ -32,7 +32,7 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.5 publishes 64-byte events into a 1,024-slot named shared-memory ring.
+Version 0.6 publishes 64-byte events into a 1,024-slot named shared-memory ring.
 The mapping is local to the Windows session and named for the target PID. The
 header and event layouts are versioned independently from the report schema.
 
@@ -72,6 +72,15 @@ snapshot, detaches the hook, and only then performs buffer/texture readback.
 Logical bytes are compared exactly and also hashed for the report while texture
 row padding is ignored. Any count, byte, digest, or rollback mismatch fails the
 run closed.
+
+The v0.6 evidence layer wraps the owned resource workload in a D3D11
+`TIMESTAMP_DISJOINT` query and start/end timestamp queries. Query polling has a
+bounded timeout. The target explicitly refreshes context hook slots after query
+operations because software and hardware runtimes may replace thunk entries.
+The managed command records warmup and measured pairs, alternates execution
+order, and computes paired CPU/GPU p50 and p95 distributions without hiding raw
+runs or invalid timing states. A passing evidence gate is explicitly scoped to
+the owned D3D11 copy workload and does not imply a game-wide FPS gain.
 
 ## Known Limits
 

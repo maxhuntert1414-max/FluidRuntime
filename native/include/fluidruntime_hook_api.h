@@ -104,6 +104,7 @@ FLUID_HOOK_API HRESULT WINAPI FluidHookAttachEx(
     IDXGISwapChain* swap_chain,
     const FluidHookAttachOptionsV1* options);
 FLUID_HOOK_API HRESULT WINAPI FluidHookDetach();
+FLUID_HOOK_API HRESULT WINAPI FluidHookRefresh();
 FLUID_HOOK_API std::uint64_t WINAPI FluidHookPresentCount();
 FLUID_HOOK_API BOOL WINAPI FluidHookIsAttached();
 FLUID_HOOK_API HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot);
@@ -113,6 +114,7 @@ using FluidHookAttachExFunction = HRESULT(WINAPI*)(
     IDXGISwapChain*,
     const FluidHookAttachOptionsV1*);
 using FluidHookDetachFunction = HRESULT(WINAPI*)();
+using FluidHookRefreshFunction = HRESULT(WINAPI*)();
 using FluidHookPresentCountFunction = std::uint64_t(WINAPI*)();
 using FluidHookIsAttachedFunction = BOOL(WINAPI*)();
 using FluidHookReadSnapshotFunction = HRESULT(WINAPI*)(FluidHookSnapshotV1*);

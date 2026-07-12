@@ -19,20 +19,21 @@ coordinate the interfaces the operating system and graphics APIs expose.
   copy, two-process baseline comparison, post-detach buffer/texture readback,
   exact content comparison, stable content hashes, and fail-closed rollback
   checks.
+- **v0.6:** paired baseline/optimized traces with alternating order, excluded
+  warmups, CPU QPC and disjoint-guarded GPU timestamps, p50/p95 distributions,
+  raw per-run evidence, bounded query timeouts, and explicit claim blockers.
 
 ## Next Milestones
 
-### v0.6: Trustworthy Resource State
+### v0.7: Trustworthy Resource State
 
 - Track resource destruction and pointer reuse.
 - Cover subresources, `CopySubresourceRegion`, shader/UAV writes, and fences.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.
 - Add longer stress, race, and fault-injection tests.
-- Add repeated-run statistics and GPU timestamp queries before making any
-  performance claim.
 
-### v0.7: Controlled External Observation
+### v0.8: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

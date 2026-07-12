@@ -17,6 +17,9 @@ public sealed class HookLabOptionsTests
 
         Assert.Equal(120, options.FrameCount);
         Assert.Equal(1000, options.HoldMs);
+        Assert.Equal(1000, options.GpuTimeoutMs);
+        Assert.Equal(1, options.TrialPairs);
+        Assert.Equal(0, options.WarmupPairs);
         Assert.False(options.UseHardware);
         Assert.False(options.SkipFirstRedundantCopy);
     }
@@ -31,14 +34,18 @@ public sealed class HookLabOptionsTests
                 "--hook", "hook.dll",
                 "--frames", "300",
                 "--hold-ms", "1500",
+                "--gpu-timeout-ms", "2500",
                 "--hardware", "true",
                 "--out", "report.json"
             ]);
 
         Assert.Equal(300, options.FrameCount);
         Assert.Equal(1500, options.HoldMs);
+        Assert.Equal(2500, options.GpuTimeoutMs);
         Assert.True(options.UseHardware);
         Assert.False(options.SkipFirstRedundantCopy);
+        Assert.Equal(1, options.TrialPairs);
+        Assert.Equal(0, options.WarmupPairs);
     }
 
     [Fact]
@@ -53,6 +60,8 @@ public sealed class HookLabOptionsTests
             ]);
 
         Assert.False(options.SkipFirstRedundantCopy);
+        Assert.Equal(5, options.TrialPairs);
+        Assert.Equal(1, options.WarmupPairs);
         Assert.Throws<ArgumentException>(() => HookLabOptions.ParseCopyElision(
             [
                 "copy-elision-lab",
@@ -61,6 +70,18 @@ public sealed class HookLabOptionsTests
                 "--skip-first-redundant-copy", "true",
                 "--out", "report.json"
             ]));
+
+        var explicitOptions = HookLabOptions.ParseCopyElision(
+            [
+                "copy-elision-lab",
+                "--target", "target.exe",
+                "--hook", "hook.dll",
+                "--trial-pairs", "7",
+                "--warmup-pairs", "0",
+                "--out", "report.json"
+            ]);
+        Assert.Equal(7, explicitOptions.TrialPairs);
+        Assert.Equal(0, explicitOptions.WarmupPairs);
     }
 
     [Fact]

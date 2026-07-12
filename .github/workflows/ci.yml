@@ -32,5 +32,17 @@ jobs:
           dotnet run --project src/FluidRuntime -c Release --no-build -- copy-elision-lab
           --target native/build/Release/fluidruntime-hook-target.exe
           --hook native/build/Release/fluidruntime-present-hook.dll
-          --frames 120 --hold-ms 500 --hardware false
+          --frames 120 --hold-ms 500 --gpu-timeout-ms 1000
+          --trial-pairs 2 --warmup-pairs 0 --hardware false
           --out artifacts/copy-elision-ci.json
+      - name: Validate copy-elision evidence contract
+        shell: pwsh
+        run: |
+          $report = Get-Content artifacts/copy-elision-ci.json -Raw | ConvertFrom-Json
+          if ($report.mode -ne 'fluidruntime-copy-elision-trace-v0.6' -or
+              $report.claim_scope -ne 'owned-d3d11-copy-workload-only' -or
+              $report.included_trial_pairs -ne 2 -or
+              $report.performance_claim_allowed -ne $false -or
+              $report.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
+            throw 'Copy-elision CI report violated the v0.6 evidence contract.'
+          }

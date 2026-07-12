@@ -10,11 +10,12 @@ late synchronization, buffer churn, and frame-pipeline stalls from normal PC
 software. It is not a DLSS, FSR, or frame-generation clone.
 
 Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md) |
+[v0.6 evidence](docs/evidence/v0.6-copy-elision.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.5 keeps normal inspection and external-process behavior advisory-only:
+Version 0.6 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -25,11 +26,14 @@ Version 0.5 keeps normal inspection and external-process behavior advisory-only:
   drivers, games, or OS state.
 
 It also contains the first deliberately narrow actuation experiment. The
-`copy-elision-lab` command runs two instances of the owned deterministic target,
-then allows the optimized instance to skip at most one proven redundant
-`CopyResource`. The command fails unless readback hashes, event accounting, and
-hook rollback agree across baseline and optimized runs. This is not enabled for
+`copy-elision-lab` command runs repeated baseline/optimized pairs of the owned
+deterministic target, then allows each optimized run to skip at most one proven
+redundant `CopyResource`. The command fails unless readback hashes, event
+accounting, and hook rollback agree across all runs. This is not enabled for
 external software.
+
+Any allowed performance claim is scoped in the JSON as
+`owned-d3d11-copy-workload-only`; it is not a game-wide FPS claim.
 
 The v0.2 native probe is also read-only. It adds per-process Windows process
 memory and GPU performance-counter telemetry through a small C++ executable.
@@ -129,16 +133,26 @@ dotnet run --project src/FluidRuntime -c Release -- copy-elision-lab `
   --hook native/build/Release/fluidruntime-present-hook.dll `
   --frames 300 `
   --hold-ms 500 `
+  --gpu-timeout-ms 1000 `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
   --hardware true `
   --out artifacts/copy-elision-comparison.json
 ```
 
-The baseline forwards all six copies. The optimized run observes the same six,
-forwards five, and skips the first redundant 4,096-byte buffer copy. After hook
-detach, the target reads buffer and texture contents back through staging
-resources, compares logical bytes exactly, and computes stable FNV-1a hashes for
-the report. A timing delta is reported for transparency, but this tiny synthetic
-workload is a correctness experiment, not a performance benchmark.
+Each pair contains a baseline and optimized process, and pair order alternates
+to reduce first/second-run bias. Warmups remain in the trace but are excluded
+from statistics. Baselines forward all six copies; optimized runs observe the
+same six, forward five, and skip the first redundant 4,096-byte buffer copy.
+After hook detach, the target reads buffer and texture contents back through
+staging resources, compares logical bytes exactly, and computes stable FNV-1a
+hashes for the report.
+
+Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
+guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,
+execution order, every raw run, and explicit performance-claim blockers.
+Missing, timed-out, disjoint, zero-frequency, or insufficient GPU evidence is
+never reported as a zero-cost success.
 
 This is not remote injection and is not intended for protected or anti-cheat
 processes. It exists to verify resource observation, runtime thunk transitions,

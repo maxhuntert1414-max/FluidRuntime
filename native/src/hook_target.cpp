@@ -36,6 +36,7 @@ struct Options {
     std::wstring output_path;
     unsigned long frames{60};
     unsigned long hold_ms{};
+    unsigned long gpu_timeout_ms{1000};
     bool use_hardware{};
     bool skip_first_redundant_copy{};
 };
@@ -63,6 +64,31 @@ struct TimingMetrics {
     std::uint64_t workload_qpc_ticks{};
     std::uint64_t present_qpc_ticks{};
     std::uint64_t readback_qpc_ticks{};
+    bool gpu_timing_supported{};
+    bool gpu_timing_valid{};
+    bool gpu_timing_disjoint{};
+    bool gpu_query_timed_out{};
+    std::uint64_t gpu_frequency{};
+    std::uint64_t gpu_workload_ticks{};
+};
+
+struct GpuTimingQueries {
+    ComPtr<ID3D11Query> disjoint;
+    ComPtr<ID3D11Query> start;
+    ComPtr<ID3D11Query> end;
+};
+
+struct AdapterIdentity {
+    bool available{};
+    std::string description;
+    std::uint32_t vendor_id{};
+    std::uint32_t device_id{};
+    std::uint32_t subsystem_id{};
+    std::uint32_t revision{};
+    std::uint64_t dedicated_video_memory{};
+    std::uint64_t dedicated_system_memory{};
+    std::uint64_t shared_system_memory{};
+    std::uint64_t luid{};
 };
 
 LRESULT CALLBACK window_procedure(
@@ -102,6 +128,12 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
                 return std::nullopt;
             }
             options.hold_ms = *hold_ms;
+        } else if (argument == L"--gpu-timeout-ms" && index + 1 < argc) {
+            const auto gpu_timeout_ms = parse_positive(argv[++index]);
+            if (!gpu_timeout_ms.has_value() || *gpu_timeout_ms > 10000) {
+                return std::nullopt;
+            }
+            options.gpu_timeout_ms = *gpu_timeout_ms;
         } else if (argument == L"--hardware") {
             options.use_hardware = true;
         } else if (argument == L"--skip-first-redundant-copy") {
@@ -128,6 +160,98 @@ std::string uint64_hex(std::uint64_t value) {
     std::ostringstream output;
     output << std::hex << std::setw(16) << std::setfill('0') << value;
     return output.str();
+}
+
+std::string json_escape(std::string_view value) {
+    std::string output;
+    output.reserve(value.size());
+    for (const auto character : value) {
+        switch (character) {
+        case '"':
+            output += "\\\"";
+            break;
+        case '\\':
+            output += "\\\\";
+            break;
+        case '\n':
+            output += "\\n";
+            break;
+        case '\r':
+            output += "\\r";
+            break;
+        case '\t':
+            output += "\\t";
+            break;
+        default:
+            output += character;
+            break;
+        }
+    }
+    return output;
+}
+
+std::string wide_to_utf8(const wchar_t* value) {
+    if (value == nullptr || *value == L'\0') {
+        return {};
+    }
+    const auto required = WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        value,
+        -1,
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (required <= 1) {
+        return {};
+    }
+    std::string output(static_cast<size_t>(required), '\0');
+    WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        value,
+        -1,
+        output.data(),
+        required,
+        nullptr,
+        nullptr);
+    output.resize(static_cast<size_t>(required - 1));
+    return output;
+}
+
+AdapterIdentity query_adapter_identity(ID3D11Device* device) {
+    AdapterIdentity result;
+    if (device == nullptr) {
+        return result;
+    }
+    ComPtr<IDXGIDevice> dxgi_device;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dxgi_device)))) {
+        return result;
+    }
+    ComPtr<IDXGIAdapter> adapter;
+    if (FAILED(dxgi_device->GetAdapter(&adapter))) {
+        return result;
+    }
+    DXGI_ADAPTER_DESC description{};
+    if (FAILED(adapter->GetDesc(&description))) {
+        return result;
+    }
+
+    result.available = true;
+    result.description = wide_to_utf8(description.Description);
+    result.vendor_id = description.VendorId;
+    result.device_id = description.DeviceId;
+    result.subsystem_id = description.SubSysId;
+    result.revision = description.Revision;
+    result.dedicated_video_memory = description.DedicatedVideoMemory;
+    result.dedicated_system_memory = description.DedicatedSystemMemory;
+    result.shared_system_memory = description.SharedSystemMemory;
+    result.luid =
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(description.AdapterLuid.HighPart))
+            << 32 |
+        description.AdapterLuid.LowPart;
+    return result;
 }
 
 std::uint64_t hash_bytes(
@@ -261,6 +385,97 @@ ContentVerification verify_workload_content(
     result.buffer_contents_equal = *source_buffer == *destination_buffer;
     result.texture_contents_equal = *source_texture == *destination_texture;
     return result;
+}
+
+GpuTimingQueries create_gpu_timing_queries(ID3D11Device* device) {
+    GpuTimingQueries result;
+    if (device == nullptr) {
+        return result;
+    }
+
+    D3D11_QUERY_DESC description{};
+    description.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+    if (FAILED(device->CreateQuery(&description, &result.disjoint))) {
+        return {};
+    }
+    description.Query = D3D11_QUERY_TIMESTAMP;
+    if (FAILED(device->CreateQuery(&description, &result.start)) ||
+        FAILED(device->CreateQuery(&description, &result.end))) {
+        return {};
+    }
+    return result;
+}
+
+template <typename T>
+bool wait_for_query_data(
+    ID3D11DeviceContext* context,
+    ID3D11Query* query,
+    T& data,
+    bool& timed_out,
+    ULONGLONG timeout_ms) {
+    const auto deadline = GetTickCount64() + timeout_ms;
+    while (GetTickCount64() <= deadline) {
+        const auto result = context->GetData(
+            query,
+            &data,
+            sizeof(data),
+            D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (result == S_OK) {
+            return true;
+        }
+        if (FAILED(result)) {
+            return false;
+        }
+        Sleep(1);
+    }
+    timed_out = true;
+    return false;
+}
+
+void collect_gpu_timing(
+    ID3D11DeviceContext* context,
+    const GpuTimingQueries& queries,
+    TimingMetrics& timing,
+    unsigned long timeout_ms) {
+    timing.gpu_timing_supported =
+        queries.disjoint != nullptr && queries.start != nullptr && queries.end != nullptr;
+    if (!timing.gpu_timing_supported || context == nullptr) {
+        return;
+    }
+
+    context->Flush();
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint_data{};
+    std::uint64_t start_timestamp = 0;
+    std::uint64_t end_timestamp = 0;
+    if (!wait_for_query_data(
+            context,
+            queries.disjoint.Get(),
+            disjoint_data,
+            timing.gpu_query_timed_out,
+            timeout_ms) ||
+        !wait_for_query_data(
+            context,
+            queries.start.Get(),
+            start_timestamp,
+            timing.gpu_query_timed_out,
+            timeout_ms) ||
+        !wait_for_query_data(
+            context,
+            queries.end.Get(),
+            end_timestamp,
+            timing.gpu_query_timed_out,
+            timeout_ms)) {
+        return;
+    }
+
+    timing.gpu_timing_disjoint = disjoint_data.Disjoint != FALSE;
+    timing.gpu_frequency = disjoint_data.Frequency;
+    if (!timing.gpu_timing_disjoint &&
+        timing.gpu_frequency != 0 &&
+        end_timestamp >= start_timestamp) {
+        timing.gpu_workload_ticks = end_timestamp - start_timestamp;
+        timing.gpu_timing_valid = true;
+    }
 }
 
 bool warm_up_context(ID3D11Device* device, ID3D11DeviceContext* context) {
@@ -441,6 +656,7 @@ std::string build_report(
     const Options& options,
     const FluidHookSnapshotV1& snapshot,
     HRESULT attach_result,
+    HRESULT refresh_result,
     HRESULT snapshot_result,
     HRESULT detach_result,
     bool original_pointer_restored,
@@ -450,10 +666,11 @@ std::string build_report(
     bool context_vtable_pointer_stable,
     bool context_copy_entry_stable,
     const ContentVerification& content,
-    const TimingMetrics& timing) {
+    const TimingMetrics& timing,
+    const AdapterIdentity& adapter) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.5\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.6\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -469,6 +686,20 @@ std::string build_report(
            << (options.skip_first_redundant_copy ? 1 : 0) << ",\n"
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
+           << "  \"adapter\": {\n"
+           << "    \"available\": " << (adapter.available ? "true" : "false") << ",\n"
+           << "    \"description\": \"" << json_escape(adapter.description) << "\",\n"
+           << "    \"vendor_id\": " << adapter.vendor_id << ",\n"
+           << "    \"device_id\": " << adapter.device_id << ",\n"
+           << "    \"subsystem_id\": " << adapter.subsystem_id << ",\n"
+           << "    \"revision\": " << adapter.revision << ",\n"
+           << "    \"dedicated_video_memory\": "
+           << adapter.dedicated_video_memory << ",\n"
+           << "    \"dedicated_system_memory\": "
+           << adapter.dedicated_system_memory << ",\n"
+           << "    \"shared_system_memory\": " << adapter.shared_system_memory << ",\n"
+           << "    \"luid\": \"" << uint64_hex(adapter.luid) << "\"\n"
+           << "  },\n"
            << "  \"requested_presents\": " << options.frames << ",\n"
            << "  \"hold_ms\": " << options.hold_ms << ",\n"
            << "  \"observed_presents\": " << snapshot.present_count << ",\n"
@@ -503,7 +734,18 @@ std::string build_report(
            << "    \"qpc_frequency\": " << timing.qpc_frequency << ",\n"
            << "    \"workload_qpc_ticks\": " << timing.workload_qpc_ticks << ",\n"
            << "    \"present_qpc_ticks\": " << timing.present_qpc_ticks << ",\n"
-           << "    \"readback_qpc_ticks\": " << timing.readback_qpc_ticks << "\n"
+           << "    \"readback_qpc_ticks\": " << timing.readback_qpc_ticks << ",\n"
+           << "    \"gpu_timing_supported\": "
+           << (timing.gpu_timing_supported ? "true" : "false") << ",\n"
+           << "    \"gpu_timing_valid\": "
+           << (timing.gpu_timing_valid ? "true" : "false") << ",\n"
+           << "    \"gpu_timing_disjoint\": "
+           << (timing.gpu_timing_disjoint ? "true" : "false") << ",\n"
+           << "    \"gpu_query_timed_out\": "
+           << (timing.gpu_query_timed_out ? "true" : "false") << ",\n"
+           << "    \"gpu_timeout_ms\": " << options.gpu_timeout_ms << ",\n"
+           << "    \"gpu_frequency\": " << timing.gpu_frequency << ",\n"
+           << "    \"gpu_workload_ticks\": " << timing.gpu_workload_ticks << "\n"
            << "  },\n"
            << "  \"resources\": {\n"
            << "    \"create_buffer_count\": " << snapshot.create_buffer_count << ",\n"
@@ -535,6 +777,7 @@ std::string build_report(
            << "    \"ipc_overrun_count\": " << snapshot.ipc_overrun_count << "\n"
            << "  },\n"
            << "  \"attach_hresult\": \"" << hresult_hex(attach_result) << "\",\n"
+           << "  \"refresh_hresult\": \"" << hresult_hex(refresh_result) << "\",\n"
            << "  \"snapshot_hresult\": \"" << hresult_hex(snapshot_result) << "\",\n"
            << "  \"detach_hresult\": \"" << hresult_hex(detach_result) << "\"\n"
            << "}\n";
@@ -548,6 +791,7 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!options.has_value()) {
         std::wcerr << L"Usage: fluidruntime-hook-target --hook <dll> "
                       L"[--frames <count>] [--hold-ms <milliseconds>] "
+                      L"[--gpu-timeout-ms <milliseconds>] "
                       L"[--out <report.json>] [--hardware] "
                       L"[--skip-first-redundant-copy]\n";
         return 2;
@@ -637,6 +881,7 @@ int wmain(int argc, wchar_t* argv[]) {
         std::cerr << "Unable to create D3D11 render target.\n";
         return 4;
     }
+    const auto adapter_identity = query_adapter_identity(device.Get());
 
     if (!warm_up_context(device.Get(), context.Get())) {
         DestroyWindow(window);
@@ -659,11 +904,13 @@ int wmain(int argc, wchar_t* argv[]) {
         GetProcAddress(hook_module, "FluidHookAttachEx"));
     const auto detach = reinterpret_cast<FluidHookDetachFunction>(
         GetProcAddress(hook_module, "FluidHookDetach"));
+    const auto refresh = reinterpret_cast<FluidHookRefreshFunction>(
+        GetProcAddress(hook_module, "FluidHookRefresh"));
     const auto is_attached = reinterpret_cast<FluidHookIsAttachedFunction>(
         GetProcAddress(hook_module, "FluidHookIsAttached"));
     const auto read_snapshot = reinterpret_cast<FluidHookReadSnapshotFunction>(
         GetProcAddress(hook_module, "FluidHookReadSnapshot"));
-    if (attach == nullptr || attach_ex == nullptr || detach == nullptr ||
+    if (attach == nullptr || attach_ex == nullptr || detach == nullptr || refresh == nullptr ||
         is_attached == nullptr || read_snapshot == nullptr) {
         FreeLibrary(hook_module);
         DestroyWindow(window);
@@ -685,11 +932,16 @@ int wmain(int argc, wchar_t* argv[]) {
     TimingMetrics timing{
         .qpc_frequency = static_cast<std::uint64_t>(qpc_frequency.QuadPart),
     };
+    const auto gpu_timing_queries = create_gpu_timing_queries(device.Get());
     WorkloadResources workload_resources;
     bool context_vtable_pointer_stable = false;
     bool context_copy_entry_stable = false;
     LARGE_INTEGER workload_start{};
     LARGE_INTEGER workload_end{};
+    if (gpu_timing_queries.disjoint != nullptr) {
+        context->Begin(gpu_timing_queries.disjoint.Get());
+        context->End(gpu_timing_queries.start.Get());
+    }
     QueryPerformanceCounter(&workload_start);
     const auto resource_workload_succeeded =
         SUCCEEDED(attach_result) &&
@@ -701,6 +953,10 @@ int wmain(int argc, wchar_t* argv[]) {
             context_vtable_pointer_stable,
             context_copy_entry_stable);
     QueryPerformanceCounter(&workload_end);
+    if (gpu_timing_queries.disjoint != nullptr) {
+        context->End(gpu_timing_queries.end.Get());
+        context->End(gpu_timing_queries.disjoint.Get());
+    }
     timing.workload_qpc_ticks = static_cast<std::uint64_t>(
         workload_end.QuadPart - workload_start.QuadPart);
 
@@ -721,12 +977,20 @@ int wmain(int argc, wchar_t* argv[]) {
     if (options->hold_ms != 0) {
         Sleep(options->hold_ms);
     }
+    collect_gpu_timing(
+        context.Get(),
+        gpu_timing_queries,
+        timing,
+        options->gpu_timeout_ms);
+    const auto refresh_result = refresh();
 
     FluidHookSnapshotV1 snapshot{};
     snapshot.struct_size = sizeof(snapshot);
     const auto snapshot_result = read_snapshot(&snapshot);
     const auto resource_metrics_matched =
-        SUCCEEDED(snapshot_result) && snapshot_matches_workload(snapshot, *options);
+        SUCCEEDED(refresh_result) &&
+        SUCCEEDED(snapshot_result) &&
+        snapshot_matches_workload(snapshot, *options);
     const auto detach_result = detach();
     const auto original_pointer_restored =
         SUCCEEDED(detach_result) && is_attached() == FALSE;
@@ -744,6 +1008,7 @@ int wmain(int argc, wchar_t* argv[]) {
         *options,
         snapshot,
         attach_result,
+        refresh_result,
         snapshot_result,
         detach_result,
         original_pointer_restored,
@@ -753,7 +1018,8 @@ int wmain(int argc, wchar_t* argv[]) {
         context_vtable_pointer_stable,
         context_copy_entry_stable,
         content,
-        timing);
+        timing,
+        adapter_identity);
     std::cout << report;
     if (!options->output_path.empty()) {
         std::ofstream output(options->output_path, std::ios::binary);
