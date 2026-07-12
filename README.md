@@ -9,14 +9,18 @@ The long-term objective is to reduce redundant CPU/GPU/RAM/VRAM movement,
 late synchronization, buffer churn, and frame-pipeline stalls from normal PC
 software. It is not a DLSS, FSR, or frame-generation clone.
 
+Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md) |
+[FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
+
 ## Current boundary
 
-Version 0.3 remains advisory-only:
+Version 0.4 remains advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
 - produces scheduler and memory-residency action candidates;
 - explicitly blocks actions that need a native backend or privilege;
+- streams owned D3D11 hook events into the managed runtime through shared memory;
 - never changes process priority, affinity, RAM/VRAM residency, GPU queues,
   drivers, games, or OS state.
 
@@ -90,6 +94,25 @@ The deterministic workload performs six resource copies. Three repeat an
 unchanged source/destination generation and are reported as candidates, never
 skipped. The expected result is 49,152 bytes copied and 24,576 bytes potentially
 avoidable.
+
+Run the managed IPC lab to consume those events while the target is alive:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- hook-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --frames 300 `
+  --hold-ms 1000 `
+  --hardware true `
+  --out artifacts/hook-ipc-lab.json
+```
+
+The hook publishes fixed-size events to a versioned, per-process shared-memory
+ring. Events carry opaque resource IDs instead of pointer addresses. The managed
+reader checks the ABI, sequence continuity, native overrun count, event totals,
+exact deterministic event order, resource IDs and source/destination pairs,
+generations, flags, copy counts, and byte estimates against the target snapshot
+before accepting a report.
 
 This is not remote injection and is not intended for protected or anti-cheat
 processes. It exists to verify resource observation, runtime thunk transitions,

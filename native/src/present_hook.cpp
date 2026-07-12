@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -64,6 +65,7 @@ struct HookSlot {
 };
 
 struct ResourceState {
+    std::uint64_t resource_id{};
     std::uint64_t size_bytes{};
     std::uint64_t generation{};
 };
@@ -108,6 +110,11 @@ std::atomic<std::uint64_t> g_hook_refresh_failure_count{0};
 std::unordered_map<ID3D11Resource*, ResourceState> g_resources;
 std::unordered_map<ID3D11Resource*, LastCopy> g_last_copies;
 std::unordered_set<ID3D11Resource*> g_pending_write_maps;
+std::uint64_t g_next_resource_id{};
+
+HANDLE g_ring_mapping{};
+FluidHookRingHeaderV1* g_ring_header{};
+FluidHookEventV1* g_ring_events{};
 
 class ActiveHookCall {
 public:
@@ -146,6 +153,121 @@ bool write_pointer(void** slot, void* value, void* rollback_value) {
     VirtualProtect(slot, sizeof(void*), old_protection, &ignored);
     SetLastError(restore_error);
     return false;
+}
+
+bool initialize_event_ring() {
+    const auto mapping_name = std::wstring(fluid_hook_ring_name_prefix)
+        + std::to_wstring(GetCurrentProcessId());
+    const auto mapping = CreateFileMappingW(
+        INVALID_HANDLE_VALUE,
+        nullptr,
+        PAGE_READWRITE,
+        0,
+        static_cast<DWORD>(fluid_hook_ring_mapping_size),
+        mapping_name.c_str());
+    if (mapping == nullptr) {
+        return false;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(mapping);
+        SetLastError(ERROR_ALREADY_EXISTS);
+        return false;
+    }
+
+    auto* view = static_cast<unsigned char*>(MapViewOfFile(
+        mapping,
+        FILE_MAP_ALL_ACCESS,
+        0,
+        0,
+        static_cast<SIZE_T>(fluid_hook_ring_mapping_size)));
+    if (view == nullptr) {
+        const auto map_error = GetLastError();
+        CloseHandle(mapping);
+        SetLastError(map_error);
+        return false;
+    }
+
+    ZeroMemory(view, static_cast<SIZE_T>(fluid_hook_ring_mapping_size));
+    auto* header = reinterpret_cast<FluidHookRingHeaderV1*>(view);
+    auto* events = reinterpret_cast<FluidHookEventV1*>(
+        view + sizeof(FluidHookRingHeaderV1));
+    LARGE_INTEGER frequency{};
+    QueryPerformanceFrequency(&frequency);
+    header->magic = 0;
+    header->abi_version = fluid_hook_ring_abi_version;
+    header->capacity = fluid_hook_ring_capacity;
+    header->event_size = sizeof(FluidHookEventV1);
+    header->next_sequence = 0;
+    header->reader_sequence = 0;
+    header->overrun_count = 0;
+    header->qpc_frequency = static_cast<std::uint64_t>(frequency.QuadPart);
+    header->process_id = GetCurrentProcessId();
+    for (std::uint32_t index = 0; index < fluid_hook_ring_capacity; ++index) {
+        events[index].sequence = -1;
+    }
+
+    MemoryBarrier();
+    InterlockedExchange(
+        reinterpret_cast<volatile LONG*>(&header->magic),
+        static_cast<LONG>(fluid_hook_ring_magic));
+
+    g_ring_mapping = mapping;
+    g_ring_header = header;
+    g_ring_events = events;
+    return true;
+}
+
+void close_event_ring() {
+    auto* header = g_ring_header;
+    const auto mapping = g_ring_mapping;
+    g_ring_header = nullptr;
+    g_ring_events = nullptr;
+    g_ring_mapping = nullptr;
+    if (header != nullptr) {
+        UnmapViewOfFile(header);
+    }
+    if (mapping != nullptr) {
+        CloseHandle(mapping);
+    }
+}
+
+void emit_hook_event(
+    FluidHookEventTypeV1 type,
+    std::uint64_t resource_a = 0,
+    std::uint64_t resource_b = 0,
+    std::uint64_t size_bytes = 0,
+    std::uint64_t generation = 0,
+    std::uint32_t flags = 0) {
+    auto* header = g_ring_header;
+    auto* events = g_ring_events;
+    if (header == nullptr || events == nullptr) {
+        return;
+    }
+
+    const auto sequence = InterlockedIncrement64(&header->next_sequence) - 1;
+    const auto reader_sequence = InterlockedCompareExchange64(
+        &header->reader_sequence,
+        0,
+        0);
+    if (sequence - reader_sequence >= fluid_hook_ring_capacity) {
+        InterlockedIncrement64(&header->overrun_count);
+    }
+
+    auto& event = events[static_cast<std::uint64_t>(sequence) % header->capacity];
+    InterlockedExchange64(&event.sequence, -1);
+    LARGE_INTEGER timestamp{};
+    QueryPerformanceCounter(&timestamp);
+    event.qpc_ticks = timestamp.QuadPart;
+    event.type = static_cast<std::uint32_t>(type);
+    event.thread_id = GetCurrentThreadId();
+    event.resource_a = resource_a;
+    event.resource_b = resource_b;
+    event.size_bytes = size_bytes;
+    event.generation = generation;
+    event.flags = flags;
+    event.reserved = 0;
+    MemoryBarrier();
+    InterlockedExchange64(&event.sequence, sequence);
 }
 
 void update_context_original(size_t slot_index, void* original) {
@@ -208,7 +330,14 @@ void refresh_context_hook_slots() {
             g_hook_refresh_failure_count.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
-        g_hook_refresh_count.fetch_add(1, std::memory_order_relaxed);
+        const auto refresh_count =
+            g_hook_refresh_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        emit_hook_event(
+            FluidHookEventTypeV1::hook_refresh,
+            index,
+            0,
+            0,
+            refresh_count);
     }
 }
 
@@ -294,6 +423,7 @@ std::uint64_t query_resource_size(ID3D11Resource* resource) {
 ResourceState& ensure_resource_locked(ID3D11Resource* resource) {
     const auto [iterator, inserted] = g_resources.try_emplace(resource);
     if (inserted) {
+        iterator->second.resource_id = ++g_next_resource_id;
         iterator->second.size_bytes = query_resource_size(resource);
     }
     return iterator->second;
@@ -332,6 +462,7 @@ void reset_metrics_and_resources() {
     g_resources.clear();
     g_last_copies.clear();
     g_pending_write_maps.clear();
+    g_next_resource_id = 0;
 }
 
 HRESULT STDMETHODCALLTYPE hooked_present(
@@ -339,7 +470,14 @@ HRESULT STDMETHODCALLTYPE hooked_present(
     UINT sync_interval,
     UINT flags) {
     const ActiveHookCall active_call;
-    g_present_count.fetch_add(1, std::memory_order_relaxed);
+    const auto present_count =
+        g_present_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    emit_hook_event(
+        FluidHookEventTypeV1::present,
+        0,
+        0,
+        0,
+        present_count);
     const auto original = g_original_present.load(std::memory_order_acquire);
     return original != nullptr
         ? original(swap_chain, sync_interval, flags)
@@ -361,11 +499,22 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(
     if (SUCCEEDED(result) && description != nullptr && buffer != nullptr && *buffer != nullptr) {
         g_create_buffer_count.fetch_add(1, std::memory_order_relaxed);
         g_buffer_bytes_requested.fetch_add(description->ByteWidth, std::memory_order_relaxed);
-        const std::lock_guard resource_lock(g_resource_mutex);
-        g_resources[*buffer] = ResourceState{
-            .size_bytes = description->ByteWidth,
-            .generation = initial_data != nullptr ? 1ULL : 0ULL,
-        };
+        std::uint64_t resource_id = 0;
+        std::uint64_t generation = 0;
+        {
+            const std::lock_guard resource_lock(g_resource_mutex);
+            auto& state = ensure_resource_locked(*buffer);
+            state.size_bytes = description->ByteWidth;
+            state.generation = initial_data != nullptr ? 1ULL : 0ULL;
+            resource_id = state.resource_id;
+            generation = state.generation;
+        }
+        emit_hook_event(
+            FluidHookEventTypeV1::create_buffer,
+            resource_id,
+            0,
+            description->ByteWidth,
+            generation);
     }
     return result;
 }
@@ -386,11 +535,22 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(
         const auto estimated_bytes = estimate_texture_bytes(*description);
         g_create_texture2d_count.fetch_add(1, std::memory_order_relaxed);
         g_texture_bytes_estimated.fetch_add(estimated_bytes, std::memory_order_relaxed);
-        const std::lock_guard resource_lock(g_resource_mutex);
-        g_resources[*texture] = ResourceState{
-            .size_bytes = estimated_bytes,
-            .generation = initial_data != nullptr ? 1ULL : 0ULL,
-        };
+        std::uint64_t resource_id = 0;
+        std::uint64_t generation = 0;
+        {
+            const std::lock_guard resource_lock(g_resource_mutex);
+            auto& state = ensure_resource_locked(*texture);
+            state.size_bytes = estimated_bytes;
+            state.generation = initial_data != nullptr ? 1ULL : 0ULL;
+            resource_id = state.resource_id;
+            generation = state.generation;
+        }
+        emit_hook_event(
+            FluidHookEventTypeV1::create_texture2d,
+            resource_id,
+            0,
+            estimated_bytes,
+            generation);
     }
     return result;
 }
@@ -418,9 +578,24 @@ HRESULT STDMETHODCALLTYPE hooked_map(
     refresh_context_hook_slots();
     if (SUCCEEDED(result) && resource != nullptr && map_type_writes(map_type)) {
         g_map_write_count.fetch_add(1, std::memory_order_relaxed);
-        const std::lock_guard resource_lock(g_resource_mutex);
-        g_pending_write_maps.insert(resource);
-        ensure_resource_locked(resource);
+        std::uint64_t resource_id = 0;
+        std::uint64_t size_bytes = 0;
+        std::uint64_t generation = 0;
+        {
+            const std::lock_guard resource_lock(g_resource_mutex);
+            g_pending_write_maps.insert(resource);
+            const auto& state = ensure_resource_locked(resource);
+            resource_id = state.resource_id;
+            size_bytes = state.size_bytes;
+            generation = state.generation;
+        }
+        emit_hook_event(
+            FluidHookEventTypeV1::map_write,
+            resource_id,
+            0,
+            size_bytes,
+            generation,
+            static_cast<std::uint32_t>(map_type));
     }
     return result;
 }
@@ -441,10 +616,29 @@ void STDMETHODCALLTYPE hooked_unmap(
         return;
     }
 
-    const std::lock_guard resource_lock(g_resource_mutex);
-    if (g_pending_write_maps.erase(resource) != 0) {
+    std::uint64_t resource_id = 0;
+    std::uint64_t size_bytes = 0;
+    std::uint64_t generation = 0;
+    bool wrote_resource = false;
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        wrote_resource = g_pending_write_maps.erase(resource) != 0;
+        if (wrote_resource) {
+            mark_resource_written_locked(resource);
+            const auto& state = ensure_resource_locked(resource);
+            resource_id = state.resource_id;
+            size_bytes = state.size_bytes;
+            generation = state.generation;
+        }
+    }
+    if (wrote_resource) {
         g_unmap_write_count.fetch_add(1, std::memory_order_relaxed);
-        mark_resource_written_locked(resource);
+        emit_hook_event(
+            FluidHookEventTypeV1::unmap_write,
+            resource_id,
+            0,
+            size_bytes,
+            generation);
     }
 }
 
@@ -473,8 +667,23 @@ void STDMETHODCALLTYPE hooked_update_subresource(
     refresh_context_hook_slots();
     if (destination != nullptr) {
         g_update_subresource_count.fetch_add(1, std::memory_order_relaxed);
-        const std::lock_guard resource_lock(g_resource_mutex);
-        mark_resource_written_locked(destination);
+        std::uint64_t resource_id = 0;
+        std::uint64_t size_bytes = 0;
+        std::uint64_t generation = 0;
+        {
+            const std::lock_guard resource_lock(g_resource_mutex);
+            mark_resource_written_locked(destination);
+            const auto& state = ensure_resource_locked(destination);
+            resource_id = state.resource_id;
+            size_bytes = state.size_bytes;
+            generation = state.generation;
+        }
+        emit_hook_event(
+            FluidHookEventTypeV1::update_subresource,
+            resource_id,
+            0,
+            size_bytes,
+            generation);
     }
 }
 
@@ -490,11 +699,15 @@ void STDMETHODCALLTYPE hooked_copy_resource(
 
     bool redundant_candidate = false;
     std::uint64_t copy_bytes = 0;
+    std::uint64_t source_id = 0;
+    std::uint64_t destination_id = 0;
     std::uint64_t source_generation = 0;
     {
         const std::lock_guard resource_lock(g_resource_mutex);
         auto& source_state = ensure_resource_locked(source);
         auto& destination_state = ensure_resource_locked(destination);
+        source_id = source_state.resource_id;
+        destination_id = destination_state.resource_id;
         source_generation = source_state.generation;
         copy_bytes = source_state.size_bytes != 0 && destination_state.size_bytes != 0
             ? std::min(source_state.size_bytes, destination_state.size_bytes)
@@ -516,14 +729,25 @@ void STDMETHODCALLTYPE hooked_copy_resource(
         g_redundant_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
     }
 
-    const std::lock_guard resource_lock(g_resource_mutex);
-    auto& destination_state = ensure_resource_locked(destination);
-    ++destination_state.generation;
-    g_last_copies[destination] = LastCopy{
-        .source = source,
-        .source_generation = source_generation,
-        .destination_generation = destination_state.generation,
-    };
+    std::uint64_t destination_generation = 0;
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        auto& destination_state = ensure_resource_locked(destination);
+        ++destination_state.generation;
+        destination_generation = destination_state.generation;
+        g_last_copies[destination] = LastCopy{
+            .source = source,
+            .source_generation = source_generation,
+            .destination_generation = destination_generation,
+        };
+    }
+    emit_hook_event(
+        FluidHookEventTypeV1::copy_resource,
+        destination_id,
+        source_id,
+        copy_bytes,
+        destination_generation,
+        redundant_candidate ? fluid_hook_event_flag_redundant_candidate : 0);
 }
 
 void clear_original_functions() {
@@ -626,6 +850,11 @@ HRESULT WINAPI FluidHookAttach(IDXGISwapChain* swap_chain) {
         reinterpret_cast<UpdateSubresourceFunction>(slots[6].original),
         std::memory_order_release);
     reset_metrics_and_resources();
+    if (!initialize_event_ring()) {
+        const auto ring_error = GetLastError();
+        clear_original_functions();
+        return HRESULT_FROM_WIN32(ring_error);
+    }
 
     const std::lock_guard patch_lock(g_patch_mutex);
     g_detaching.store(false, std::memory_order_release);
@@ -640,6 +869,7 @@ HRESULT WINAPI FluidHookAttach(IDXGISwapChain* swap_chain) {
                 write_pointer(patched.slot, patched.original, patched.hook);
             }
             clear_original_functions();
+            close_event_ring();
             return HRESULT_FROM_WIN32(patch_error);
         }
     }
@@ -701,10 +931,13 @@ HRESULT WINAPI FluidHookDetach() {
     g_hook_slots = {};
     clear_original_functions();
     g_detaching.store(false, std::memory_order_release);
-    const std::lock_guard resource_lock(g_resource_mutex);
-    g_resources.clear();
-    g_last_copies.clear();
-    g_pending_write_maps.clear();
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        g_resources.clear();
+        g_last_copies.clear();
+        g_pending_write_maps.clear();
+    }
+    close_event_ring();
     return S_OK;
 }
 
@@ -724,6 +957,8 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
     if (snapshot->struct_size < sizeof(FluidHookSnapshotV1)) {
         return E_INVALIDARG;
     }
+
+    const std::lock_guard hook_lock(g_hook_mutex);
 
     FluidHookSnapshotV1 result{};
     result.struct_size = sizeof(result);
@@ -750,6 +985,12 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
     result.hook_refresh_count = g_hook_refresh_count.load(std::memory_order_relaxed);
     result.hook_refresh_failure_count =
         g_hook_refresh_failure_count.load(std::memory_order_relaxed);
+    if (g_ring_header != nullptr) {
+        result.ipc_event_count = static_cast<std::uint64_t>(
+            InterlockedCompareExchange64(&g_ring_header->next_sequence, 0, 0));
+        result.ipc_overrun_count = static_cast<std::uint64_t>(
+            InterlockedCompareExchange64(&g_ring_header->overrun_count, 0, 0));
+    }
 
     *snapshot = result;
     return S_OK;

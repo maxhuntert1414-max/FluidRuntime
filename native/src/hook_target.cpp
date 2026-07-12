@@ -30,6 +30,7 @@ struct Options {
     std::wstring hook_path;
     std::wstring output_path;
     unsigned long frames{60};
+    unsigned long hold_ms{};
     bool use_hardware{};
 };
 
@@ -72,6 +73,12 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
                 return std::nullopt;
             }
             options.frames = *frames;
+        } else if (argument == L"--hold-ms" && index + 1 < argc) {
+            const auto hold_ms = parse_positive(argv[++index]);
+            if (!hold_ms.has_value() || *hold_ms > 60000) {
+                return std::nullopt;
+            }
+            options.hold_ms = *hold_ms;
         } else if (argument == L"--hardware") {
             options.use_hardware = true;
         } else {
@@ -248,7 +255,9 @@ bool snapshot_matches_workload(const FluidHookSnapshotV1& snapshot) {
         snapshot.redundant_copy_candidate_count == kExpectedRedundantCopyCount &&
         snapshot.redundant_copy_bytes_estimated == kExpectedRedundantCopyBytes &&
         snapshot.tracked_resource_count == 5 &&
-        snapshot.hook_refresh_failure_count == 0;
+        snapshot.hook_refresh_failure_count == 0 &&
+        snapshot.ipc_event_count >= snapshot.present_count + 14 &&
+        snapshot.ipc_overrun_count == 0;
 }
 
 std::string build_report(
@@ -265,7 +274,7 @@ std::string build_report(
     bool context_copy_entry_stable) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.3\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.4\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -275,6 +284,7 @@ std::string build_report(
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
            << "  \"requested_presents\": " << options.frames << ",\n"
+           << "  \"hold_ms\": " << options.hold_ms << ",\n"
            << "  \"observed_presents\": " << snapshot.present_count << ",\n"
            << "  \"render_succeeded\": "
            << (render_succeeded ? "true" : "false") << ",\n"
@@ -307,7 +317,9 @@ std::string build_report(
            << "    \"tracked_resource_count\": " << snapshot.tracked_resource_count << ",\n"
            << "    \"hook_refresh_count\": " << snapshot.hook_refresh_count << ",\n"
            << "    \"hook_refresh_failure_count\": "
-           << snapshot.hook_refresh_failure_count << "\n"
+           << snapshot.hook_refresh_failure_count << ",\n"
+           << "    \"ipc_event_count\": " << snapshot.ipc_event_count << ",\n"
+           << "    \"ipc_overrun_count\": " << snapshot.ipc_overrun_count << "\n"
            << "  },\n"
            << "  \"attach_hresult\": \"" << hresult_hex(attach_result) << "\",\n"
            << "  \"snapshot_hresult\": \"" << hresult_hex(snapshot_result) << "\",\n"
@@ -322,7 +334,8 @@ int wmain(int argc, wchar_t* argv[]) {
     const auto options = parse_options(argc, argv);
     if (!options.has_value()) {
         std::wcerr << L"Usage: fluidruntime-hook-target --hook <dll> "
-                      L"[--frames <count>] [--out <report.json>] [--hardware]\n";
+                      L"[--frames <count>] [--hold-ms <milliseconds>] "
+                      L"[--out <report.json>] [--hardware]\n";
         return 2;
     }
 
@@ -463,6 +476,10 @@ int wmain(int argc, wchar_t* argv[]) {
         const float color[]{red, 0.2F, 1.0F - red, 1.0F};
         context->ClearRenderTargetView(render_target.Get(), color);
         render_succeeded = SUCCEEDED(swap_chain->Present(0, 0));
+    }
+
+    if (options->hold_ms != 0) {
+        Sleep(options->hold_ms);
     }
 
     FluidHookSnapshotV1 snapshot{};

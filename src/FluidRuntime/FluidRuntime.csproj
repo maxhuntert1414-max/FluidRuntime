@@ -7,7 +7,12 @@
     <Nullable>enable</Nullable>
     <AssemblyName>fluidruntime</AssemblyName>
     <RootNamespace>FluidRuntime</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FluidRuntime.Tests" />
+  </ItemGroup>
 
 </Project>

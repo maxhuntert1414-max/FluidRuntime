@@ -5,7 +5,57 @@
 
 #include <cstdint>
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 2;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 3;
+constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 1;
+constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
+constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
+
+enum class FluidHookEventTypeV1 : std::uint32_t {
+    present = 1,
+    create_buffer = 2,
+    create_texture2d = 3,
+    map_write = 4,
+    unmap_write = 5,
+    update_subresource = 6,
+    copy_resource = 7,
+    hook_refresh = 8,
+};
+
+constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
+
+struct alignas(64) FluidHookRingHeaderV1 {
+    std::uint32_t magic;
+    std::uint32_t abi_version;
+    std::uint32_t capacity;
+    std::uint32_t event_size;
+    volatile LONG64 next_sequence;
+    volatile LONG64 reader_sequence;
+    volatile LONG64 overrun_count;
+    std::uint64_t qpc_frequency;
+    std::uint64_t process_id;
+    std::uint64_t reserved;
+};
+
+struct alignas(8) FluidHookEventV1 {
+    volatile LONG64 sequence;
+    LONG64 qpc_ticks;
+    std::uint32_t type;
+    std::uint32_t thread_id;
+    std::uint64_t resource_a;
+    std::uint64_t resource_b;
+    std::uint64_t size_bytes;
+    std::uint64_t generation;
+    std::uint32_t flags;
+    std::uint32_t reserved;
+};
+
+static_assert(sizeof(FluidHookRingHeaderV1) == 64);
+static_assert(sizeof(FluidHookEventV1) == 64);
+
+constexpr std::uint64_t fluid_hook_ring_mapping_size =
+    sizeof(FluidHookRingHeaderV1) +
+    static_cast<std::uint64_t>(fluid_hook_ring_capacity) * sizeof(FluidHookEventV1);
 
 struct FluidHookSnapshotV1 {
     std::uint32_t struct_size;
@@ -25,6 +75,8 @@ struct FluidHookSnapshotV1 {
     std::uint64_t tracked_resource_count;
     std::uint64_t hook_refresh_count;
     std::uint64_t hook_refresh_failure_count;
+    std::uint64_t ipc_event_count;
+    std::uint64_t ipc_overrun_count;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS

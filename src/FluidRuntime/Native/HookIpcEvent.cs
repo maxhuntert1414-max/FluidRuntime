@@ -1,0 +1,28 @@
+namespace FluidRuntime.Native;
+
+public enum HookEventType : uint
+{
+    Present = 1,
+    CreateBuffer = 2,
+    CreateTexture2D = 3,
+    MapWrite = 4,
+    UnmapWrite = 5,
+    UpdateSubresource = 6,
+    CopyResource = 7,
+    HookRefresh = 8
+}
+
+public sealed record HookIpcEvent(
+    long Sequence,
+    long QpcTicks,
+    HookEventType Type,
+    uint ThreadId,
+    ulong ResourceA,
+    ulong ResourceB,
+    ulong SizeBytes,
+    ulong Generation,
+    uint Flags)
+{
+    public bool IsRedundantCopyCandidate =>
+        Type == HookEventType.CopyResource && (Flags & 1) != 0;
+}

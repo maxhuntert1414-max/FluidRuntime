@@ -11,9 +11,16 @@ public static class RuntimeApplication
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length > 0 &&
+            string.Equals(args[0], "hook-lab", StringComparison.OrdinalIgnoreCase))
+        {
+            return await HookLabCommand.RunAsync(args);
+        }
+
         if (args.Any(argument => argument is "--help" or "-h"))
         {
             Console.WriteLine(RuntimeOptions.Usage);
+            Console.WriteLine(HookLabOptions.Usage);
             return 0;
         }
 
