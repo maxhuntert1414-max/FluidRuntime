@@ -5,10 +5,12 @@
 
 #include <cstdint>
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 4;
+struct ID3D11Resource;
+
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 5;
 constexpr std::uint32_t fluid_hook_attach_options_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 1;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 2;
 constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
 constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
 
@@ -21,10 +23,13 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     update_subresource = 6,
     copy_resource = 7,
     hook_refresh = 8,
+    resource_retire = 9,
+    resource_reuse = 10,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
 constexpr std::uint32_t fluid_hook_event_flag_copy_skipped = 2;
+constexpr std::uint32_t fluid_hook_event_flag_reuse_without_retire = 4;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 
 struct FluidHookAttachOptionsV1 {
@@ -91,6 +96,10 @@ struct FluidHookSnapshotV1 {
     std::uint64_t hook_refresh_failure_count;
     std::uint64_t ipc_event_count;
     std::uint64_t ipc_overrun_count;
+    std::uint64_t resource_retire_count;
+    std::uint64_t resource_reuse_count;
+    std::uint64_t retired_resource_identity_count;
+    std::uint64_t provenance_failure_count;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS
@@ -105,6 +114,7 @@ FLUID_HOOK_API HRESULT WINAPI FluidHookAttachEx(
     const FluidHookAttachOptionsV1* options);
 FLUID_HOOK_API HRESULT WINAPI FluidHookDetach();
 FLUID_HOOK_API HRESULT WINAPI FluidHookRefresh();
+FLUID_HOOK_API HRESULT WINAPI FluidHookRetireResource(ID3D11Resource* resource);
 FLUID_HOOK_API std::uint64_t WINAPI FluidHookPresentCount();
 FLUID_HOOK_API BOOL WINAPI FluidHookIsAttached();
 FLUID_HOOK_API HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot);
@@ -115,6 +125,7 @@ using FluidHookAttachExFunction = HRESULT(WINAPI*)(
     const FluidHookAttachOptionsV1*);
 using FluidHookDetachFunction = HRESULT(WINAPI*)();
 using FluidHookRefreshFunction = HRESULT(WINAPI*)();
+using FluidHookRetireResourceFunction = HRESULT(WINAPI*)(ID3D11Resource*);
 using FluidHookPresentCountFunction = std::uint64_t(WINAPI*)();
 using FluidHookIsAttachedFunction = BOOL(WINAPI*)();
 using FluidHookReadSnapshotFunction = HRESULT(WINAPI*)(FluidHookSnapshotV1*);

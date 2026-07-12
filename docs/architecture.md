@@ -26,13 +26,14 @@ flowchart LR
 - `fluidruntime-native-probe`: read-only Windows process, memory, WDDM VRAM,
   and GPU-engine counters for one PID.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
-  resource creation, CPU writes, updates, and whole-resource copies.
+  resource creation, retirement, pointer reuse, CPU writes, updates, and
+  whole-resource copies.
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
   installation, event delivery, validation, and complete rollback.
 
 ## Hook Event Transport
 
-Version 0.6 publishes 64-byte events into a 1,024-slot named shared-memory ring.
+Version 0.7 publishes 64-byte ABI-v2 events into a 1,024-slot named shared-memory ring.
 The mapping is local to the Windows session and named for the target PID. The
 header and event layouts are versioned independently from the report schema.
 
@@ -82,11 +83,21 @@ order, and computes paired CPU/GPU p50 and p95 distributions without hiding raw
 runs or invalid timing states. A passing evidence gate is explicitly scoped to
 the owned D3D11 copy workload and does not imply a game-wide FPS gain.
 
+The v0.7 lifecycle foundation adds a cooperative `FluidHookRetireResource`
+boundary for the owned target. Retirement removes active resource state,
+pending maps, destination copy provenance, and every copy provenance entry that
+depends on the retired source. A bounded identity table links a reused pointer
+from its retired ID to a fresh monotonic ID. The managed runtime reconstructs
+active and retired sets from IPC and fails closed on duplicate IDs, non-monotonic
+creation, reuse without retirement, or operations involving retired IDs.
+
 ## Known Limits
 
 - D3D11 only; D3D12 and Vulkan are not instrumented yet.
-- Resource release, shader/UAV writes, subresource copies, fences, and aliasing
-  are not yet part of the resource-generation model.
+- Retirement is cooperative in the owned target; automatic COM destruction is
+  not observed yet.
+- Shader/UAV writes, subresource copies, fences, and aliasing are not yet part
+  of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
 - The lab supports one active hook attachment per process mapping lifetime.

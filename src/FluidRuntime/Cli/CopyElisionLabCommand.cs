@@ -163,6 +163,8 @@ public static class CopyElisionLabCommand
             optimized.SkippedCopyBytes != 4096 ||
             baselineObservedCopies != 6 ||
             optimizedObservedCopies != baselineObservedCopies ||
+            !HasSafeLifecycle(baseline) ||
+            !HasSafeLifecycle(optimized) ||
             !baseline.RollbackRestored ||
             !optimized.RollbackRestored ||
             baseline.ForwardedCopyCount - optimized.ForwardedCopyCount != 1 ||
@@ -257,7 +259,7 @@ public static class CopyElisionLabCommand
         }
 
         return new CopyElisionLabReport(
-            Mode: "fluidruntime-copy-elision-trace-v0.6",
+            Mode: "fluidruntime-copy-elision-trace-v0.7",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -349,4 +351,12 @@ public static class CopyElisionLabCommand
         baseline.HasValue && optimized.HasValue && baseline.Value != 0
             ? Math.Round((optimized.Value - baseline.Value) * 100d / baseline.Value, 3)
             : null;
+
+    private static bool HasSafeLifecycle(HookLabReport report) =>
+        report.RingAbiVersion == 2 &&
+        report.ResourceRetireCount == 2 &&
+        report.ActiveResourceCount == 5 &&
+        report.RetiredResourceIdCount == 2 &&
+        report.RetiredResourceIdentityCount + report.ResourceReuseCount == 2 &&
+        report.ProvenanceFailureCount == 0;
 }

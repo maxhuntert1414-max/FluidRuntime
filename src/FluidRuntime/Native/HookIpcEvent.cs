@@ -9,7 +9,9 @@ public enum HookEventType : uint
     UnmapWrite = 5,
     UpdateSubresource = 6,
     CopyResource = 7,
-    HookRefresh = 8
+    HookRefresh = 8,
+    ResourceRetire = 9,
+    ResourceReuse = 10
 }
 
 public sealed record HookIpcEvent(

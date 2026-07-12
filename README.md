@@ -11,11 +11,12 @@ software. It is not a DLSS, FSR, or frame-generation clone.
 
 Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md) |
 [v0.6 evidence](docs/evidence/v0.6-copy-elision.md) |
+[v0.7 lifecycle evidence](docs/evidence/v0.7-resource-lifecycle.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.6 keeps normal inspection and external-process behavior advisory-only:
+Version 0.7 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -34,6 +35,12 @@ external software.
 
 Any allowed performance claim is scoped in the JSON as
 `owned-d3d11-copy-workload-only`; it is not a game-wide FPS claim.
+
+The owned target also exercises cooperative resource retirement. Retiring a
+resource removes its active state and copy provenance, while any later reuse of
+the same pointer receives a new monotonic resource ID. The managed reader
+reconstructs active and retired IDs and rejects writes or copies involving a
+retired resource. This is not automatic interception of COM destruction.
 
 The v0.2 native probe is also read-only. It adds per-process Windows process
 memory and GPU performance-counter telemetry through a small C++ executable.
@@ -122,8 +129,9 @@ The hook publishes fixed-size events to a versioned, per-process shared-memory
 ring. Events carry opaque resource IDs instead of pointer addresses. The managed
 reader checks the ABI, sequence continuity, native overrun count, event totals,
 exact deterministic event order, resource IDs and source/destination pairs,
-generations, flags, copy counts, and byte estimates against the target snapshot
-before accepting a report.
+generations, lifecycle transitions, active-resource references, flags, copy
+counts, and byte estimates against the target snapshot before accepting a
+report.
 
 Run the first controlled before/after intervention:
 
@@ -158,5 +166,5 @@ This is not remote injection and is not intended for protected or anti-cheat
 processes. It exists to verify resource observation, runtime thunk transitions,
 concurrent-call draining, and rollback in software we own before any
 external-process work is considered. Candidate detection and copy elision
-currently assume the controlled workload; GPU shader/UAV writes and resource
-release tracking are not covered yet.
+currently assume the controlled workload; automatic COM destruction,
+subresources, GPU shader/UAV writes, fences, and aliasing are not covered yet.

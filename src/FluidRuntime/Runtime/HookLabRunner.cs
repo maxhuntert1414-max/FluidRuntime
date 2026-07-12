@@ -75,6 +75,7 @@ public sealed class HookLabRunner
         var eventTypeCounts = events
             .GroupBy(item => item.Type)
             .ToDictionary(group => group.Key.ToString(), group => group.LongCount());
+        var lifecycle = ResourceLifecycleValidator.Validate(events);
         var copyEvents = events
             .Where(item => item.Type == HookEventType.CopyResource)
             .ToArray();
@@ -98,6 +99,7 @@ public sealed class HookLabRunner
             copyBytes,
             redundantBytes,
             reader,
+            lifecycle,
             options.SkipFirstRedundantCopy);
 
         var resources = targetReport.GetProperty("resources");
@@ -108,7 +110,7 @@ public sealed class HookLabRunner
         var gpuWorkloadTicks = timing.GetProperty("gpu_workload_ticks").GetUInt64();
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.6",
+            "fluidruntime-hook-ipc-lab-v0.7",
             ReadOnly: !options.SkipFirstRedundantCopy,
             WouldModifySystem: false,
             CopyElisionEnabled: options.SkipFirstRedundantCopy,
@@ -130,6 +132,14 @@ public sealed class HookLabRunner
             LostSequenceCount: reader.LostSequenceCount,
             NativeOverrunCount: reader.NativeOverrunCount,
             EventTypeCounts: eventTypeCounts,
+            ResourceRetireCount: resources.GetProperty("resource_retire_count").GetInt64(),
+            ResourceReuseCount: resources.GetProperty("resource_reuse_count").GetInt64(),
+            ActiveResourceCount: lifecycle.ActiveResourceIds.Count,
+            RetiredResourceIdCount: lifecycle.RetiredResourceIds.Count,
+            RetiredResourceIdentityCount:
+                resources.GetProperty("retired_resource_identity_count").GetInt64(),
+            ProvenanceFailureCount:
+                resources.GetProperty("provenance_failure_count").GetInt64(),
             CopyResourceBytes: copyBytes,
             RedundantCopyCandidateCount: redundantCopyEvents.LongLength,
             RedundantCopyBytes: redundantBytes,
@@ -206,7 +216,7 @@ public sealed class HookLabRunner
         var gpuTimingDisjoint = timing.GetProperty("gpu_timing_disjoint").GetBoolean();
         var gpuQueryTimedOut = timing.GetProperty("gpu_query_timed_out").GetBoolean();
         var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
-        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.6" ||
+        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.7" ||
             report.GetProperty("read_only_hook").GetBoolean() == copyElisionEnabled ||
             report.GetProperty("would_modify_frame_data").GetBoolean() ||
             report.GetProperty("would_skip_copies").GetBoolean() != copyElisionEnabled ||
@@ -233,6 +243,7 @@ public sealed class HookLabRunner
         ulong copyBytes,
         ulong redundantBytes,
         HookRingReader reader,
+        ResourceLifecycleValidationResult lifecycle,
         bool copyElisionEnabled)
     {
         var resources = targetReport.GetProperty("resources");
@@ -261,12 +272,27 @@ public sealed class HookLabRunner
             CountEvents(events, HookEventType.CopyResource) ==
                 resources.GetProperty("copy_resource_count").GetInt64() &&
             CountEvents(events, HookEventType.HookRefresh) ==
-                resources.GetProperty("hook_refresh_count").GetInt64();
+                resources.GetProperty("hook_refresh_count").GetInt64() &&
+            CountEvents(events, HookEventType.ResourceRetire) ==
+                resources.GetProperty("resource_retire_count").GetInt64() &&
+            CountEvents(events, HookEventType.ResourceReuse) ==
+                resources.GetProperty("resource_reuse_count").GetInt64();
         if (events.Count != expectedEventCount ||
             !sequencesMatch ||
             !knownEventTypes ||
             !workloadMatches ||
             !eventTypesMatch ||
+            !lifecycle.IsValid ||
+            lifecycle.ActiveResourceIds.Count !=
+                resources.GetProperty("tracked_resource_count").GetInt64() ||
+            lifecycle.RetiredResourceIds.Count !=
+                resources.GetProperty("resource_retire_count").GetInt64() ||
+            resources.GetProperty("provenance_failure_count").GetInt64() != 0 ||
+            resources.GetProperty("retired_resource_identity_count").GetInt64() +
+                resources.GetProperty("resource_reuse_count").GetInt64() !=
+                resources.GetProperty("resource_retire_count").GetInt64() ||
+            events.Any(item =>
+                item.Type == HookEventType.ResourceReuse && item.Flags != 0) ||
             copyEvents.Count != resources.GetProperty("copy_resource_count").GetInt64() ||
             copyBytes != resources.GetProperty("copy_resource_bytes_estimated").GetUInt64() ||
             redundantCopyEvents.Count !=
@@ -330,7 +356,7 @@ public sealed class HookLabRunner
             return false;
         }
 
-        var expectedResourceEvents = new[]
+        var expectedCoreEvents = new[]
         {
             (HookEventType.CreateBuffer, 1UL, 0UL, 4096UL, 1UL, 0U),
             (HookEventType.CreateBuffer, 2UL, 0UL, 4096UL, 0UL, 0U),
@@ -351,16 +377,16 @@ public sealed class HookLabRunner
         var nonRefreshEvents = events
             .Where(item => item.Type != HookEventType.HookRefresh)
             .ToArray();
-        if (nonRefreshEvents.LongLength !=
-            expectedResourceEvents.LongLength + expectedPresentCount)
+        if (nonRefreshEvents.LongLength <
+            expectedCoreEvents.LongLength + 4 + expectedPresentCount)
         {
             return false;
         }
 
-        for (var index = 0; index < expectedResourceEvents.Length; ++index)
+        for (var index = 0; index < expectedCoreEvents.Length; ++index)
         {
             var actual = nonRefreshEvents[index];
-            var expected = expectedResourceEvents[index];
+            var expected = expectedCoreEvents[index];
             if (actual.Type != expected.Item1 ||
                 actual.ResourceA != expected.Item2 ||
                 actual.ResourceB != expected.Item3 ||
@@ -372,9 +398,60 @@ public sealed class HookLabRunner
             }
         }
 
+        var cursor = expectedCoreEvents.Length;
+        var firstCreate = nonRefreshEvents[cursor++];
+        var firstRetire = nonRefreshEvents[cursor++];
+        var secondCreate = nonRefreshEvents[cursor++];
+        if (firstCreate.Type != HookEventType.CreateBuffer ||
+            firstCreate.ResourceA != 6 ||
+            firstCreate.ResourceB != 0 ||
+            firstCreate.SizeBytes != 256 ||
+            firstCreate.Generation != 0 ||
+            firstCreate.Flags != 0 ||
+            firstRetire.Type != HookEventType.ResourceRetire ||
+            firstRetire.ResourceA != 6 ||
+            firstRetire.ResourceB != 0 ||
+            firstRetire.SizeBytes != 256 ||
+            firstRetire.Generation != 0 ||
+            firstRetire.Flags != 0 ||
+            secondCreate.Type != HookEventType.CreateBuffer ||
+            secondCreate.ResourceA != 7 ||
+            secondCreate.ResourceB != 0 ||
+            secondCreate.SizeBytes != 256 ||
+            secondCreate.Generation != 0 ||
+            secondCreate.Flags != 0)
+        {
+            return false;
+        }
+
+        if (nonRefreshEvents[cursor].Type == HookEventType.ResourceReuse)
+        {
+            var reuse = nonRefreshEvents[cursor++];
+            if (reuse.ResourceA != 6 ||
+                reuse.ResourceB != 7 ||
+                reuse.SizeBytes != 256 ||
+                reuse.Generation != 0 ||
+                reuse.Flags != 0)
+            {
+                return false;
+            }
+        }
+
+        var secondRetire = nonRefreshEvents[cursor++];
+        if (secondRetire.Type != HookEventType.ResourceRetire ||
+            secondRetire.ResourceA != 7 ||
+            secondRetire.ResourceB != 0 ||
+            secondRetire.SizeBytes != 256 ||
+            secondRetire.Generation != 0 ||
+            secondRetire.Flags != 0 ||
+            nonRefreshEvents.LongLength != cursor + expectedPresentCount)
+        {
+            return false;
+        }
+
         for (var index = 0L; index < expectedPresentCount; ++index)
         {
-            var actual = nonRefreshEvents[expectedResourceEvents.Length + (int)index];
+            var actual = nonRefreshEvents[cursor + (int)index];
             if (actual.Type != HookEventType.Present ||
                 actual.ResourceA != 0 ||
                 actual.ResourceB != 0 ||

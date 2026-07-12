@@ -25,6 +25,10 @@ public sealed class CopyElisionLabCommandTests
         var rollbackFailed = optimized with { RollbackRestored = false };
         Assert.Throws<InvalidDataException>(() =>
             CopyElisionLabCommand.BuildTrial(baseline, rollbackFailed));
+
+        var provenanceFailed = optimized with { ProvenanceFailureCount = 1 };
+        Assert.Throws<InvalidDataException>(() =>
+            CopyElisionLabCommand.BuildTrial(baseline, provenanceFailed));
     }
 
     [Fact]
@@ -42,6 +46,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.7", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
@@ -111,7 +116,7 @@ public sealed class CopyElisionLabCommandTests
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.6",
+            Mode: "fluidruntime-hook-ipc-lab-v0.7",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,
@@ -125,12 +130,18 @@ public sealed class CopyElisionLabCommandTests
             AdapterLuid: "0000000000000042",
             TargetProcessId: 42,
             RingName: "test",
-            RingAbiVersion: 1,
+            RingAbiVersion: 2,
             QpcFrequency: 10_000_000,
             EventCount: 20,
             LostSequenceCount: 0,
             NativeOverrunCount: 0,
             EventTypeCounts: new Dictionary<string, long> { ["CopyResource"] = 6 },
+            ResourceRetireCount: 2,
+            ResourceReuseCount: 1,
+            ActiveResourceCount: 5,
+            RetiredResourceIdCount: 2,
+            RetiredResourceIdentityCount: 1,
+            ProvenanceFailureCount: 0,
             CopyResourceBytes: 49152,
             RedundantCopyCandidateCount: 3,
             RedundantCopyBytes: 24576,

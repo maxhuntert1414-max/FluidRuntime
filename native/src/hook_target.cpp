@@ -20,6 +20,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 constexpr UINT kBufferBytes = 4096;
+constexpr UINT kTransientBufferBytes = 256;
 constexpr UINT kTextureWidth = 64;
 constexpr UINT kTextureHeight = 64;
 constexpr std::uint64_t kExpectedCopyCount = 6;
@@ -28,6 +29,7 @@ constexpr std::uint64_t kExpectedRedundantCopyCount = 3;
 constexpr std::uint64_t kExpectedRedundantCopyBytes = 24576;
 constexpr std::uint64_t kExpectedSkippedCopyCount = 1;
 constexpr std::uint64_t kExpectedSkippedCopyBytes = kBufferBytes;
+constexpr std::uint64_t kExpectedResourceRetireCount = 2;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
@@ -620,6 +622,31 @@ bool run_resource_workload(
     return true;
 }
 
+bool run_resource_lifetime_workload(
+    ID3D11Device* device,
+    FluidHookRetireResourceFunction retire_resource) {
+    if (device == nullptr || retire_resource == nullptr) {
+        return false;
+    }
+    if (retire_resource(nullptr) != E_POINTER) {
+        return false;
+    }
+
+    D3D11_BUFFER_DESC description{};
+    description.ByteWidth = kTransientBufferBytes;
+    description.Usage = D3D11_USAGE_DEFAULT;
+    for (int index = 0; index < 2; ++index) {
+        ComPtr<ID3D11Buffer> buffer;
+        if (FAILED(device->CreateBuffer(&description, nullptr, &buffer)) ||
+            retire_resource(buffer.Get()) != S_OK ||
+            retire_resource(buffer.Get()) != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+            return false;
+        }
+        buffer.Reset();
+    }
+    return true;
+}
+
 bool snapshot_matches_workload(
     const FluidHookSnapshotV1& snapshot,
     const Options& options) {
@@ -630,8 +657,9 @@ bool snapshot_matches_workload(
         ? kExpectedSkippedCopyBytes
         : 0;
     return snapshot.abi_version == fluid_hook_snapshot_abi_version &&
-        snapshot.create_buffer_count == 3 &&
-        snapshot.buffer_bytes_requested == 3 * kBufferBytes &&
+        snapshot.create_buffer_count == 5 &&
+        snapshot.buffer_bytes_requested ==
+            3 * kBufferBytes + 2 * kTransientBufferBytes &&
         snapshot.create_texture2d_count == 2 &&
         snapshot.texture_bytes_estimated == 2 * kTextureWidth * kTextureHeight * 4 &&
         snapshot.map_write_count == 1 &&
@@ -647,8 +675,14 @@ bool snapshot_matches_workload(
         snapshot.skipped_copy_count == expected_skipped_count &&
         snapshot.skipped_copy_bytes_estimated == expected_skipped_bytes &&
         snapshot.tracked_resource_count == 5 &&
+        snapshot.resource_retire_count == kExpectedResourceRetireCount &&
+        snapshot.resource_reuse_count <= 1 &&
+        snapshot.retired_resource_identity_count + snapshot.resource_reuse_count ==
+            kExpectedResourceRetireCount &&
+        snapshot.provenance_failure_count == 0 &&
         snapshot.hook_refresh_failure_count == 0 &&
-        snapshot.ipc_event_count >= snapshot.present_count + 14 &&
+        snapshot.ipc_event_count >=
+            snapshot.present_count + 18 + snapshot.resource_reuse_count &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -670,7 +704,7 @@ std::string build_report(
     const AdapterIdentity& adapter) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.6\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -770,6 +804,12 @@ std::string build_report(
            << "    \"skipped_copy_bytes_estimated\": "
            << snapshot.skipped_copy_bytes_estimated << ",\n"
            << "    \"tracked_resource_count\": " << snapshot.tracked_resource_count << ",\n"
+           << "    \"resource_retire_count\": " << snapshot.resource_retire_count << ",\n"
+           << "    \"resource_reuse_count\": " << snapshot.resource_reuse_count << ",\n"
+           << "    \"retired_resource_identity_count\": "
+           << snapshot.retired_resource_identity_count << ",\n"
+           << "    \"provenance_failure_count\": "
+           << snapshot.provenance_failure_count << ",\n"
            << "    \"hook_refresh_count\": " << snapshot.hook_refresh_count << ",\n"
            << "    \"hook_refresh_failure_count\": "
            << snapshot.hook_refresh_failure_count << ",\n"
@@ -906,12 +946,14 @@ int wmain(int argc, wchar_t* argv[]) {
         GetProcAddress(hook_module, "FluidHookDetach"));
     const auto refresh = reinterpret_cast<FluidHookRefreshFunction>(
         GetProcAddress(hook_module, "FluidHookRefresh"));
+    const auto retire_resource = reinterpret_cast<FluidHookRetireResourceFunction>(
+        GetProcAddress(hook_module, "FluidHookRetireResource"));
     const auto is_attached = reinterpret_cast<FluidHookIsAttachedFunction>(
         GetProcAddress(hook_module, "FluidHookIsAttached"));
     const auto read_snapshot = reinterpret_cast<FluidHookReadSnapshotFunction>(
         GetProcAddress(hook_module, "FluidHookReadSnapshot"));
     if (attach == nullptr || attach_ex == nullptr || detach == nullptr || refresh == nullptr ||
-        is_attached == nullptr || read_snapshot == nullptr) {
+        retire_resource == nullptr || is_attached == nullptr || read_snapshot == nullptr) {
         FreeLibrary(hook_module);
         DestroyWindow(window);
         UnregisterClassW(window_class_name, instance);
@@ -943,7 +985,7 @@ int wmain(int argc, wchar_t* argv[]) {
         context->End(gpu_timing_queries.start.Get());
     }
     QueryPerformanceCounter(&workload_start);
-    const auto resource_workload_succeeded =
+    auto resource_workload_succeeded =
         SUCCEEDED(attach_result) &&
         is_attached() != FALSE &&
         run_resource_workload(
@@ -959,6 +1001,10 @@ int wmain(int argc, wchar_t* argv[]) {
     }
     timing.workload_qpc_ticks = static_cast<std::uint64_t>(
         workload_end.QuadPart - workload_start.QuadPart);
+    if (resource_workload_succeeded) {
+        resource_workload_succeeded =
+            run_resource_lifetime_workload(device.Get(), retire_resource);
+    }
 
     bool render_succeeded = resource_workload_succeeded;
     LARGE_INTEGER present_start{};

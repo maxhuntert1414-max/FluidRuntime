@@ -61,6 +61,15 @@ public sealed class HookLabRunnerTests
         Assert.False(HookLabRunner.MatchesDeterministicWorkload(invalidRefresh, 1));
     }
 
+    [Fact]
+    public void Deterministic_workload_accepts_lifecycle_without_pointer_reuse()
+    {
+        var events = BuildDeterministicWorkload();
+        events.RemoveAll(item => item.Type == HookEventType.ResourceReuse);
+
+        Assert.True(HookLabRunner.MatchesDeterministicWorkload(events, 1));
+    }
+
     private static List<HookIpcEvent> BuildDeterministicWorkload()
     {
         var definitions = new[]
@@ -79,6 +88,11 @@ public sealed class HookLabRunnerTests
             (HookEventType.CreateTexture2D, 5UL, 0UL, 16384UL, 0UL, 0U),
             (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 1UL, 0U),
             (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 2UL, 1U),
+            (HookEventType.CreateBuffer, 6UL, 0UL, 256UL, 0UL, 0U),
+            (HookEventType.ResourceRetire, 6UL, 0UL, 256UL, 0UL, 0U),
+            (HookEventType.CreateBuffer, 7UL, 0UL, 256UL, 0UL, 0U),
+            (HookEventType.ResourceReuse, 6UL, 7UL, 256UL, 0UL, 0U),
+            (HookEventType.ResourceRetire, 7UL, 0UL, 256UL, 0UL, 0U),
             (HookEventType.Present, 0UL, 0UL, 0UL, 1UL, 0U)
         };
         return definitions.Select((item, index) => new HookIpcEvent(

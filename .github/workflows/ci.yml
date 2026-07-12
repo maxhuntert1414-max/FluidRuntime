@@ -39,10 +39,22 @@ jobs:
         shell: pwsh
         run: |
           $report = Get-Content artifacts/copy-elision-ci.json -Raw | ConvertFrom-Json
-          if ($report.mode -ne 'fluidruntime-copy-elision-trace-v0.6' -or
+          if ($report.mode -ne 'fluidruntime-copy-elision-trace-v0.7' -or
               $report.claim_scope -ne 'owned-d3d11-copy-workload-only' -or
               $report.included_trial_pairs -ne 2 -or
               $report.performance_claim_allowed -ne $false -or
               $report.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
-            throw 'Copy-elision CI report violated the v0.6 evidence contract.'
+            throw 'Copy-elision CI report violated the v0.7 evidence contract.'
+          }
+          $runs = $report.trials | ForEach-Object { $_.baseline; $_.optimized }
+          if ($runs | Where-Object {
+              $_.mode -ne 'fluidruntime-hook-ipc-lab-v0.7' -or
+              $_.ring_abi_version -ne 2 -or
+              $_.resource_retire_count -ne 2 -or
+              $_.active_resource_count -ne 5 -or
+              $_.retired_resource_id_count -ne 2 -or
+              $_.provenance_failure_count -ne 0 -or
+              $_.retired_resource_identity_count + $_.resource_reuse_count -ne 2
+            }) {
+            throw 'Copy-elision CI runs violated the v0.7 lifecycle contract.'
           }
