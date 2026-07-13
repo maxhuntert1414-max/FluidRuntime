@@ -27,13 +27,13 @@ flowchart LR
   and GPU-engine counters for one PID.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
   resource creation, retirement, pointer reuse, CPU writes, updates, and
-  whole-resource copies.
+  whole-resource and subresource-region copies.
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
   installation, event delivery, validation, and complete rollback.
 
 ## Hook Event Transport
 
-Version 0.7.1 publishes 64-byte ABI-v3 events into a 1,024-slot named
+Version 0.7.2 publishes 80-byte ABI-v4 events into a 1,024-slot named
 shared-memory ring.
 The mapping is local to the Windows session and named for the target PID. The
 header and event layouts are versioned independently from the report schema.
@@ -54,7 +54,7 @@ The managed reader:
 4. detects overwritten or discontinuous sequences;
 5. publishes its cursor atomically;
 6. accepts the lab run only when exact event order, types, resource IDs,
-   source/destination pairs, generations, flags, byte totals, sequence
+   source/destination pairs, subresource indices, generations, flags, byte totals, sequence
    continuity, and the final native snapshot agree.
 
 Events contain opaque resource IDs, never raw resource pointer addresses.
@@ -102,13 +102,21 @@ cooperative retirement. Detach restores both fixed and dynamic slots, waits for
 all in-flight calls, and clears the dynamic registry before DLL unload. A normal
 `FluidHookAttach` path installs no Release hooks.
 
+The v0.7.2 state model gives each Buffer/Texture2D an overall generation and a
+generation per subresource. A subresource write invalidates whole-resource
+copy provenance but preserves unrelated mip generations. `CopyResource`
+advances every destination subresource; `CopySubresourceRegion` records the
+source/destination indices, source generation, destination generation, and a
+stable key over offsets/source box. Only an exact unchanged repeat is a candidate. Regional copies
+are always forwarded, and post-detach readback compares the addressed mip.
+
 ## Known Limits
 
 - D3D11 only; D3D12 and Vulkan are not instrumented yet.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
-- Shader/UAV writes, subresource copies, fences, and aliasing are not yet part
-  of the resource-generation model.
+- Shader/UAV writes, fences, interface/view aliases, and deferred-context
+  command-list effects are not yet part of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
 - The lab supports one active hook attachment per process mapping lifetime.

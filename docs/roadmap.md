@@ -29,13 +29,17 @@ coordinate the interfaces the operating system and graphics APIs expose.
   resource Release slots, dynamic-slot rollback before DLL unload, 64-cycle
   churn validation, concurrent detach stress, cooperative fallback, and a
   direction-aware GPU claim gate.
+- **v0.7.2:** ABI-v4 subresource indices, per-mip generations,
+  `CopySubresourceRegion` observation, unrelated-mip provenance preservation,
+  exact regional repeat detection, mip readback, and WARP/AMD evidence.
 
 ## Next Milestones
 
 ### v0.7.x: Complete Trustworthy Resource State
 
 - Cover destruction through interface aliases and non-primary resource views.
-- Cover subresources, `CopySubresourceRegion`, shader/UAV writes, and fences.
+- Cover shader/UAV/render-target writes, fences, queries, and command-list
+  synchronization.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.
 - Add longer stress, race, and fault-injection tests.

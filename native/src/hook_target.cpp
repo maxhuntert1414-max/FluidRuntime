@@ -3,6 +3,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -27,12 +28,20 @@ constexpr UINT kAutomaticBufferBytes = 512;
 constexpr int kAutomaticLifetimeCycles = 64;
 constexpr UINT kTextureWidth = 64;
 constexpr UINT kTextureHeight = 64;
+constexpr UINT kSubresourceTextureWidth = 32;
+constexpr UINT kSubresourceTextureHeight = 32;
+constexpr UINT kSubresourceTextureMipLevels = 2;
 constexpr std::uint64_t kExpectedCopyCount = 6;
 constexpr std::uint64_t kExpectedCopyBytes = 49152;
 constexpr std::uint64_t kExpectedRedundantCopyCount = 3;
 constexpr std::uint64_t kExpectedRedundantCopyBytes = 24576;
 constexpr std::uint64_t kExpectedSkippedCopyCount = 1;
 constexpr std::uint64_t kExpectedSkippedCopyBytes = kBufferBytes;
+constexpr std::uint64_t kExpectedCopySubresourceCount = 8;
+constexpr std::uint64_t kExpectedCopySubresourceBytes =
+    5 * 16 * 16 * 4 + 2 * 8 * 8 * 4;
+constexpr std::uint64_t kExpectedRedundantSubresourceCopyCount = 3;
+constexpr std::uint64_t kExpectedRedundantSubresourceCopyBytes = 3 * 16 * 16 * 4;
 constexpr std::uint64_t kExpectedResourceRetireCount = 1;
 constexpr std::uint64_t kExpectedResourceDestroyCount = kAutomaticLifetimeCycles;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
@@ -56,16 +65,21 @@ struct WorkloadResources {
     ComPtr<ID3D11Buffer> dynamic_buffer;
     ComPtr<ID3D11Texture2D> source_texture;
     ComPtr<ID3D11Texture2D> destination_texture;
+    ComPtr<ID3D11Texture2D> source_subresource_texture;
+    ComPtr<ID3D11Texture2D> destination_subresource_texture;
 };
 
 struct ContentVerification {
     bool readback_succeeded{};
     bool buffer_contents_equal{};
     bool texture_contents_equal{};
+    bool subresource_contents_equal{};
     std::uint64_t source_buffer_hash{};
     std::uint64_t destination_buffer_hash{};
     std::uint64_t source_texture_hash{};
     std::uint64_t destination_texture_hash{};
+    std::uint64_t source_subresource_hash{};
+    std::uint64_t destination_subresource_hash{};
 };
 
 struct TimingMetrics {
@@ -313,7 +327,8 @@ std::optional<std::vector<unsigned char>> readback_buffer(
 std::optional<std::vector<unsigned char>> readback_texture(
     ID3D11Device* device,
     ID3D11DeviceContext* context,
-    ID3D11Texture2D* texture) {
+    ID3D11Texture2D* texture,
+    UINT subresource = 0) {
     if (device == nullptr || context == nullptr || texture == nullptr) {
         return std::nullopt;
     }
@@ -321,8 +336,8 @@ std::optional<std::vector<unsigned char>> readback_texture(
     D3D11_TEXTURE2D_DESC description{};
     texture->GetDesc(&description);
     if (description.Format != DXGI_FORMAT_R8G8B8A8_UNORM ||
-        description.MipLevels != 1 ||
-        description.ArraySize != 1) {
+        description.MipLevels == 0 ||
+        subresource >= description.MipLevels * description.ArraySize) {
         return std::nullopt;
     }
     description.Usage = D3D11_USAGE_STAGING;
@@ -334,19 +349,35 @@ std::optional<std::vector<unsigned char>> readback_texture(
         return std::nullopt;
     }
 
-    context->CopyResource(staging.Get(), texture);
+    context->CopySubresourceRegion(
+        staging.Get(),
+        subresource,
+        0,
+        0,
+        0,
+        texture,
+        subresource,
+        nullptr);
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+    if (FAILED(context->Map(
+            staging.Get(),
+            subresource,
+            D3D11_MAP_READ,
+            0,
+            &mapped))) {
         return std::nullopt;
     }
-    const auto logical_row_bytes = static_cast<size_t>(description.Width) * 4;
-    std::vector<unsigned char> data(logical_row_bytes * description.Height);
+    const auto mip = subresource % description.MipLevels;
+    const auto width = std::max(1U, description.Width >> mip);
+    const auto height = std::max(1U, description.Height >> mip);
+    const auto logical_row_bytes = static_cast<size_t>(width) * 4;
+    std::vector<unsigned char> data(logical_row_bytes * height);
     const auto* row = static_cast<const unsigned char*>(mapped.pData);
-    for (UINT y = 0; y < description.Height; ++y) {
+    for (UINT y = 0; y < height; ++y) {
         std::memcpy(data.data() + y * logical_row_bytes, row, logical_row_bytes);
         row += mapped.RowPitch;
     }
-    context->Unmap(staging.Get(), 0);
+    context->Unmap(staging.Get(), subresource);
     return data;
 }
 
@@ -371,10 +402,22 @@ ContentVerification verify_workload_content(
         device,
         context,
         resources.destination_texture.Get());
+    const auto source_subresource = readback_texture(
+        device,
+        context,
+        resources.source_subresource_texture.Get(),
+        1);
+    const auto destination_subresource = readback_texture(
+        device,
+        context,
+        resources.destination_subresource_texture.Get(),
+        1);
     result.readback_succeeded = source_buffer.has_value() &&
         destination_buffer.has_value() &&
         source_texture.has_value() &&
-        destination_texture.has_value();
+        destination_texture.has_value() &&
+        source_subresource.has_value() &&
+        destination_subresource.has_value();
     if (!result.readback_succeeded) {
         return result;
     }
@@ -395,8 +438,18 @@ ContentVerification verify_workload_content(
         kFnvOffsetBasis,
         destination_texture->data(),
         destination_texture->size());
+    result.source_subresource_hash = hash_bytes(
+        kFnvOffsetBasis,
+        source_subresource->data(),
+        source_subresource->size());
+    result.destination_subresource_hash = hash_bytes(
+        kFnvOffsetBasis,
+        destination_subresource->data(),
+        destination_subresource->size());
     result.buffer_contents_equal = *source_buffer == *destination_buffer;
     result.texture_contents_equal = *source_texture == *destination_texture;
+    result.subresource_contents_equal =
+        *source_subresource == *destination_subresource;
     return result;
 }
 
@@ -510,7 +563,8 @@ bool run_resource_workload(
     ID3D11DeviceContext* context,
     WorkloadResources& resources,
     bool& context_vtable_pointer_stable,
-    bool& context_copy_entry_stable) {
+    bool& context_copy_entry_stable,
+    bool& context_subresource_copy_entry_stable) {
     std::array<std::uint32_t, kBufferBytes / sizeof(std::uint32_t)> buffer_data{};
     for (size_t index = 0; index < buffer_data.size(); ++index) {
         buffer_data[index] = static_cast<std::uint32_t>(index);
@@ -563,6 +617,7 @@ bool run_resource_workload(
     context->Unmap(resources.dynamic_buffer.Get(), 0);
 
     auto** context_vtable_before_update = *reinterpret_cast<void***>(context);
+    const auto subresource_copy_entry_before_update = context_vtable_before_update[46];
     const auto copy_entry_before_update = context_vtable_before_update[47];
     context->CopyResource(
         resources.destination_buffer.Get(),
@@ -586,6 +641,8 @@ bool run_resource_workload(
         context_vtable_after_update == context_vtable_before_update;
     context_copy_entry_stable =
         context_vtable_after_update[47] == copy_entry_before_update;
+    context_subresource_copy_entry_stable =
+        context_vtable_after_update[46] == subresource_copy_entry_before_update;
     context->CopyResource(
         resources.destination_buffer.Get(),
         resources.source_buffer.Get());
@@ -630,6 +687,117 @@ bool run_resource_workload(
     context->CopyResource(
         resources.destination_texture.Get(),
         resources.source_texture.Get());
+
+    std::array<std::uint32_t,
+        kSubresourceTextureWidth * kSubresourceTextureHeight> mip_zero_data{};
+    std::array<std::uint32_t,
+        (kSubresourceTextureWidth / 2) * (kSubresourceTextureHeight / 2)>
+        mip_one_data{};
+    for (size_t index = 0; index < mip_zero_data.size(); ++index) {
+        mip_zero_data[index] = 0xFF100000U | static_cast<std::uint32_t>(index);
+    }
+    for (size_t index = 0; index < mip_one_data.size(); ++index) {
+        mip_one_data[index] = 0xFF001000U | static_cast<std::uint32_t>(index);
+    }
+
+    D3D11_TEXTURE2D_DESC subresource_texture_description{};
+    subresource_texture_description.Width = kSubresourceTextureWidth;
+    subresource_texture_description.Height = kSubresourceTextureHeight;
+    subresource_texture_description.MipLevels = kSubresourceTextureMipLevels;
+    subresource_texture_description.ArraySize = 1;
+    subresource_texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    subresource_texture_description.SampleDesc.Count = 1;
+    subresource_texture_description.Usage = D3D11_USAGE_DEFAULT;
+    std::array<D3D11_SUBRESOURCE_DATA, kSubresourceTextureMipLevels>
+        subresource_initial_data{};
+    subresource_initial_data[0].pSysMem = mip_zero_data.data();
+    subresource_initial_data[0].SysMemPitch =
+        kSubresourceTextureWidth * sizeof(std::uint32_t);
+    subresource_initial_data[1].pSysMem = mip_one_data.data();
+    subresource_initial_data[1].SysMemPitch =
+        (kSubresourceTextureWidth / 2) * sizeof(std::uint32_t);
+    result = device->CreateTexture2D(
+        &subresource_texture_description,
+        subresource_initial_data.data(),
+        &resources.source_subresource_texture);
+    if (FAILED(result)) {
+        return false;
+    }
+    result = device->CreateTexture2D(
+        &subresource_texture_description,
+        nullptr,
+        &resources.destination_subresource_texture);
+    if (FAILED(result)) {
+        return false;
+    }
+
+    const auto copy_mip_one = [&]() {
+        context->CopySubresourceRegion(
+            resources.destination_subresource_texture.Get(),
+            1,
+            0,
+            0,
+            0,
+            resources.source_subresource_texture.Get(),
+            1,
+            nullptr);
+    };
+    copy_mip_one();
+    const D3D11_BOX empty_box{0, 0, 0, 0, 1, 1};
+    context->CopySubresourceRegion(
+        resources.destination_subresource_texture.Get(),
+        1,
+        0,
+        0,
+        0,
+        resources.source_subresource_texture.Get(),
+        1,
+        &empty_box);
+    copy_mip_one();
+
+    for (auto& value : mip_zero_data) {
+        value ^= 0x0000FF00U;
+    }
+    context->UpdateSubresource(
+        resources.source_subresource_texture.Get(),
+        0,
+        nullptr,
+        mip_zero_data.data(),
+        kSubresourceTextureWidth * sizeof(std::uint32_t),
+        0);
+    copy_mip_one();
+
+    for (auto& value : mip_one_data) {
+        value ^= 0x00FF0000U;
+    }
+    context->UpdateSubresource(
+        resources.source_subresource_texture.Get(),
+        1,
+        nullptr,
+        mip_one_data.data(),
+        (kSubresourceTextureWidth / 2) * sizeof(std::uint32_t),
+        0);
+    const D3D11_BOX partial_box{0, 0, 0, 8, 8, 1};
+    context->CopySubresourceRegion(
+        resources.destination_subresource_texture.Get(),
+        1,
+        0,
+        0,
+        0,
+        resources.source_subresource_texture.Get(),
+        1,
+        &partial_box);
+    context->CopySubresourceRegion(
+        resources.destination_subresource_texture.Get(),
+        1,
+        8,
+        0,
+        0,
+        resources.source_subresource_texture.Get(),
+        1,
+        &partial_box);
+    copy_mip_one();
+    copy_mip_one();
     return true;
 }
 
@@ -756,21 +924,32 @@ bool snapshot_matches_workload(
         snapshot.buffer_bytes_requested ==
             3 * kBufferBytes + kCooperativeBufferBytes +
                 kAutomaticLifetimeCycles * kAutomaticBufferBytes &&
-        snapshot.create_texture2d_count == 2 &&
-        snapshot.texture_bytes_estimated == 2 * kTextureWidth * kTextureHeight * 4 &&
+        snapshot.create_texture2d_count == 4 &&
+        snapshot.texture_bytes_estimated ==
+            2 * kTextureWidth * kTextureHeight * 4 +
+            2 * (kSubresourceTextureWidth * kSubresourceTextureHeight +
+                (kSubresourceTextureWidth / 2) *
+                    (kSubresourceTextureHeight / 2)) * 4 &&
         snapshot.map_write_count == 1 &&
         snapshot.unmap_write_count == 1 &&
-        snapshot.update_subresource_count == 1 &&
+        snapshot.update_subresource_count == 3 &&
         snapshot.copy_resource_count == kExpectedCopyCount &&
         snapshot.copy_resource_bytes_estimated == kExpectedCopyBytes &&
         snapshot.redundant_copy_candidate_count == kExpectedRedundantCopyCount &&
         snapshot.redundant_copy_bytes_estimated == kExpectedRedundantCopyBytes &&
+        snapshot.copy_subresource_region_count == kExpectedCopySubresourceCount &&
+        snapshot.copy_subresource_region_bytes_estimated ==
+            kExpectedCopySubresourceBytes &&
+        snapshot.redundant_subresource_copy_candidate_count ==
+            kExpectedRedundantSubresourceCopyCount &&
+        snapshot.redundant_subresource_copy_bytes_estimated ==
+            kExpectedRedundantSubresourceCopyBytes &&
         snapshot.forwarded_copy_count == kExpectedCopyCount - expected_skipped_count &&
         snapshot.forwarded_copy_bytes_estimated ==
             kExpectedCopyBytes - expected_skipped_bytes &&
         snapshot.skipped_copy_count == expected_skipped_count &&
         snapshot.skipped_copy_bytes_estimated == expected_skipped_bytes &&
-        snapshot.tracked_resource_count == 5 &&
+        snapshot.tracked_resource_count == 7 &&
         snapshot.resource_retire_count == expected_retire_count &&
         snapshot.resource_destroy_count == expected_destroy_count &&
         snapshot.resource_reuse_count <= kAutomaticLifetimeCycles &&
@@ -785,7 +964,7 @@ bool snapshot_matches_workload(
             (options.automatic_lifetime_tracking ? 1ULL : 0ULL) &&
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >=
-            snapshot.present_count + 144 + snapshot.resource_reuse_count &&
+            snapshot.present_count + 156 + snapshot.resource_reuse_count &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -802,12 +981,13 @@ std::string build_report(
     bool resource_metrics_matched,
     bool context_vtable_pointer_stable,
     bool context_copy_entry_stable,
+    bool context_subresource_copy_entry_stable,
     const ContentVerification& content,
     const TimingMetrics& timing,
     const AdapterIdentity& adapter) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7.1\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7.2\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -828,6 +1008,8 @@ std::string build_report(
                ? "\"owned-returned-buffer-texture-interface\""
                : "\"cooperative-retire-only\"")
            << ",\n"
+           << "  \"subresource_provenance_scope\": "
+              "\"owned-buffer-texture2d-map-update-copy-region\",\n"
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
            << "  \"adapter\": {\n"
@@ -857,6 +1039,8 @@ std::string build_report(
            << (context_vtable_pointer_stable ? "true" : "false") << ",\n"
            << "  \"context_copy_entry_stable\": "
            << (context_copy_entry_stable ? "true" : "false") << ",\n"
+           << "  \"context_subresource_copy_entry_stable\": "
+           << (context_subresource_copy_entry_stable ? "true" : "false") << ",\n"
            << "  \"original_pointer_restored\": "
            << (original_pointer_restored ? "true" : "false") << ",\n"
            << "  \"content_readback_succeeded\": "
@@ -865,6 +1049,8 @@ std::string build_report(
            << (content.buffer_contents_equal ? "true" : "false") << ",\n"
            << "  \"texture_contents_equal\": "
            << (content.texture_contents_equal ? "true" : "false") << ",\n"
+           << "  \"subresource_contents_equal\": "
+           << (content.subresource_contents_equal ? "true" : "false") << ",\n"
            << "  \"hash_algorithm\": \"fnv1a64\",\n"
            << "  \"source_buffer_hash\": \""
            << uint64_hex(content.source_buffer_hash) << "\",\n"
@@ -874,6 +1060,10 @@ std::string build_report(
            << uint64_hex(content.source_texture_hash) << "\",\n"
            << "  \"destination_texture_hash\": \""
            << uint64_hex(content.destination_texture_hash) << "\",\n"
+           << "  \"source_subresource_hash\": \""
+           << uint64_hex(content.source_subresource_hash) << "\",\n"
+           << "  \"destination_subresource_hash\": \""
+           << uint64_hex(content.destination_subresource_hash) << "\",\n"
            << "  \"timing\": {\n"
            << "    \"qpc_frequency\": " << timing.qpc_frequency << ",\n"
            << "    \"workload_qpc_ticks\": " << timing.workload_qpc_ticks << ",\n"
@@ -903,6 +1093,14 @@ std::string build_report(
            << "    \"copy_resource_count\": " << snapshot.copy_resource_count << ",\n"
            << "    \"copy_resource_bytes_estimated\": "
            << snapshot.copy_resource_bytes_estimated << ",\n"
+           << "    \"copy_subresource_region_count\": "
+           << snapshot.copy_subresource_region_count << ",\n"
+           << "    \"copy_subresource_region_bytes_estimated\": "
+           << snapshot.copy_subresource_region_bytes_estimated << ",\n"
+           << "    \"redundant_subresource_copy_candidate_count\": "
+           << snapshot.redundant_subresource_copy_candidate_count << ",\n"
+           << "    \"redundant_subresource_copy_bytes_estimated\": "
+           << snapshot.redundant_subresource_copy_bytes_estimated << ",\n"
            << "    \"redundant_copy_candidate_count\": "
            << snapshot.redundant_copy_candidate_count << ",\n"
            << "    \"redundant_copy_bytes_estimated\": "
@@ -1112,7 +1310,7 @@ int wmain(int argc, wchar_t* argv[]) {
         std::ostringstream stress_output;
         stress_output << "{\n"
                       << "  \"mode\": "
-                         "\"fluidruntime-concurrent-lifetime-detach-v0.7.1\",\n"
+                         "\"fluidruntime-concurrent-lifetime-detach-v0.7.2\",\n"
                       << "  \"target_owned\": true,\n"
                       << "  \"automatic_lifetime_tracking\": true,\n"
                       << "  \"completed_cycles\": " << completed_cycles << ",\n"
@@ -1155,6 +1353,7 @@ int wmain(int argc, wchar_t* argv[]) {
     WorkloadResources workload_resources;
     bool context_vtable_pointer_stable = false;
     bool context_copy_entry_stable = false;
+    bool context_subresource_copy_entry_stable = false;
     LARGE_INTEGER workload_start{};
     LARGE_INTEGER workload_end{};
     if (gpu_timing_queries.disjoint != nullptr) {
@@ -1170,7 +1369,8 @@ int wmain(int argc, wchar_t* argv[]) {
             context.Get(),
             workload_resources,
             context_vtable_pointer_stable,
-            context_copy_entry_stable);
+            context_copy_entry_stable,
+            context_subresource_copy_entry_stable);
     QueryPerformanceCounter(&workload_end);
     if (gpu_timing_queries.disjoint != nullptr) {
         context->End(gpu_timing_queries.end.Get());
@@ -1243,6 +1443,7 @@ int wmain(int argc, wchar_t* argv[]) {
         resource_metrics_matched,
         context_vtable_pointer_stable,
         context_copy_entry_stable,
+        context_subresource_copy_entry_stable,
         content,
         timing,
         adapter_identity);
@@ -1265,9 +1466,13 @@ int wmain(int argc, wchar_t* argv[]) {
         resource_workload_succeeded &&
         resource_metrics_matched &&
         original_pointer_restored &&
+        context_vtable_pointer_stable &&
+        context_copy_entry_stable &&
+        context_subresource_copy_entry_stable &&
         content.readback_succeeded &&
         content.buffer_contents_equal &&
         content.texture_contents_equal &&
+        content.subresource_contents_equal &&
         snapshot.present_count == options->frames;
     return passed ? 0 : 6;
 }

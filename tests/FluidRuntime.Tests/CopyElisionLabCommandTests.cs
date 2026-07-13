@@ -46,7 +46,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
-        Assert.Equal("fluidruntime-copy-elision-trace-v0.7.1", report.Mode);
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.7.2", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
@@ -70,7 +70,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport(trials, 10, 0);
 
-        Assert.Equal("owned-d3d11-copy-gpu-workload-only", report.ClaimScope);
+        Assert.Equal("owned-d3d11-copy-elision-gpu-workload-only", report.ClaimScope);
         Assert.True(report.PerformanceClaimAllowed);
         Assert.Empty(report.PerformanceClaimBlockers);
         Assert.Equal(10, report.GpuValidPairCount);
@@ -136,7 +136,7 @@ public sealed class CopyElisionLabCommandTests
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.7.1",
+            Mode: "fluidruntime-hook-ipc-lab-v0.7.2",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,
@@ -152,7 +152,7 @@ public sealed class CopyElisionLabCommandTests
             AdapterLuid: "0000000000000042",
             TargetProcessId: 42,
             RingName: "test",
-            RingAbiVersion: 3,
+            RingAbiVersion: 4,
             QpcFrequency: 10_000_000,
             EventCount: 20,
             LostSequenceCount: 0,
@@ -161,7 +161,7 @@ public sealed class CopyElisionLabCommandTests
             ResourceRetireCount: 1,
             ResourceDestroyCount: 64,
             ResourceReuseCount: 63,
-            ActiveResourceCount: 5,
+            ActiveResourceCount: 7,
             RetiredResourceIdCount: 65,
             RetiredResourceIdentityCount: 2,
             ProvenanceFailureCount: 0,
@@ -189,6 +189,15 @@ public sealed class CopyElisionLabCommandTests
             GpuFrequency: 10_000_000,
             GpuWorkloadTicks: copyElisionEnabled ? 400UL : 500UL,
             GpuWorkloadMicroseconds: copyElisionEnabled ? 40 : 50,
-            TargetReport: document.RootElement.Clone());
+            TargetReport: document.RootElement.Clone(),
+            SubresourceProvenanceScope:
+                "owned-buffer-texture2d-map-update-copy-region",
+            CopySubresourceRegionCount: 8,
+            CopySubresourceRegionBytes: 5632,
+            RedundantSubresourceCopyCandidateCount: 3,
+            RedundantSubresourceCopyBytes: 3072,
+            SubresourceContentEquivalent: true,
+            SourceSubresourceHash: "subresource",
+            DestinationSubresourceHash: "subresource");
     }
 }

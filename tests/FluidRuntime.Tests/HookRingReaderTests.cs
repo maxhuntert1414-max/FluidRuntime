@@ -28,7 +28,15 @@ public sealed class HookRingReaderTests
             MemoryMappedFileAccess.ReadWrite);
         WriteHeader(writer, capacity);
         WriteEvent(writer, 0, HookEventType.Present, sizeBytes: 0, flags: 0);
-        WriteEvent(writer, 1, HookEventType.CopyResource, sizeBytes: 4096, flags: 3);
+        WriteEvent(
+            writer,
+            1,
+            HookEventType.CopySubresourceRegion,
+            sizeBytes: 4096,
+            flags: 1,
+            subresourceA: 3,
+            subresourceB: 2,
+            regionKey: 0x123456789ABCDEF0UL);
         writer.Write(16, 2L);
 
         using var reader = HookRingReader.Open(mappingName);
@@ -36,10 +44,12 @@ public sealed class HookRingReaderTests
 
         Assert.Equal(2, events.Count);
         Assert.Equal(HookEventType.Present, events[0].Type);
-        Assert.Equal(HookEventType.CopyResource, events[1].Type);
+        Assert.Equal(HookEventType.CopySubresourceRegion, events[1].Type);
         Assert.Equal(4096UL, events[1].SizeBytes);
-        Assert.True(events[1].IsRedundantCopyCandidate);
-        Assert.True(events[1].WasCopySkipped);
+        Assert.True(events[1].IsRedundantSubresourceCopyCandidate);
+        Assert.Equal(3U, events[1].SubresourceA);
+        Assert.Equal(2U, events[1].SubresourceB);
+        Assert.Equal(0x123456789ABCDEF0UL, events[1].RegionKey);
         Assert.Equal(2, writer.ReadInt64(24));
         Assert.Equal(0, reader.LostSequenceCount);
     }
@@ -129,7 +139,10 @@ public sealed class HookRingReaderTests
         HookEventType type,
         ulong sizeBytes,
         uint flags,
-        int? slot = null)
+        int? slot = null,
+        uint subresourceA = 0,
+        uint subresourceB = 0,
+        ulong regionKey = 0)
     {
         var offset = HookRingReader.HeaderSize +
             (slot ?? sequence) * HookRingReader.ExpectedEventSize;
@@ -141,6 +154,10 @@ public sealed class HookRingReaderTests
         writer.Write(offset + 40, sizeBytes);
         writer.Write(offset + 48, 3UL);
         writer.Write(offset + 56, flags);
+        writer.Write(offset + 60, subresourceA);
+        writer.Write(offset + 64, subresourceB);
+        writer.Write(offset + 68, 0U);
+        writer.Write(offset + 72, regionKey);
         Thread.MemoryBarrier();
         writer.Write(offset, (long)sequence);
     }

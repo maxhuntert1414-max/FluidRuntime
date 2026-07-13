@@ -12,7 +12,8 @@ public enum HookEventType : uint
     HookRefresh = 8,
     ResourceRetire = 9,
     ResourceReuse = 10,
-    ResourceDestroy = 11
+    ResourceDestroy = 11,
+    CopySubresourceRegion = 12
 }
 
 public sealed record HookIpcEvent(
@@ -24,11 +25,17 @@ public sealed record HookIpcEvent(
     ulong ResourceB,
     ulong SizeBytes,
     ulong Generation,
-    uint Flags)
+    uint Flags,
+    uint SubresourceA = 0,
+    uint SubresourceB = 0,
+    ulong RegionKey = 0)
 {
     public bool IsRedundantCopyCandidate =>
         Type == HookEventType.CopyResource && (Flags & 1) != 0;
 
     public bool WasCopySkipped =>
         Type == HookEventType.CopyResource && (Flags & 2) != 0;
+
+    public bool IsRedundantSubresourceCopyCandidate =>
+        Type == HookEventType.CopySubresourceRegion && (Flags & 1) != 0;
 }

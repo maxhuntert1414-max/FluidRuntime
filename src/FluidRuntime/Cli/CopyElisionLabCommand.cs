@@ -6,7 +6,8 @@ namespace FluidRuntime.Cli;
 public static class CopyElisionLabCommand
 {
     private const int MinimumPairsForPerformanceClaim = 10;
-    private const string PerformanceClaimScope = "owned-d3d11-copy-gpu-workload-only";
+    private const string PerformanceClaimScope =
+        "owned-d3d11-copy-elision-gpu-workload-only";
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -139,7 +140,12 @@ public static class CopyElisionLabCommand
         var contentEquivalent = baseline.ContentEquivalent &&
             optimized.ContentEquivalent &&
             baseline.DestinationBufferHash == optimized.DestinationBufferHash &&
-            baseline.DestinationTextureHash == optimized.DestinationTextureHash;
+            baseline.DestinationTextureHash == optimized.DestinationTextureHash &&
+            baseline.SubresourceContentEquivalent &&
+            optimized.SubresourceContentEquivalent &&
+            baseline.SourceSubresourceHash == baseline.DestinationSubresourceHash &&
+            optimized.SourceSubresourceHash == optimized.DestinationSubresourceHash &&
+            baseline.DestinationSubresourceHash == optimized.DestinationSubresourceHash;
         var baselineObservedCopies = baseline.EventTypeCounts.GetValueOrDefault("CopyResource");
         var optimizedObservedCopies = optimized.EventTypeCounts.GetValueOrDefault("CopyResource");
         var adapterIdentityMatched = baseline.AdapterIdentityAvailable &&
@@ -274,7 +280,7 @@ public static class CopyElisionLabCommand
         }
 
         return new CopyElisionLabReport(
-            Mode: "fluidruntime-copy-elision-trace-v0.7.1",
+            Mode: "fluidruntime-copy-elision-trace-v0.7.2",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -362,15 +368,23 @@ public static class CopyElisionLabCommand
             : null;
 
     private static bool HasSafeLifecycle(HookLabReport report) =>
-        report.RingAbiVersion == 3 &&
+        report.RingAbiVersion == 4 &&
         report.AutomaticLifetimeTracking &&
         report.ReleaseObservationScope == "owned-returned-buffer-texture-interface" &&
+        report.SubresourceProvenanceScope ==
+            "owned-buffer-texture2d-map-update-copy-region" &&
         report.ResourceRetireCount == 1 &&
         report.ResourceDestroyCount == 64 &&
-        report.ActiveResourceCount == 5 &&
+        report.ActiveResourceCount == 7 &&
         report.RetiredResourceIdCount == 65 &&
         report.RetiredResourceIdentityCount + report.ResourceReuseCount == 65 &&
         report.ProvenanceFailureCount == 0 &&
         report.ReleaseHookSlotCount >= 2 &&
-        report.ReleaseHookFailureCount == 0;
+        report.ReleaseHookFailureCount == 0 &&
+        report.CopySubresourceRegionCount == 8 &&
+        report.CopySubresourceRegionBytes == 5632 &&
+        report.RedundantSubresourceCopyCandidateCount == 3 &&
+        report.RedundantSubresourceCopyBytes == 3072 &&
+        report.SubresourceContentEquivalent &&
+        report.SourceSubresourceHash == report.DestinationSubresourceHash;
 }

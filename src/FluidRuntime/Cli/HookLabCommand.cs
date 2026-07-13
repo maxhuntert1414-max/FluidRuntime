@@ -41,6 +41,11 @@ public static class HookLabCommand
             Console.WriteLine(
                 $"Forwarded: {report.ForwardedCopyCount}; skipped: " +
                 $"{report.SkippedCopyCount} ({report.SkippedCopyBytes} bytes).");
+            Console.WriteLine(
+                $"Subresource regions: {report.CopySubresourceRegionCount} calls / " +
+                $"{report.CopySubresourceRegionBytes} bytes; " +
+                $"{report.RedundantSubresourceCopyCandidateCount} candidates / " +
+                $"{report.RedundantSubresourceCopyBytes} bytes, all forwarded.");
             Console.WriteLine($"Report: {outputPath}");
             return 0;
         }

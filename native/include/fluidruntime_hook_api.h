@@ -7,10 +7,10 @@
 
 struct ID3D11Resource;
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 6;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 7;
 constexpr std::uint32_t fluid_hook_attach_options_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 3;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 4;
 constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
 constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
 
@@ -26,6 +26,7 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     resource_retire = 9,
     resource_reuse = 10,
     resource_destroy = 11,
+    copy_subresource_region = 12,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
@@ -64,11 +65,14 @@ struct alignas(8) FluidHookEventV1 {
     std::uint64_t size_bytes;
     std::uint64_t generation;
     std::uint32_t flags;
+    std::uint32_t subresource_a;
+    std::uint32_t subresource_b;
     std::uint32_t reserved;
+    std::uint64_t region_key;
 };
 
 static_assert(sizeof(FluidHookRingHeaderV1) == 64);
-static_assert(sizeof(FluidHookEventV1) == 64);
+static_assert(sizeof(FluidHookEventV1) == 80);
 
 constexpr std::uint64_t fluid_hook_ring_mapping_size =
     sizeof(FluidHookRingHeaderV1) +
@@ -106,6 +110,10 @@ struct FluidHookSnapshotV1 {
     std::uint64_t release_hook_slot_count;
     std::uint64_t release_hook_failure_count;
     std::uint64_t automatic_lifetime_tracking;
+    std::uint64_t copy_subresource_region_count;
+    std::uint64_t copy_subresource_region_bytes_estimated;
+    std::uint64_t redundant_subresource_copy_candidate_count;
+    std::uint64_t redundant_subresource_copy_bytes_estimated;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS

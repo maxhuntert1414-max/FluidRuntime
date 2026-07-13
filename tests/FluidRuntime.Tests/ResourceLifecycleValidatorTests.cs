@@ -19,8 +19,9 @@ public sealed class ResourceLifecycleValidatorTests
                 Event(6, HookEventType.UnmapWrite, resourceA: 3),
                 Event(7, HookEventType.UpdateSubresource, resourceA: 2),
                 Event(8, HookEventType.CopyResource, resourceA: 3, resourceB: 2),
-                Event(9, HookEventType.Present),
-                Event(10, HookEventType.HookRefresh)
+                Event(9, HookEventType.CopySubresourceRegion, resourceA: 3, resourceB: 2),
+                Event(10, HookEventType.Present),
+                Event(11, HookEventType.HookRefresh)
             ]);
 
         Assert.True(result.IsValid, result.Error);

@@ -13,11 +13,12 @@ Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md)
 [v0.6 evidence](docs/evidence/v0.6-copy-elision.md) |
 [v0.7 lifecycle evidence](docs/evidence/v0.7-resource-lifecycle.md) |
 [v0.7.1 destruction evidence](docs/evidence/v0.7.1-automatic-destruction.md) |
+[v0.7.2 subresource evidence](docs/evidence/v0.7.2-subresource-provenance.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.7.1 keeps normal inspection and external-process behavior advisory-only:
+Version 0.7.2 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -35,7 +36,7 @@ accounting, and hook rollback agree across all runs. This is not enabled for
 external software.
 
 Any allowed positive performance claim is scoped in the JSON as
-`owned-d3d11-copy-gpu-workload-only`; it is not a game-wide FPS claim. Valid
+`owned-d3d11-copy-elision-gpu-workload-only`; it is not a game-wide FPS claim. Valid
 timing alone is insufficient: GPU p95 must improve and at least 80% of measured
 pairs must favor the optimized run.
 
@@ -45,11 +46,16 @@ the same pointer receives a new monotonic resource ID. The managed reader
 reconstructs active and retired IDs and rejects writes or copies involving a
 retired resource. This is not automatic interception of COM destruction.
 
-Version 0.7.1 adds an explicit owned-lab lifetime mode that patches the
+Version 0.7.1 added an explicit owned-lab lifetime mode that patches the
 `IUnknown::Release` slot of the returned `ID3D11Buffer` and `ID3D11Texture2D`
 interfaces. The target executes 64 automatic destruction cycles, restores every
 dynamic slot before DLL unload, and separately verifies that normal
 `FluidHookAttach` keeps zero Release hooks and uses cooperative retirement only.
+
+Version 0.7.2 tracks generations per Buffer/Texture2D subresource. The owned
+workload proves that a write to mip 0 does not invalidate unchanged mip 1,
+while a write to mip 1 does. Eight `CopySubresourceRegion` calls are observed;
+three repeated regions are candidates, but all eight are forwarded.
 
 The v0.2 native probe is also read-only. It adds per-process Windows process
 memory and GPU performance-counter telemetry through a small C++ executable.
@@ -106,7 +112,8 @@ binary built from this repository or another binary you explicitly trust.
 The native build also contains a controlled D3D11 hook lab. An owned target
 loads the hook DLL cooperatively. The DLL observes `IDXGISwapChain::Present`,
 buffer and texture creation, write-oriented `Map/Unmap`, `UpdateSubresource`,
-and `CopyResource`. Detach restores every current original vtable entry before
+`CopySubresourceRegion`, and `CopyResource`. Detach restores every current
+original vtable entry before
 the DLL can be unloaded.
 
 ```powershell
@@ -121,6 +128,10 @@ The deterministic workload performs six resource copies. Three repeat an
 unchanged source/destination generation and are reported as candidates, never
 skipped by the default mode. The expected result is 49,152 bytes observed and
 24,576 bytes classified as potentially avoidable.
+
+The same workload performs five full-mip copies, two partial copies, and one
+empty-box no-op. Three are repeated regional candidates (3,072 bytes), but
+v0.7.2 never skips a regional copy.
 
 Run the managed IPC lab to consume those events while the target is alive:
 
@@ -138,7 +149,8 @@ The hook publishes fixed-size events to a versioned, per-process shared-memory
 ring. Events carry opaque resource IDs instead of pointer addresses. The managed
 reader checks the ABI, sequence continuity, native overrun count, event totals,
 exact deterministic event order, resource IDs and source/destination pairs,
-generations, lifecycle transitions, active-resource references, flags, copy
+subresource indices, generations, lifecycle transitions, active-resource
+references, flags, copy
 counts, and byte estimates against the target snapshot before accepting a
 report.
 
@@ -163,7 +175,7 @@ from statistics. Baselines forward all six copies; optimized runs observe the
 same six, forward five, and skip the first redundant 4,096-byte buffer copy.
 After hook detach, the target reads buffer and texture contents back through
 staging resources, compares logical bytes exactly, and computes stable FNV-1a
-hashes for the report.
+hashes for the report, including the addressed mip.
 
 Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
 guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,
@@ -177,5 +189,5 @@ concurrent-call draining, and rollback in software we own before any
 external-process work is considered. Candidate detection and copy elision
 currently assume the controlled workload. Automatic destruction is only proven
 for the same returned Buffer/Texture2D interface in the owned lab; interface
-aliases, subresources, GPU shader/UAV writes, fences, and aliasing are not
-covered yet.
+aliases, GPU shader/UAV writes, fences, and resource-view aliasing are not
+covered yet. Regional-copy candidates remain diagnostic-only.

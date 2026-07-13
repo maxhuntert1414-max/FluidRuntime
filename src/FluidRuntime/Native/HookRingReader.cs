@@ -5,9 +5,9 @@ namespace FluidRuntime.Native;
 public sealed unsafe class HookRingReader : IDisposable
 {
     public const uint ExpectedMagic = 0x47524C46;
-    public const uint ExpectedAbiVersion = 3;
+    public const uint ExpectedAbiVersion = 4;
     public const int HeaderSize = 64;
-    public const int ExpectedEventSize = 64;
+    public const int ExpectedEventSize = 80;
     public const string MappingNamePrefix = "Local\\FluidRuntimeHook-";
 
     private readonly MemoryMappedFile _mapping;
@@ -131,7 +131,10 @@ public sealed unsafe class HookRingReader : IDisposable
                 ResourceB: _view.ReadUInt64(offset + 32),
                 SizeBytes: _view.ReadUInt64(offset + 40),
                 Generation: _view.ReadUInt64(offset + 48),
-                Flags: _view.ReadUInt32(offset + 56));
+                Flags: _view.ReadUInt32(offset + 56),
+                SubresourceA: _view.ReadUInt32(offset + 60),
+                SubresourceB: _view.ReadUInt32(offset + 64),
+                RegionKey: _view.ReadUInt64(offset + 72));
             Thread.MemoryBarrier();
             if (ReadInt64Atomic(offset) != publishedBefore)
             {

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -42,6 +43,16 @@ using CopyResourceFunction = void(STDMETHODCALLTYPE*)(
     ID3D11DeviceContext*,
     ID3D11Resource*,
     ID3D11Resource*);
+using CopySubresourceRegionFunction = void(STDMETHODCALLTYPE*)(
+    ID3D11DeviceContext*,
+    ID3D11Resource*,
+    UINT,
+    UINT,
+    UINT,
+    UINT,
+    ID3D11Resource*,
+    UINT,
+    const D3D11_BOX*);
 using UpdateSubresourceFunction = void(STDMETHODCALLTYPE*)(
     ID3D11DeviceContext*,
     ID3D11Resource*,
@@ -58,9 +69,10 @@ constexpr size_t kCreateBufferVtableIndex = 3;
 constexpr size_t kCreateTexture2DVtableIndex = 5;
 constexpr size_t kMapVtableIndex = 14;
 constexpr size_t kUnmapVtableIndex = 15;
+constexpr size_t kCopySubresourceRegionVtableIndex = 46;
 constexpr size_t kCopyResourceVtableIndex = 47;
 constexpr size_t kUpdateSubresourceVtableIndex = 48;
-constexpr size_t kHookSlotCount = 7;
+constexpr size_t kHookSlotCount = 8;
 constexpr size_t kRetiredResourceIdentityCapacity = 4096;
 
 struct HookSlot {
@@ -73,6 +85,7 @@ struct ResourceState {
     std::uint64_t resource_id{};
     std::uint64_t size_bytes{};
     std::uint64_t generation{};
+    std::vector<std::uint64_t> subresource_generations;
     bool provenance_trusted{};
 };
 
@@ -80,6 +93,83 @@ struct LastCopy {
     std::uint64_t source_resource_id{};
     std::uint64_t source_generation{};
     std::uint64_t destination_generation{};
+};
+
+struct SubresourceKey {
+    ID3D11Resource* resource{};
+    UINT subresource{};
+
+    bool operator==(const SubresourceKey&) const = default;
+};
+
+struct SubresourceKeyHash {
+    size_t operator()(const SubresourceKey& key) const noexcept {
+        const auto pointer_hash = std::hash<ID3D11Resource*>{}(key.resource);
+        const auto subresource_hash = std::hash<UINT>{}(key.subresource);
+        return pointer_hash ^ (subresource_hash + 0x9E3779B9U +
+            (pointer_hash << 6) + (pointer_hash >> 2));
+    }
+};
+
+struct CopyRegionIdentity {
+    UINT destination_subresource{};
+    UINT destination_x{};
+    UINT destination_y{};
+    UINT destination_z{};
+    UINT source_subresource{};
+    bool has_source_box{};
+    D3D11_BOX source_box{};
+
+    bool operator==(const CopyRegionIdentity& other) const {
+        return destination_subresource == other.destination_subresource &&
+            destination_x == other.destination_x &&
+            destination_y == other.destination_y &&
+            destination_z == other.destination_z &&
+            source_subresource == other.source_subresource &&
+            has_source_box == other.has_source_box &&
+            (!has_source_box ||
+                (source_box.left == other.source_box.left &&
+                 source_box.top == other.source_box.top &&
+                 source_box.front == other.source_box.front &&
+                 source_box.right == other.source_box.right &&
+                 source_box.bottom == other.source_box.bottom &&
+                 source_box.back == other.source_box.back));
+    }
+};
+
+std::uint64_t copy_region_key(const CopyRegionIdentity& region) {
+    constexpr std::uint64_t offset_basis = 14695981039346656037ULL;
+    constexpr std::uint64_t prime = 1099511628211ULL;
+    auto hash = offset_basis;
+    const auto mix = [&hash](std::uint32_t value) {
+        constexpr std::uint64_t local_prime = 1099511628211ULL;
+        for (int shift = 0; shift < 32; shift += 8) {
+            hash ^= static_cast<unsigned char>(value >> shift);
+            hash *= local_prime;
+        }
+    };
+    mix(region.destination_subresource);
+    mix(region.destination_x);
+    mix(region.destination_y);
+    mix(region.destination_z);
+    mix(region.source_subresource);
+    mix(region.has_source_box ? 1U : 0U);
+    if (region.has_source_box) {
+        mix(region.source_box.left);
+        mix(region.source_box.top);
+        mix(region.source_box.front);
+        mix(region.source_box.right);
+        mix(region.source_box.bottom);
+        mix(region.source_box.back);
+    }
+    return hash == 0 ? prime : hash;
+}
+
+struct LastSubresourceCopy {
+    std::uint64_t source_resource_id{};
+    std::uint64_t source_generation{};
+    std::uint64_t destination_generation{};
+    CopyRegionIdentity region;
 };
 
 struct ResourceRegistration {
@@ -104,6 +194,7 @@ std::atomic<CreateBufferFunction> g_original_create_buffer{nullptr};
 std::atomic<CreateTexture2DFunction> g_original_create_texture2d{nullptr};
 std::atomic<MapFunction> g_original_map{nullptr};
 std::atomic<UnmapFunction> g_original_unmap{nullptr};
+std::atomic<CopySubresourceRegionFunction> g_original_copy_subresource_region{nullptr};
 std::atomic<CopyResourceFunction> g_original_copy_resource{nullptr};
 std::atomic<UpdateSubresourceFunction> g_original_update_subresource{nullptr};
 
@@ -117,6 +208,10 @@ std::atomic<std::uint64_t> g_unmap_write_count{0};
 std::atomic<std::uint64_t> g_update_subresource_count{0};
 std::atomic<std::uint64_t> g_copy_resource_count{0};
 std::atomic<std::uint64_t> g_copy_resource_bytes_estimated{0};
+std::atomic<std::uint64_t> g_copy_subresource_region_count{0};
+std::atomic<std::uint64_t> g_copy_subresource_region_bytes_estimated{0};
+std::atomic<std::uint64_t> g_redundant_subresource_copy_candidate_count{0};
+std::atomic<std::uint64_t> g_redundant_subresource_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_redundant_copy_candidate_count{0};
 std::atomic<std::uint64_t> g_redundant_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_forwarded_copy_count{0};
@@ -134,7 +229,9 @@ std::atomic<std::uint32_t> g_max_skipped_copy_count{0};
 
 std::unordered_map<ID3D11Resource*, ResourceState> g_resources;
 std::unordered_map<ID3D11Resource*, LastCopy> g_last_copies;
-std::unordered_set<ID3D11Resource*> g_pending_write_maps;
+std::unordered_map<SubresourceKey, LastSubresourceCopy, SubresourceKeyHash>
+    g_last_subresource_copies;
+std::unordered_set<SubresourceKey, SubresourceKeyHash> g_pending_write_maps;
 std::unordered_map<ID3D11Resource*, std::uint64_t> g_retired_resources;
 std::deque<std::pair<ID3D11Resource*, std::uint64_t>> g_retired_resource_order;
 std::uint64_t g_next_resource_id{};
@@ -314,7 +411,10 @@ void emit_hook_event(
     std::uint64_t resource_b = 0,
     std::uint64_t size_bytes = 0,
     std::uint64_t generation = 0,
-    std::uint32_t flags = 0) {
+    std::uint32_t flags = 0,
+    std::uint32_t subresource_a = 0,
+    std::uint32_t subresource_b = 0,
+    std::uint64_t region_key = 0) {
     auto* header = g_ring_header;
     auto* events = g_ring_events;
     if (header == nullptr || events == nullptr) {
@@ -342,7 +442,10 @@ void emit_hook_event(
     event.size_bytes = size_bytes;
     event.generation = generation;
     event.flags = flags;
+    event.subresource_a = subresource_a;
+    event.subresource_b = subresource_b;
     event.reserved = 0;
+    event.region_key = region_key;
     MemoryBarrier();
     InterlockedExchange64(&event.sequence, sequence);
 }
@@ -360,11 +463,16 @@ void update_context_original(size_t slot_index, void* original) {
             std::memory_order_release);
         break;
     case 5:
+        g_original_copy_subresource_region.store(
+            reinterpret_cast<CopySubresourceRegionFunction>(original),
+            std::memory_order_release);
+        break;
+    case 6:
         g_original_copy_resource.store(
             reinterpret_cast<CopyResourceFunction>(original),
             std::memory_order_release);
         break;
-    case 6:
+    case 7:
         g_original_update_subresource.store(
             reinterpret_cast<UpdateSubresourceFunction>(original),
             std::memory_order_release);
@@ -450,6 +558,19 @@ std::uint64_t bytes_per_pixel(DXGI_FORMAT format) {
     }
 }
 
+UINT texture_mip_levels(const D3D11_TEXTURE2D_DESC& description) {
+    if (description.MipLevels != 0) {
+        return description.MipLevels;
+    }
+    UINT mip_levels = 1;
+    for (auto dimension = std::max(description.Width, description.Height);
+         dimension > 1;
+         dimension >>= 1) {
+        ++mip_levels;
+    }
+    return mip_levels;
+}
+
 std::uint64_t estimate_texture_bytes(const D3D11_TEXTURE2D_DESC& description) {
     const auto pixel_bytes = bytes_per_pixel(description.Format);
     if (pixel_bytes == 0) {
@@ -458,13 +579,7 @@ std::uint64_t estimate_texture_bytes(const D3D11_TEXTURE2D_DESC& description) {
 
     auto width = std::max(1U, description.Width);
     auto height = std::max(1U, description.Height);
-    auto mip_levels = description.MipLevels;
-    if (mip_levels == 0) {
-        mip_levels = 1;
-        for (auto dimension = std::max(width, height); dimension > 1; dimension >>= 1) {
-            ++mip_levels;
-        }
-    }
+    const auto mip_levels = texture_mip_levels(description);
 
     std::uint64_t total = 0;
     for (UINT mip = 0; mip < mip_levels; ++mip) {
@@ -475,6 +590,96 @@ std::uint64_t estimate_texture_bytes(const D3D11_TEXTURE2D_DESC& description) {
     return total
         * std::max(1U, description.ArraySize)
         * std::max(1U, description.SampleDesc.Count);
+}
+
+UINT query_subresource_count(ID3D11Resource* resource) {
+    if (resource == nullptr) {
+        return 0;
+    }
+    D3D11_RESOURCE_DIMENSION dimension{};
+    resource->GetType(&dimension);
+    if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        return 1;
+    }
+    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+        D3D11_TEXTURE2D_DESC description{};
+        static_cast<ID3D11Texture2D*>(resource)->GetDesc(&description);
+        return texture_mip_levels(description) * std::max(1U, description.ArraySize);
+    }
+    return 0;
+}
+
+std::uint64_t query_subresource_size(
+    ID3D11Resource* resource,
+    UINT subresource) {
+    if (resource == nullptr) {
+        return 0;
+    }
+    D3D11_RESOURCE_DIMENSION dimension{};
+    resource->GetType(&dimension);
+    if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        if (subresource != 0) {
+            return 0;
+        }
+        D3D11_BUFFER_DESC description{};
+        static_cast<ID3D11Buffer*>(resource)->GetDesc(&description);
+        return description.ByteWidth;
+    }
+    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+        D3D11_TEXTURE2D_DESC description{};
+        static_cast<ID3D11Texture2D*>(resource)->GetDesc(&description);
+        const auto mip_levels = texture_mip_levels(description);
+        if (subresource >= mip_levels * std::max(1U, description.ArraySize)) {
+            return 0;
+        }
+        const auto mip = subresource % mip_levels;
+        const auto width = std::max(1U, description.Width >> mip);
+        const auto height = std::max(1U, description.Height >> mip);
+        return static_cast<std::uint64_t>(width) * height *
+            bytes_per_pixel(description.Format) *
+            std::max(1U, description.SampleDesc.Count);
+    }
+    return 0;
+}
+
+bool source_box_is_empty(const D3D11_BOX* source_box) {
+    return source_box != nullptr &&
+        (source_box->left >= source_box->right ||
+         source_box->top >= source_box->bottom ||
+         source_box->front >= source_box->back);
+}
+
+std::uint64_t estimate_copy_region_bytes(
+    ID3D11Resource* source,
+    UINT source_subresource,
+    const D3D11_BOX* source_box) {
+    if (source == nullptr || source_box_is_empty(source_box)) {
+        return 0;
+    }
+    if (source_box == nullptr) {
+        return query_subresource_size(source, source_subresource);
+    }
+
+    D3D11_RESOURCE_DIMENSION dimension{};
+    source->GetType(&dimension);
+    if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        return source_subresource == 0
+            ? static_cast<std::uint64_t>(source_box->right - source_box->left)
+            : 0;
+    }
+    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+        D3D11_TEXTURE2D_DESC description{};
+        static_cast<ID3D11Texture2D*>(source)->GetDesc(&description);
+        const auto pixel_bytes = bytes_per_pixel(description.Format);
+        if (pixel_bytes == 0) {
+            return 0;
+        }
+        return static_cast<std::uint64_t>(source_box->right - source_box->left) *
+            (source_box->bottom - source_box->top) *
+            (source_box->back - source_box->front) * pixel_bytes *
+            std::max(1U, description.SampleDesc.Count);
+    }
+    return 0;
 }
 
 std::uint64_t query_resource_size(ID3D11Resource* resource) {
@@ -500,10 +705,16 @@ std::uint64_t query_resource_size(ID3D11Resource* resource) {
 void erase_resource_provenance_locked(
     ID3D11Resource* resource,
     std::uint64_t resource_id) {
-    g_pending_write_maps.erase(resource);
+    std::erase_if(g_pending_write_maps, [resource](const SubresourceKey& key) {
+        return key.resource == resource;
+    });
     g_last_copies.erase(resource);
     std::erase_if(g_last_copies, [resource_id](const auto& item) {
         return item.second.source_resource_id == resource_id;
+    });
+    std::erase_if(g_last_subresource_copies, [resource, resource_id](const auto& item) {
+        return item.first.resource == resource ||
+            item.second.source_resource_id == resource_id;
     });
 }
 
@@ -542,6 +753,7 @@ ResourceRegistration register_resource_locked(
     ID3D11Resource* resource,
     std::uint64_t size_bytes,
     std::uint64_t generation,
+    UINT subresource_count,
     bool provenance_trusted) {
     ResourceRegistration registration;
     const auto active = g_resources.find(resource);
@@ -565,6 +777,9 @@ ResourceRegistration register_resource_locked(
         .resource_id = ++g_next_resource_id,
         .size_bytes = size_bytes,
         .generation = generation,
+        .subresource_generations = std::vector<std::uint64_t>(
+            subresource_count,
+            generation),
         .provenance_trusted = provenance_trusted && !registration.reuse_without_retire,
     };
     registration.resource_id = state.resource_id;
@@ -580,6 +795,8 @@ ResourceState& ensure_resource_locked(ID3D11Resource* resource) {
     if (inserted) {
         iterator->second.resource_id = ++g_next_resource_id;
         iterator->second.size_bytes = query_resource_size(resource);
+        iterator->second.subresource_generations.resize(
+            query_subresource_count(resource));
         iterator->second.provenance_trusted = false;
         g_provenance_failure_count.fetch_add(1, std::memory_order_relaxed);
     }
@@ -589,7 +806,53 @@ ResourceState& ensure_resource_locked(ID3D11Resource* resource) {
 void mark_resource_written_locked(ID3D11Resource* resource) {
     auto& state = ensure_resource_locked(resource);
     ++state.generation;
+    std::fill(
+        state.subresource_generations.begin(),
+        state.subresource_generations.end(),
+        state.generation);
     g_last_copies.erase(resource);
+    std::erase_if(g_last_subresource_copies, [resource](const auto& item) {
+        return item.first.resource == resource;
+    });
+}
+
+bool get_subresource_generation_locked(
+    ID3D11Resource* resource,
+    UINT subresource,
+    ResourceState*& state,
+    std::uint64_t& generation) {
+    state = &ensure_resource_locked(resource);
+    if (subresource >= state->subresource_generations.size()) {
+        state->provenance_trusted = false;
+        erase_resource_provenance_locked(resource, state->resource_id);
+        g_provenance_failure_count.fetch_add(1, std::memory_order_relaxed);
+        generation = state->generation;
+        return false;
+    }
+    generation = state->subresource_generations[subresource];
+    return true;
+}
+
+bool mark_subresource_written_locked(
+    ID3D11Resource* resource,
+    UINT subresource,
+    std::uint64_t& generation) {
+    ResourceState* state = nullptr;
+    if (!get_subresource_generation_locked(
+            resource,
+            subresource,
+            state,
+            generation)) {
+        ++state->generation;
+        generation = state->generation;
+        return false;
+    }
+    ++state->generation;
+    generation = state->generation;
+    state->subresource_generations[subresource] = generation;
+    g_last_copies.erase(resource);
+    g_last_subresource_copies.erase(SubresourceKey{resource, subresource});
+    return true;
 }
 
 ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object) {
@@ -672,6 +935,10 @@ void reset_metrics_and_resources() {
     g_update_subresource_count.store(0, std::memory_order_relaxed);
     g_copy_resource_count.store(0, std::memory_order_relaxed);
     g_copy_resource_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_copy_subresource_region_count.store(0, std::memory_order_relaxed);
+    g_copy_subresource_region_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_redundant_subresource_copy_candidate_count.store(0, std::memory_order_relaxed);
+    g_redundant_subresource_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_redundant_copy_candidate_count.store(0, std::memory_order_relaxed);
     g_redundant_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_forwarded_copy_count.store(0, std::memory_order_relaxed);
@@ -689,6 +956,7 @@ void reset_metrics_and_resources() {
     const std::lock_guard resource_lock(g_resource_mutex);
     g_resources.clear();
     g_last_copies.clear();
+    g_last_subresource_copies.clear();
     g_pending_write_maps.clear();
     g_retired_resources.clear();
     g_retired_resource_order.clear();
@@ -741,6 +1009,7 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(
                 *buffer,
                 description->ByteWidth,
                 generation,
+                1,
                 release_hook_ready);
         }
         emit_hook_event(
@@ -792,6 +1061,8 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(
                 *texture,
                 estimated_bytes,
                 generation,
+                texture_mip_levels(*description) *
+                    std::max(1U, description->ArraySize),
                 release_hook_ready);
         }
         emit_hook_event(
@@ -843,11 +1114,15 @@ HRESULT STDMETHODCALLTYPE hooked_map(
         std::uint64_t generation = 0;
         {
             const std::lock_guard resource_lock(g_resource_mutex);
-            g_pending_write_maps.insert(resource);
-            const auto& state = ensure_resource_locked(resource);
-            resource_id = state.resource_id;
-            size_bytes = state.size_bytes;
-            generation = state.generation;
+            g_pending_write_maps.insert(SubresourceKey{resource, subresource});
+            ResourceState* state = nullptr;
+            get_subresource_generation_locked(
+                resource,
+                subresource,
+                state,
+                generation);
+            resource_id = state->resource_id;
+            size_bytes = query_subresource_size(resource, subresource);
         }
         emit_hook_event(
             FluidHookEventTypeV1::map_write,
@@ -855,7 +1130,8 @@ HRESULT STDMETHODCALLTYPE hooked_map(
             0,
             size_bytes,
             generation,
-            static_cast<std::uint32_t>(map_type));
+            static_cast<std::uint32_t>(map_type),
+            subresource);
     }
     return result;
 }
@@ -882,13 +1158,13 @@ void STDMETHODCALLTYPE hooked_unmap(
     bool wrote_resource = false;
     {
         const std::lock_guard resource_lock(g_resource_mutex);
-        wrote_resource = g_pending_write_maps.erase(resource) != 0;
+        wrote_resource = g_pending_write_maps.erase(
+            SubresourceKey{resource, subresource}) != 0;
         if (wrote_resource) {
-            mark_resource_written_locked(resource);
+            mark_subresource_written_locked(resource, subresource, generation);
             const auto& state = ensure_resource_locked(resource);
             resource_id = state.resource_id;
-            size_bytes = state.size_bytes;
-            generation = state.generation;
+            size_bytes = query_subresource_size(resource, subresource);
         }
     }
     if (wrote_resource) {
@@ -898,7 +1174,9 @@ void STDMETHODCALLTYPE hooked_unmap(
             resource_id,
             0,
             size_bytes,
-            generation);
+            generation,
+            0,
+            subresource);
     }
 }
 
@@ -932,19 +1210,184 @@ void STDMETHODCALLTYPE hooked_update_subresource(
         std::uint64_t generation = 0;
         {
             const std::lock_guard resource_lock(g_resource_mutex);
-            mark_resource_written_locked(destination);
+            mark_subresource_written_locked(
+                destination,
+                destination_subresource,
+                generation);
             const auto& state = ensure_resource_locked(destination);
             resource_id = state.resource_id;
-            size_bytes = state.size_bytes;
-            generation = state.generation;
+            size_bytes = estimate_copy_region_bytes(
+                destination,
+                destination_subresource,
+                destination_box);
         }
         emit_hook_event(
             FluidHookEventTypeV1::update_subresource,
             resource_id,
             0,
             size_bytes,
-            generation);
+            generation,
+            0,
+            destination_subresource);
     }
+}
+
+void STDMETHODCALLTYPE hooked_copy_subresource_region(
+    ID3D11DeviceContext* context,
+    ID3D11Resource* destination,
+    UINT destination_subresource,
+    UINT destination_x,
+    UINT destination_y,
+    UINT destination_z,
+    ID3D11Resource* source,
+    UINT source_subresource,
+    const D3D11_BOX* source_box) {
+    const ActiveHookCall active_call;
+    const auto original =
+        g_original_copy_subresource_region.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        return;
+    }
+    if (destination == nullptr || source == nullptr) {
+        original(
+            context,
+            destination,
+            destination_subresource,
+            destination_x,
+            destination_y,
+            destination_z,
+            source,
+            source_subresource,
+            source_box);
+        refresh_context_hook_slots();
+        return;
+    }
+
+    CopyRegionIdentity region{
+        .destination_subresource = destination_subresource,
+        .destination_x = destination_x,
+        .destination_y = destination_y,
+        .destination_z = destination_z,
+        .source_subresource = source_subresource,
+        .has_source_box = source_box != nullptr,
+        .source_box = source_box != nullptr ? *source_box : D3D11_BOX{},
+    };
+    const auto empty_copy = source_box_is_empty(source_box);
+    const auto copy_bytes = estimate_copy_region_bytes(
+        source,
+        source_subresource,
+        source_box);
+    bool redundant_candidate = false;
+    bool source_subresource_valid = false;
+    bool destination_subresource_valid = false;
+    std::uint64_t source_id = 0;
+    std::uint64_t destination_id = 0;
+    std::uint64_t source_generation = 0;
+    std::uint64_t destination_generation = 0;
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        ResourceState* source_state = nullptr;
+        ResourceState* destination_state = nullptr;
+        source_subresource_valid = get_subresource_generation_locked(
+            source,
+            source_subresource,
+            source_state,
+            source_generation);
+        destination_subresource_valid = get_subresource_generation_locked(
+            destination,
+            destination_subresource,
+            destination_state,
+            destination_generation);
+        source_id = source_state->resource_id;
+        destination_id = destination_state->resource_id;
+
+        const auto previous_copy = g_last_subresource_copies.find(
+            SubresourceKey{destination, destination_subresource});
+        redundant_candidate =
+            (source != destination ||
+                source_subresource != destination_subresource) &&
+            !empty_copy && copy_bytes != 0 &&
+            source_subresource_valid && destination_subresource_valid &&
+            source_state->provenance_trusted &&
+            destination_state->provenance_trusted &&
+            previous_copy != g_last_subresource_copies.end() &&
+            previous_copy->second.source_resource_id == source_id &&
+            previous_copy->second.source_generation == source_generation &&
+            previous_copy->second.destination_generation == destination_generation &&
+            previous_copy->second.region == region;
+    }
+
+    original(
+        context,
+        destination,
+        destination_subresource,
+        destination_x,
+        destination_y,
+        destination_z,
+        source,
+        source_subresource,
+        source_box);
+    refresh_context_hook_slots();
+
+    if (!empty_copy) {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        const auto current_source = g_resources.find(source);
+        const auto current_destination = g_resources.find(destination);
+        const auto state_unchanged =
+            current_source != g_resources.end() &&
+            current_destination != g_resources.end() &&
+            current_source->second.resource_id == source_id &&
+            current_destination->second.resource_id == destination_id &&
+            source_subresource <
+                current_source->second.subresource_generations.size() &&
+            destination_subresource <
+                current_destination->second.subresource_generations.size() &&
+            current_source->second.subresource_generations[source_subresource] ==
+                source_generation &&
+            current_destination->second
+                    .subresource_generations[destination_subresource] ==
+                destination_generation;
+        redundant_candidate = redundant_candidate && state_unchanged;
+        const auto destination_marked = mark_subresource_written_locked(
+            destination,
+            destination_subresource,
+            destination_generation);
+        if (state_unchanged &&
+            source_subresource_valid && destination_subresource_valid &&
+            destination_marked && copy_bytes != 0) {
+            g_last_subresource_copies[
+                SubresourceKey{destination, destination_subresource}] =
+                LastSubresourceCopy{
+                    .source_resource_id = source_id,
+                    .source_generation = source_generation,
+                    .destination_generation = destination_generation,
+                    .region = region,
+                };
+        }
+    }
+
+    g_copy_subresource_region_count.fetch_add(1, std::memory_order_relaxed);
+    g_copy_subresource_region_bytes_estimated.fetch_add(
+        copy_bytes,
+        std::memory_order_relaxed);
+    if (redundant_candidate) {
+        g_redundant_subresource_copy_candidate_count.fetch_add(
+            1,
+            std::memory_order_relaxed);
+        g_redundant_subresource_copy_bytes_estimated.fetch_add(
+            copy_bytes,
+            std::memory_order_relaxed);
+    }
+    emit_hook_event(
+        FluidHookEventTypeV1::copy_subresource_region,
+        destination_id,
+        source_id,
+        copy_bytes,
+        destination_generation,
+        redundant_candidate ? fluid_hook_event_flag_redundant_candidate : 0,
+        destination_subresource,
+        source_subresource,
+        copy_region_key(region));
 }
 
 void STDMETHODCALLTYPE hooked_copy_resource(
@@ -1019,8 +1462,8 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     std::uint64_t destination_generation = 0;
     {
         const std::lock_guard resource_lock(g_resource_mutex);
+        mark_resource_written_locked(destination);
         auto& destination_state = ensure_resource_locked(destination);
-        ++destination_state.generation;
         destination_generation = destination_state.generation;
         g_last_copies[destination] = LastCopy{
             .source_resource_id = source_id,
@@ -1050,6 +1493,7 @@ void clear_original_functions() {
     g_original_create_texture2d.store(nullptr, std::memory_order_release);
     g_original_map.store(nullptr, std::memory_order_release);
     g_original_unmap.store(nullptr, std::memory_order_release);
+    g_original_copy_subresource_region.store(nullptr, std::memory_order_release);
     g_original_copy_resource.store(nullptr, std::memory_order_release);
     g_original_update_subresource.store(nullptr, std::memory_order_release);
 }
@@ -1131,6 +1575,10 @@ HRESULT WINAPI FluidHookAttachEx(
             context_vtable[kUnmapVtableIndex],
             reinterpret_cast<void*>(hooked_unmap)},
         HookSlot{
+            &context_vtable[kCopySubresourceRegionVtableIndex],
+            context_vtable[kCopySubresourceRegionVtableIndex],
+            reinterpret_cast<void*>(hooked_copy_subresource_region)},
+        HookSlot{
             &context_vtable[kCopyResourceVtableIndex],
             context_vtable[kCopyResourceVtableIndex],
             reinterpret_cast<void*>(hooked_copy_resource)},
@@ -1164,11 +1612,14 @@ HRESULT WINAPI FluidHookAttachEx(
     g_original_unmap.store(
         reinterpret_cast<UnmapFunction>(slots[4].original),
         std::memory_order_release);
+    g_original_copy_subresource_region.store(
+        reinterpret_cast<CopySubresourceRegionFunction>(slots[5].original),
+        std::memory_order_release);
     g_original_copy_resource.store(
-        reinterpret_cast<CopyResourceFunction>(slots[5].original),
+        reinterpret_cast<CopyResourceFunction>(slots[6].original),
         std::memory_order_release);
     g_original_update_subresource.store(
-        reinterpret_cast<UpdateSubresourceFunction>(slots[6].original),
+        reinterpret_cast<UpdateSubresourceFunction>(slots[7].original),
         std::memory_order_release);
     g_max_skipped_copy_count.store(max_skipped_copy_count, std::memory_order_release);
     g_track_resource_lifetime.store(track_resource_lifetime, std::memory_order_release);
@@ -1305,6 +1756,7 @@ HRESULT WINAPI FluidHookDetach() {
         const std::lock_guard resource_lock(g_resource_mutex);
         g_resources.clear();
         g_last_copies.clear();
+        g_last_subresource_copies.clear();
         g_pending_write_maps.clear();
         g_retired_resources.clear();
         g_retired_resource_order.clear();
@@ -1424,6 +1876,14 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_release_hook_failure_count.load(std::memory_order_relaxed);
     result.automatic_lifetime_tracking =
         g_track_resource_lifetime.load(std::memory_order_acquire) ? 1 : 0;
+    result.copy_subresource_region_count =
+        g_copy_subresource_region_count.load(std::memory_order_relaxed);
+    result.copy_subresource_region_bytes_estimated =
+        g_copy_subresource_region_bytes_estimated.load(std::memory_order_relaxed);
+    result.redundant_subresource_copy_candidate_count =
+        g_redundant_subresource_copy_candidate_count.load(std::memory_order_relaxed);
+    result.redundant_subresource_copy_bytes_estimated =
+        g_redundant_subresource_copy_bytes_estimated.load(std::memory_order_relaxed);
     {
         const std::lock_guard patch_lock(g_patch_mutex);
         result.release_hook_slot_count = g_release_hook_slots.size();

@@ -56,4 +56,12 @@ public sealed record HookLabReport(
     ulong GpuFrequency,
     ulong GpuWorkloadTicks,
     double? GpuWorkloadMicroseconds,
-    JsonElement TargetReport);
+    JsonElement TargetReport,
+    string SubresourceProvenanceScope = "",
+    long CopySubresourceRegionCount = 0,
+    ulong CopySubresourceRegionBytes = 0,
+    long RedundantSubresourceCopyCandidateCount = 0,
+    ulong RedundantSubresourceCopyBytes = 0,
+    bool SubresourceContentEquivalent = false,
+    string SourceSubresourceHash = "",
+    string DestinationSubresourceHash = "");

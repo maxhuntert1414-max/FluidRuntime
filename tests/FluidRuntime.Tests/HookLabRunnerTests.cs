@@ -47,6 +47,14 @@ public sealed class HookLabRunnerTests
         wrongFlags[5] = wrongFlags[5] with { Flags = 1 };
         Assert.False(HookLabRunner.MatchesDeterministicWorkload(wrongFlags, 1));
 
+        var wrongSubresource = BuildDeterministicWorkload();
+        wrongSubresource[16] = wrongSubresource[16] with { SubresourceB = 0 };
+        Assert.False(HookLabRunner.MatchesDeterministicWorkload(wrongSubresource, 1));
+
+        var wrongRegion = BuildDeterministicWorkload();
+        wrongRegion[23] = wrongRegion[23] with { RegionKey = wrongRegion[22].RegionKey };
+        Assert.False(HookLabRunner.MatchesDeterministicWorkload(wrongRegion, 1));
+
         var invalidRefresh = BuildDeterministicWorkload();
         invalidRefresh.Insert(5, new HookIpcEvent(
             Sequence: 5,
@@ -78,41 +86,57 @@ public sealed class HookLabRunnerTests
             ulong ResourceB,
             ulong SizeBytes,
             ulong Generation,
-            uint Flags)>
+            uint Flags,
+            uint SubresourceA,
+            uint SubresourceB)>
         {
-            (HookEventType.CreateBuffer, 1UL, 0UL, 4096UL, 1UL, 0U),
-            (HookEventType.CreateBuffer, 2UL, 0UL, 4096UL, 0UL, 0U),
-            (HookEventType.CreateBuffer, 3UL, 0UL, 4096UL, 0UL, 0U),
-            (HookEventType.MapWrite, 3UL, 0UL, 4096UL, 0UL, 4U),
-            (HookEventType.UnmapWrite, 3UL, 0UL, 4096UL, 1UL, 0U),
-            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 1UL, 0U),
-            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 2UL, 1U),
-            (HookEventType.UpdateSubresource, 1UL, 0UL, 4096UL, 2UL, 0U),
-            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 3UL, 0U),
-            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 4UL, 1U),
-            (HookEventType.CreateTexture2D, 4UL, 0UL, 16384UL, 1UL, 0U),
-            (HookEventType.CreateTexture2D, 5UL, 0UL, 16384UL, 0UL, 0U),
-            (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 1UL, 0U),
-            (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 2UL, 1U),
-            (HookEventType.CreateBuffer, 6UL, 0UL, 256UL, 0UL, 0U),
-            (HookEventType.ResourceRetire, 6UL, 0UL, 256UL, 0UL, 0U)
+            (HookEventType.CreateBuffer, 1UL, 0UL, 4096UL, 1UL, 0U, 0U, 0U),
+            (HookEventType.CreateBuffer, 2UL, 0UL, 4096UL, 0UL, 0U, 0U, 0U),
+            (HookEventType.CreateBuffer, 3UL, 0UL, 4096UL, 0UL, 0U, 0U, 0U),
+            (HookEventType.MapWrite, 3UL, 0UL, 4096UL, 0UL, 4U, 0U, 0U),
+            (HookEventType.UnmapWrite, 3UL, 0UL, 4096UL, 1UL, 0U, 0U, 0U),
+            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 1UL, 0U, 0U, 0U),
+            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 2UL, 1U, 0U, 0U),
+            (HookEventType.UpdateSubresource, 1UL, 0UL, 4096UL, 2UL, 0U, 0U, 0U),
+            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 3UL, 0U, 0U, 0U),
+            (HookEventType.CopyResource, 2UL, 1UL, 4096UL, 4UL, 1U, 0U, 0U),
+            (HookEventType.CreateTexture2D, 4UL, 0UL, 16384UL, 1UL, 0U, 0U, 0U),
+            (HookEventType.CreateTexture2D, 5UL, 0UL, 16384UL, 0UL, 0U, 0U, 0U),
+            (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 1UL, 0U, 0U, 0U),
+            (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 2UL, 1U, 0U, 0U),
+            (HookEventType.CreateTexture2D, 6UL, 0UL, 5120UL, 1UL, 0U, 0U, 0U),
+            (HookEventType.CreateTexture2D, 7UL, 0UL, 5120UL, 0UL, 0U, 0U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 1UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 0UL, 1UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 2UL, 1U, 1U, 1U),
+            (HookEventType.UpdateSubresource, 6UL, 0UL, 4096UL, 2UL, 0U, 0U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 3UL, 1U, 1U, 1U),
+            (HookEventType.UpdateSubresource, 6UL, 0UL, 1024UL, 3UL, 0U, 1U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 4UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 5UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 6UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 7UL, 1U, 1U, 1U),
+            (HookEventType.CreateBuffer, 8UL, 0UL, 256UL, 0UL, 0U, 0U, 0U),
+            (HookEventType.ResourceRetire, 8UL, 0UL, 256UL, 0UL, 0U, 0U, 0U)
         };
         for (var cycle = 0; cycle < 64; ++cycle)
         {
-            var resourceId = (ulong)(7 + cycle);
-            definitions.Add((HookEventType.CreateBuffer, resourceId, 0, 512, 0, 0));
+            var resourceId = (ulong)(9 + cycle);
+            definitions.Add((HookEventType.CreateBuffer, resourceId, 0, 512, 0, 0, 0, 0));
             definitions.Add((
                 HookEventType.ResourceReuse,
                 resourceId - 1,
                 resourceId,
                 512,
                 0,
+                0,
+                0,
                 0));
-            definitions.Add((HookEventType.ResourceDestroy, resourceId, 0, 512, 0, 0));
+            definitions.Add((HookEventType.ResourceDestroy, resourceId, 0, 512, 0, 0, 0, 0));
         }
-        definitions.Add((HookEventType.Present, 0, 0, 0, 1, 0));
+        definitions.Add((HookEventType.Present, 0, 0, 0, 1, 0, 0, 0));
 
-        return definitions.Select((item, index) => new HookIpcEvent(
+        var events = definitions.Select((item, index) => new HookIpcEvent(
             Sequence: index,
             QpcTicks: 1000 + index,
             Type: item.Type,
@@ -121,6 +145,18 @@ public sealed class HookLabRunnerTests
             ResourceB: item.ResourceB,
             SizeBytes: item.SizeBytes,
             Generation: item.Generation,
-            Flags: item.Flags)).ToList();
+            Flags: item.Flags,
+            SubresourceA: item.SubresourceA,
+            SubresourceB: item.SubresourceB)).ToList();
+        const ulong fullRegion = 100;
+        events[16] = events[16] with { RegionKey = fullRegion };
+        events[17] = events[17] with { RegionKey = 200 };
+        events[18] = events[18] with { RegionKey = fullRegion };
+        events[20] = events[20] with { RegionKey = fullRegion };
+        events[22] = events[22] with { RegionKey = 300 };
+        events[23] = events[23] with { RegionKey = 400 };
+        events[24] = events[24] with { RegionKey = fullRegion };
+        events[25] = events[25] with { RegionKey = fullRegion };
+        return events;
     }
 }

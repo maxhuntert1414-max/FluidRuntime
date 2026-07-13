@@ -80,9 +80,10 @@ public static class ResourceLifecycleValidator
                     break;
 
                 case HookEventType.CopyResource:
+                case HookEventType.CopySubresourceRegion:
                     if (!active.Contains(item.ResourceA) || !active.Contains(item.ResourceB))
                     {
-                        return Invalid("CopyResource must reference active destination and source resources.", active, retired);
+                        return Invalid("Copy event must reference active destination and source resources.", active, retired);
                     }
                     break;
 
