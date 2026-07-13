@@ -1,0 +1,13 @@
+{
+  "mode": "fluidruntime-concurrent-lifetime-detach-v0.7.1",
+  "target_owned": true,
+  "automatic_lifetime_tracking": true,
+  "completed_cycles": 140,
+  "release_hook_slot_count": 1,
+  "release_hook_failure_count": 0,
+  "provenance_failure_count": 0,
+  "attach_hresult": "0x00000000",
+  "snapshot_hresult": "0x00000000",
+  "detach_hresult": "0x00000000",
+  "rollback_restored": true
+}

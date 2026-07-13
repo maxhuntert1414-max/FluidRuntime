@@ -33,7 +33,8 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.7 publishes 64-byte ABI-v2 events into a 1,024-slot named shared-memory ring.
+Version 0.7.1 publishes 64-byte ABI-v3 events into a 1,024-slot named
+shared-memory ring.
 The mapping is local to the Windows session and named for the target PID. The
 header and event layouts are versioned independently from the report schema.
 
@@ -91,11 +92,21 @@ from its retired ID to a fresh monotonic ID. The managed runtime reconstructs
 active and retired sets from IPC and fails closed on duplicate IDs, non-monotonic
 creation, reuse without retirement, or operations involving retired IDs.
 
+The v0.7.1 automatic path is opt-in through `FluidHookAttachEx`. It patches only
+the `IUnknown::Release` slots of Buffer/Texture2D interface vtables observed from
+owned-target creation calls. Each hook copies its original function under a
+short patch lock, releases all FluidRuntime locks, calls the original Release,
+and treats a zero test return as destruction of that exact interface identity.
+Destruction uses the same provenance invalidation and bounded ABA history as
+cooperative retirement. Detach restores both fixed and dynamic slots, waits for
+all in-flight calls, and clears the dynamic registry before DLL unload. A normal
+`FluidHookAttach` path installs no Release hooks.
+
 ## Known Limits
 
 - D3D11 only; D3D12 and Vulkan are not instrumented yet.
-- Retirement is cooperative in the owned target; automatic COM destruction is
-  not observed yet.
+- Automatic destruction is only proven for the same returned Buffer/Texture2D
+  interface identity in the owned target; interface aliases are not covered.
 - Shader/UAV writes, subresource copies, fences, and aliasing are not yet part
   of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the

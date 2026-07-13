@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.7.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.7.1 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -47,4 +47,17 @@ add_test(
         --hook $<TARGET_FILE:fluidruntime-present-hook>
         --frames 30
         --skip-first-redundant-copy
+)
+add_test(
+    NAME fluidruntime-cooperative-lifetime-fallback
+    COMMAND fluidruntime-hook-target
+        --hook $<TARGET_FILE:fluidruntime-present-hook>
+        --frames 30
+        --cooperative-lifetime
+)
+add_test(
+    NAME fluidruntime-concurrent-lifetime-detach
+    COMMAND fluidruntime-hook-target
+        --hook $<TARGET_FILE:fluidruntime-present-hook>
+        --concurrent-lifetime-stress
 )

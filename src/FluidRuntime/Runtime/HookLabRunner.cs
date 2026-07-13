@@ -110,10 +110,14 @@ public sealed class HookLabRunner
         var gpuWorkloadTicks = timing.GetProperty("gpu_workload_ticks").GetUInt64();
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.7",
+            "fluidruntime-hook-ipc-lab-v0.7.1",
             ReadOnly: !options.SkipFirstRedundantCopy,
             WouldModifySystem: false,
             CopyElisionEnabled: options.SkipFirstRedundantCopy,
+            AutomaticLifetimeTracking:
+                targetReport.GetProperty("automatic_lifetime_tracking").GetBoolean(),
+            ReleaseObservationScope:
+                targetReport.GetProperty("release_observation_scope").GetString() ?? string.Empty,
             RenderDriver: targetReport.GetProperty("render_driver").GetString() ?? string.Empty,
             AdapterIdentityAvailable: adapter.GetProperty("available").GetBoolean(),
             AdapterDescription: adapter.GetProperty("description").GetString() ?? string.Empty,
@@ -133,6 +137,7 @@ public sealed class HookLabRunner
             NativeOverrunCount: reader.NativeOverrunCount,
             EventTypeCounts: eventTypeCounts,
             ResourceRetireCount: resources.GetProperty("resource_retire_count").GetInt64(),
+            ResourceDestroyCount: resources.GetProperty("resource_destroy_count").GetInt64(),
             ResourceReuseCount: resources.GetProperty("resource_reuse_count").GetInt64(),
             ActiveResourceCount: lifecycle.ActiveResourceIds.Count,
             RetiredResourceIdCount: lifecycle.RetiredResourceIds.Count,
@@ -140,6 +145,10 @@ public sealed class HookLabRunner
                 resources.GetProperty("retired_resource_identity_count").GetInt64(),
             ProvenanceFailureCount:
                 resources.GetProperty("provenance_failure_count").GetInt64(),
+            ReleaseHookSlotCount:
+                resources.GetProperty("release_hook_slot_count").GetInt64(),
+            ReleaseHookFailureCount:
+                resources.GetProperty("release_hook_failure_count").GetInt64(),
             CopyResourceBytes: copyBytes,
             RedundantCopyCandidateCount: redundantCopyEvents.LongLength,
             RedundantCopyBytes: redundantBytes,
@@ -216,7 +225,11 @@ public sealed class HookLabRunner
         var gpuTimingDisjoint = timing.GetProperty("gpu_timing_disjoint").GetBoolean();
         var gpuQueryTimedOut = timing.GetProperty("gpu_query_timed_out").GetBoolean();
         var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
-        if (report.GetProperty("mode").GetString() != "fluidruntime-resource-hook-lab-v0.7" ||
+        if (report.GetProperty("mode").GetString() !=
+                "fluidruntime-resource-hook-lab-v0.7.1" ||
+            !report.GetProperty("automatic_lifetime_tracking").GetBoolean() ||
+            report.GetProperty("release_observation_scope").GetString() !=
+                "owned-returned-buffer-texture-interface" ||
             report.GetProperty("read_only_hook").GetBoolean() == copyElisionEnabled ||
             report.GetProperty("would_modify_frame_data").GetBoolean() ||
             report.GetProperty("would_skip_copies").GetBoolean() != copyElisionEnabled ||
@@ -275,8 +288,13 @@ public sealed class HookLabRunner
                 resources.GetProperty("hook_refresh_count").GetInt64() &&
             CountEvents(events, HookEventType.ResourceRetire) ==
                 resources.GetProperty("resource_retire_count").GetInt64() &&
+            CountEvents(events, HookEventType.ResourceDestroy) ==
+                resources.GetProperty("resource_destroy_count").GetInt64() &&
             CountEvents(events, HookEventType.ResourceReuse) ==
                 resources.GetProperty("resource_reuse_count").GetInt64();
+        var completedLifecycleCount =
+            resources.GetProperty("resource_retire_count").GetInt64() +
+            resources.GetProperty("resource_destroy_count").GetInt64();
         if (events.Count != expectedEventCount ||
             !sequencesMatch ||
             !knownEventTypes ||
@@ -285,12 +303,13 @@ public sealed class HookLabRunner
             !lifecycle.IsValid ||
             lifecycle.ActiveResourceIds.Count !=
                 resources.GetProperty("tracked_resource_count").GetInt64() ||
-            lifecycle.RetiredResourceIds.Count !=
-                resources.GetProperty("resource_retire_count").GetInt64() ||
+            lifecycle.RetiredResourceIds.Count != completedLifecycleCount ||
             resources.GetProperty("provenance_failure_count").GetInt64() != 0 ||
+            resources.GetProperty("release_hook_slot_count").GetInt64() < 2 ||
+            resources.GetProperty("release_hook_failure_count").GetInt64() != 0 ||
             resources.GetProperty("retired_resource_identity_count").GetInt64() +
                 resources.GetProperty("resource_reuse_count").GetInt64() !=
-                resources.GetProperty("resource_retire_count").GetInt64() ||
+                completedLifecycleCount ||
             events.Any(item =>
                 item.Type == HookEventType.ResourceReuse && item.Flags != 0) ||
             copyEvents.Count != resources.GetProperty("copy_resource_count").GetInt64() ||
@@ -377,8 +396,10 @@ public sealed class HookLabRunner
         var nonRefreshEvents = events
             .Where(item => item.Type != HookEventType.HookRefresh)
             .ToArray();
+        const int automaticLifetimeCycles = 64;
         if (nonRefreshEvents.LongLength <
-            expectedCoreEvents.LongLength + 4 + expectedPresentCount)
+            expectedCoreEvents.LongLength + 2 +
+                automaticLifetimeCycles * 2 + expectedPresentCount)
         {
             return false;
         }
@@ -399,51 +420,75 @@ public sealed class HookLabRunner
         }
 
         var cursor = expectedCoreEvents.Length;
-        var firstCreate = nonRefreshEvents[cursor++];
-        var firstRetire = nonRefreshEvents[cursor++];
-        var secondCreate = nonRefreshEvents[cursor++];
-        if (firstCreate.Type != HookEventType.CreateBuffer ||
-            firstCreate.ResourceA != 6 ||
-            firstCreate.ResourceB != 0 ||
-            firstCreate.SizeBytes != 256 ||
-            firstCreate.Generation != 0 ||
-            firstCreate.Flags != 0 ||
-            firstRetire.Type != HookEventType.ResourceRetire ||
-            firstRetire.ResourceA != 6 ||
-            firstRetire.ResourceB != 0 ||
-            firstRetire.SizeBytes != 256 ||
-            firstRetire.Generation != 0 ||
-            firstRetire.Flags != 0 ||
-            secondCreate.Type != HookEventType.CreateBuffer ||
-            secondCreate.ResourceA != 7 ||
-            secondCreate.ResourceB != 0 ||
-            secondCreate.SizeBytes != 256 ||
-            secondCreate.Generation != 0 ||
-            secondCreate.Flags != 0)
+        var cooperativeCreate = nonRefreshEvents[cursor++];
+        var cooperativeRetire = nonRefreshEvents[cursor++];
+        if (cooperativeCreate.Type != HookEventType.CreateBuffer ||
+            cooperativeCreate.ResourceA != 6 ||
+            cooperativeCreate.ResourceB != 0 ||
+            cooperativeCreate.SizeBytes != 256 ||
+            cooperativeCreate.Generation != 0 ||
+            cooperativeCreate.Flags != 0 ||
+            cooperativeRetire.Type != HookEventType.ResourceRetire ||
+            cooperativeRetire.ResourceA != 6 ||
+            cooperativeRetire.ResourceB != 0 ||
+            cooperativeRetire.SizeBytes != 256 ||
+            cooperativeRetire.Generation != 0 ||
+            cooperativeRetire.Flags != 0)
         {
             return false;
         }
 
-        if (nonRefreshEvents[cursor].Type == HookEventType.ResourceReuse)
+        var retiredIds = new HashSet<ulong> { 6 };
+        for (var cycle = 0; cycle < automaticLifetimeCycles; ++cycle)
         {
-            var reuse = nonRefreshEvents[cursor++];
-            if (reuse.ResourceA != 6 ||
-                reuse.ResourceB != 7 ||
-                reuse.SizeBytes != 256 ||
-                reuse.Generation != 0 ||
-                reuse.Flags != 0)
+            var expectedResourceId = (ulong)(7 + cycle);
+            if (cursor >= nonRefreshEvents.Length)
             {
                 return false;
             }
+            var create = nonRefreshEvents[cursor++];
+            if (create.Type != HookEventType.CreateBuffer ||
+                create.ResourceA != expectedResourceId ||
+                create.ResourceB != 0 ||
+                create.SizeBytes != 512 ||
+                create.Generation != 0 ||
+                create.Flags != 0)
+            {
+                return false;
+            }
+
+            if (cursor < nonRefreshEvents.Length &&
+                nonRefreshEvents[cursor].Type == HookEventType.ResourceReuse)
+            {
+                var reuse = nonRefreshEvents[cursor++];
+                if (!retiredIds.Contains(reuse.ResourceA) ||
+                    reuse.ResourceB != expectedResourceId ||
+                    reuse.SizeBytes != 512 ||
+                    reuse.Generation != 0 ||
+                    reuse.Flags != 0)
+                {
+                    return false;
+                }
+            }
+
+            if (cursor >= nonRefreshEvents.Length)
+            {
+                return false;
+            }
+            var destroy = nonRefreshEvents[cursor++];
+            if (destroy.Type != HookEventType.ResourceDestroy ||
+                destroy.ResourceA != expectedResourceId ||
+                destroy.ResourceB != 0 ||
+                destroy.SizeBytes != 512 ||
+                destroy.Generation != 0 ||
+                destroy.Flags != 0)
+            {
+                return false;
+            }
+            retiredIds.Add(expectedResourceId);
         }
 
-        var secondRetire = nonRefreshEvents[cursor++];
-        if (secondRetire.Type != HookEventType.ResourceRetire ||
-            secondRetire.ResourceA != 7 ||
-            secondRetire.ResourceB != 0 ||
-            secondRetire.SizeBytes != 256 ||
-            secondRetire.Generation != 0 ||
-            secondRetire.Flags != 0 ||
+        if (
             nonRefreshEvents.LongLength != cursor + expectedPresentCount)
         {
             return false;

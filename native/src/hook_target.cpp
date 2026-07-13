@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -20,7 +22,9 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 constexpr UINT kBufferBytes = 4096;
-constexpr UINT kTransientBufferBytes = 256;
+constexpr UINT kCooperativeBufferBytes = 256;
+constexpr UINT kAutomaticBufferBytes = 512;
+constexpr int kAutomaticLifetimeCycles = 64;
 constexpr UINT kTextureWidth = 64;
 constexpr UINT kTextureHeight = 64;
 constexpr std::uint64_t kExpectedCopyCount = 6;
@@ -29,7 +33,8 @@ constexpr std::uint64_t kExpectedRedundantCopyCount = 3;
 constexpr std::uint64_t kExpectedRedundantCopyBytes = 24576;
 constexpr std::uint64_t kExpectedSkippedCopyCount = 1;
 constexpr std::uint64_t kExpectedSkippedCopyBytes = kBufferBytes;
-constexpr std::uint64_t kExpectedResourceRetireCount = 2;
+constexpr std::uint64_t kExpectedResourceRetireCount = 1;
+constexpr std::uint64_t kExpectedResourceDestroyCount = kAutomaticLifetimeCycles;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
@@ -41,6 +46,8 @@ struct Options {
     unsigned long gpu_timeout_ms{1000};
     bool use_hardware{};
     bool skip_first_redundant_copy{};
+    bool automatic_lifetime_tracking{true};
+    bool concurrent_lifetime_stress{};
 };
 
 struct WorkloadResources {
@@ -140,6 +147,10 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
             options.use_hardware = true;
         } else if (argument == L"--skip-first-redundant-copy") {
             options.skip_first_redundant_copy = true;
+        } else if (argument == L"--cooperative-lifetime") {
+            options.automatic_lifetime_tracking = false;
+        } else if (argument == L"--concurrent-lifetime-stress") {
+            options.concurrent_lifetime_stress = true;
         } else {
             return std::nullopt;
         }
@@ -624,7 +635,8 @@ bool run_resource_workload(
 
 bool run_resource_lifetime_workload(
     ID3D11Device* device,
-    FluidHookRetireResourceFunction retire_resource) {
+    FluidHookRetireResourceFunction retire_resource,
+    bool automatic_lifetime_tracking) {
     if (device == nullptr || retire_resource == nullptr) {
         return false;
     }
@@ -632,19 +644,96 @@ bool run_resource_lifetime_workload(
         return false;
     }
 
-    D3D11_BUFFER_DESC description{};
-    description.ByteWidth = kTransientBufferBytes;
-    description.Usage = D3D11_USAGE_DEFAULT;
-    for (int index = 0; index < 2; ++index) {
+    D3D11_BUFFER_DESC cooperative_description{};
+    cooperative_description.ByteWidth = kCooperativeBufferBytes;
+    cooperative_description.Usage = D3D11_USAGE_DEFAULT;
+    ComPtr<ID3D11Buffer> cooperative_buffer;
+    if (FAILED(device->CreateBuffer(
+            &cooperative_description,
+            nullptr,
+            &cooperative_buffer)) ||
+        retire_resource(cooperative_buffer.Get()) != S_OK ||
+        retire_resource(cooperative_buffer.Get()) != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+        return false;
+    }
+    cooperative_buffer.Reset();
+
+    D3D11_BUFFER_DESC automatic_description{};
+    automatic_description.ByteWidth = kAutomaticBufferBytes;
+    automatic_description.Usage = D3D11_USAGE_DEFAULT;
+    for (int index = 0; index < kAutomaticLifetimeCycles; ++index) {
         ComPtr<ID3D11Buffer> buffer;
-        if (FAILED(device->CreateBuffer(&description, nullptr, &buffer)) ||
-            retire_resource(buffer.Get()) != S_OK ||
-            retire_resource(buffer.Get()) != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+        if (FAILED(device->CreateBuffer(&automatic_description, nullptr, &buffer))) {
+            return false;
+        }
+        if (!automatic_lifetime_tracking && retire_resource(buffer.Get()) != S_OK) {
             return false;
         }
         buffer.Reset();
     }
     return true;
+}
+
+bool run_concurrent_lifetime_detach_stress(
+    ID3D11Device* device,
+    FluidHookDetachFunction detach,
+    FluidHookIsAttachedFunction is_attached,
+    FluidHookReadSnapshotFunction read_snapshot,
+    unsigned long& completed_cycles,
+    FluidHookSnapshotV1& pre_detach_snapshot,
+    HRESULT& snapshot_result,
+    HRESULT& detach_result) {
+    if (device == nullptr || detach == nullptr || is_attached == nullptr ||
+        read_snapshot == nullptr) {
+        return false;
+    }
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+    std::atomic<bool> worker_succeeded{true};
+    std::atomic<unsigned long> completed{0};
+    std::thread worker([&] {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        D3D11_BUFFER_DESC description{};
+        description.ByteWidth = kAutomaticBufferBytes;
+        description.Usage = D3D11_USAGE_DEFAULT;
+        while (!stop.load(std::memory_order_acquire) &&
+               completed.load(std::memory_order_relaxed) < 100000) {
+            ComPtr<ID3D11Buffer> buffer;
+            if (FAILED(device->CreateBuffer(&description, nullptr, &buffer))) {
+                worker_succeeded.store(false, std::memory_order_release);
+                break;
+            }
+            buffer.Reset();
+            completed.fetch_add(1, std::memory_order_release);
+        }
+    });
+
+    start.store(true, std::memory_order_release);
+    for (int waited_ms = 0;
+         completed.load(std::memory_order_acquire) < 64 &&
+             worker_succeeded.load(std::memory_order_acquire) &&
+             waited_ms < 5000;
+         ++waited_ms) {
+        Sleep(1);
+    }
+    pre_detach_snapshot.struct_size = sizeof(pre_detach_snapshot);
+    snapshot_result = read_snapshot(&pre_detach_snapshot);
+    detach_result = detach();
+    stop.store(true, std::memory_order_release);
+    worker.join();
+    completed_cycles = completed.load(std::memory_order_acquire);
+    return worker_succeeded.load(std::memory_order_acquire) &&
+        completed_cycles >= 64 &&
+        SUCCEEDED(snapshot_result) &&
+        pre_detach_snapshot.automatic_lifetime_tracking == 1 &&
+        pre_detach_snapshot.release_hook_slot_count >= 1 &&
+        pre_detach_snapshot.release_hook_failure_count == 0 &&
+        pre_detach_snapshot.provenance_failure_count == 0 &&
+        SUCCEEDED(detach_result) &&
+        is_attached() == FALSE;
 }
 
 bool snapshot_matches_workload(
@@ -656,10 +745,17 @@ bool snapshot_matches_workload(
     const auto expected_skipped_bytes = options.skip_first_redundant_copy
         ? kExpectedSkippedCopyBytes
         : 0;
+    const auto expected_retire_count = options.automatic_lifetime_tracking
+        ? kExpectedResourceRetireCount
+        : kExpectedResourceRetireCount + kExpectedResourceDestroyCount;
+    const auto expected_destroy_count = options.automatic_lifetime_tracking
+        ? kExpectedResourceDestroyCount
+        : 0;
     return snapshot.abi_version == fluid_hook_snapshot_abi_version &&
-        snapshot.create_buffer_count == 5 &&
+        snapshot.create_buffer_count == 4 + kAutomaticLifetimeCycles &&
         snapshot.buffer_bytes_requested ==
-            3 * kBufferBytes + 2 * kTransientBufferBytes &&
+            3 * kBufferBytes + kCooperativeBufferBytes +
+                kAutomaticLifetimeCycles * kAutomaticBufferBytes &&
         snapshot.create_texture2d_count == 2 &&
         snapshot.texture_bytes_estimated == 2 * kTextureWidth * kTextureHeight * 4 &&
         snapshot.map_write_count == 1 &&
@@ -675,14 +771,21 @@ bool snapshot_matches_workload(
         snapshot.skipped_copy_count == expected_skipped_count &&
         snapshot.skipped_copy_bytes_estimated == expected_skipped_bytes &&
         snapshot.tracked_resource_count == 5 &&
-        snapshot.resource_retire_count == kExpectedResourceRetireCount &&
-        snapshot.resource_reuse_count <= 1 &&
+        snapshot.resource_retire_count == expected_retire_count &&
+        snapshot.resource_destroy_count == expected_destroy_count &&
+        snapshot.resource_reuse_count <= kAutomaticLifetimeCycles &&
         snapshot.retired_resource_identity_count + snapshot.resource_reuse_count ==
-            kExpectedResourceRetireCount &&
+            expected_retire_count + expected_destroy_count &&
         snapshot.provenance_failure_count == 0 &&
+        (options.automatic_lifetime_tracking
+            ? snapshot.release_hook_slot_count >= 2
+            : snapshot.release_hook_slot_count == 0) &&
+        snapshot.release_hook_failure_count == 0 &&
+        snapshot.automatic_lifetime_tracking ==
+            (options.automatic_lifetime_tracking ? 1ULL : 0ULL) &&
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >=
-            snapshot.present_count + 18 + snapshot.resource_reuse_count &&
+            snapshot.present_count + 144 + snapshot.resource_reuse_count &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -704,7 +807,7 @@ std::string build_report(
     const AdapterIdentity& adapter) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7.1\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -718,6 +821,13 @@ std::string build_report(
            << "  \"optimization_kind\": \"skip-first-redundant-copy-resource\",\n"
            << "  \"max_skipped_copy_count\": "
            << (options.skip_first_redundant_copy ? 1 : 0) << ",\n"
+           << "  \"automatic_lifetime_tracking\": "
+           << (snapshot.automatic_lifetime_tracking != 0 ? "true" : "false") << ",\n"
+           << "  \"release_observation_scope\": "
+           << (snapshot.automatic_lifetime_tracking != 0
+               ? "\"owned-returned-buffer-texture-interface\""
+               : "\"cooperative-retire-only\"")
+           << ",\n"
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
            << "  \"adapter\": {\n"
@@ -810,6 +920,11 @@ std::string build_report(
            << snapshot.retired_resource_identity_count << ",\n"
            << "    \"provenance_failure_count\": "
            << snapshot.provenance_failure_count << ",\n"
+           << "    \"resource_destroy_count\": " << snapshot.resource_destroy_count << ",\n"
+           << "    \"release_hook_slot_count\": "
+           << snapshot.release_hook_slot_count << ",\n"
+           << "    \"release_hook_failure_count\": "
+           << snapshot.release_hook_failure_count << ",\n"
            << "    \"hook_refresh_count\": " << snapshot.hook_refresh_count << ",\n"
            << "    \"hook_refresh_failure_count\": "
            << snapshot.hook_refresh_failure_count << ",\n"
@@ -833,7 +948,8 @@ int wmain(int argc, wchar_t* argv[]) {
                       L"[--frames <count>] [--hold-ms <milliseconds>] "
                       L"[--gpu-timeout-ms <milliseconds>] "
                       L"[--out <report.json>] [--hardware] "
-                      L"[--skip-first-redundant-copy]\n";
+                      L"[--skip-first-redundant-copy] [--cooperative-lifetime] "
+                      L"[--concurrent-lifetime-stress]\n";
         return 2;
     }
 
@@ -964,11 +1080,72 @@ int wmain(int argc, wchar_t* argv[]) {
     FluidHookAttachOptionsV1 attach_options{};
     attach_options.struct_size = sizeof(attach_options);
     attach_options.abi_version = fluid_hook_attach_options_abi_version;
-    attach_options.flags = fluid_hook_attach_flag_skip_first_redundant_copy;
-    attach_options.max_skipped_copy_count = 1;
-    const auto attach_result = options->skip_first_redundant_copy
-        ? attach_ex(swap_chain.Get(), &attach_options)
-        : attach(swap_chain.Get());
+    attach_options.flags = options->automatic_lifetime_tracking
+        ? fluid_hook_attach_flag_track_resource_lifetime
+        : 0;
+    attach_options.max_skipped_copy_count = 0;
+    if (options->skip_first_redundant_copy) {
+        attach_options.flags |= fluid_hook_attach_flag_skip_first_redundant_copy;
+        attach_options.max_skipped_copy_count = 1;
+    }
+    const auto attach_result =
+        !options->automatic_lifetime_tracking && !options->skip_first_redundant_copy
+        ? attach(swap_chain.Get())
+        : attach_ex(swap_chain.Get(), &attach_options);
+    if (options->concurrent_lifetime_stress) {
+        unsigned long completed_cycles = 0;
+        FluidHookSnapshotV1 stress_snapshot{};
+        HRESULT stress_snapshot_result = E_UNEXPECTED;
+        HRESULT stress_detach_result = E_UNEXPECTED;
+        const auto stress_succeeded =
+            SUCCEEDED(attach_result) &&
+            options->automatic_lifetime_tracking &&
+            run_concurrent_lifetime_detach_stress(
+                device.Get(),
+                detach,
+                is_attached,
+                read_snapshot,
+                completed_cycles,
+                stress_snapshot,
+                stress_snapshot_result,
+                stress_detach_result);
+        std::ostringstream stress_output;
+        stress_output << "{\n"
+                      << "  \"mode\": "
+                         "\"fluidruntime-concurrent-lifetime-detach-v0.7.1\",\n"
+                      << "  \"target_owned\": true,\n"
+                      << "  \"automatic_lifetime_tracking\": true,\n"
+                      << "  \"completed_cycles\": " << completed_cycles << ",\n"
+                      << "  \"release_hook_slot_count\": "
+                      << stress_snapshot.release_hook_slot_count << ",\n"
+                      << "  \"release_hook_failure_count\": "
+                      << stress_snapshot.release_hook_failure_count << ",\n"
+                      << "  \"provenance_failure_count\": "
+                      << stress_snapshot.provenance_failure_count << ",\n"
+                      << "  \"attach_hresult\": \""
+                      << hresult_hex(attach_result) << "\",\n"
+                      << "  \"snapshot_hresult\": \""
+                      << hresult_hex(stress_snapshot_result) << "\",\n"
+                      << "  \"detach_hresult\": \""
+                      << hresult_hex(stress_detach_result) << "\",\n"
+                      << "  \"rollback_restored\": "
+                      << (stress_succeeded ? "true" : "false") << "\n"
+                      << "}\n";
+        const auto stress_report = stress_output.str();
+        std::cout << stress_report;
+        auto report_written = true;
+        if (!options->output_path.empty()) {
+            std::ofstream output(options->output_path, std::ios::binary);
+            output << stress_report;
+            report_written = output.good();
+        }
+        if (stress_succeeded) {
+            FreeLibrary(hook_module);
+        }
+        DestroyWindow(window);
+        UnregisterClassW(window_class_name, instance);
+        return stress_succeeded && report_written ? 0 : 6;
+    }
     LARGE_INTEGER qpc_frequency{};
     QueryPerformanceFrequency(&qpc_frequency);
     TimingMetrics timing{
@@ -1003,7 +1180,10 @@ int wmain(int argc, wchar_t* argv[]) {
         workload_end.QuadPart - workload_start.QuadPart);
     if (resource_workload_succeeded) {
         resource_workload_succeeded =
-            run_resource_lifetime_workload(device.Get(), retire_resource);
+            run_resource_lifetime_workload(
+                device.Get(),
+                retire_resource,
+                options->automatic_lifetime_tracking);
     }
 
     bool render_succeeded = resource_workload_succeeded;

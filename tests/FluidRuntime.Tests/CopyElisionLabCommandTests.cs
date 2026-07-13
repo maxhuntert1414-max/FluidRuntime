@@ -46,7 +46,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
-        Assert.Equal("fluidruntime-copy-elision-trace-v0.7", report.Mode);
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.7.1", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
@@ -70,7 +70,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport(trials, 10, 0);
 
-        Assert.Equal("owned-d3d11-copy-workload-only", report.ClaimScope);
+        Assert.Equal("owned-d3d11-copy-gpu-workload-only", report.ClaimScope);
         Assert.True(report.PerformanceClaimAllowed);
         Assert.Empty(report.PerformanceClaimBlockers);
         Assert.Equal(10, report.GpuValidPairCount);
@@ -93,6 +93,26 @@ public sealed class CopyElisionLabCommandTests
         var blocked = CopyElisionLabCommand.BuildReport(gpuTrials, 10, 0);
         Assert.False(blocked.PerformanceClaimAllowed);
         Assert.Contains("invalid-or-missing-gpu-timing", blocked.PerformanceClaimBlockers);
+
+        var slowerGpu = optimized with
+        {
+            GpuWorkloadTicks = 600,
+            GpuWorkloadMicroseconds = 60
+        };
+        var inconsistentTrials = Enumerable.Range(0, 10)
+            .Select(index => CopyElisionLabCommand.BuildTrial(
+                baseline,
+                slowerGpu,
+                pairIndex: index,
+                executionOrder: index % 2 == 0
+                    ? "baseline-then-optimized"
+                    : "optimized-then-baseline"))
+            .ToArray();
+        var inconsistent = CopyElisionLabCommand.BuildReport(inconsistentTrials, 10, 0);
+        Assert.False(inconsistent.PerformanceClaimAllowed);
+        Assert.Contains(
+            "gpu-improvement-not-consistent",
+            inconsistent.PerformanceClaimBlockers);
     }
 
     [Fact]
@@ -116,10 +136,12 @@ public sealed class CopyElisionLabCommandTests
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.7",
+            Mode: "fluidruntime-hook-ipc-lab-v0.7.1",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,
+            AutomaticLifetimeTracking: true,
+            ReleaseObservationScope: "owned-returned-buffer-texture-interface",
             RenderDriver: "hardware",
             AdapterIdentityAvailable: true,
             AdapterDescription: "Test GPU",
@@ -130,18 +152,21 @@ public sealed class CopyElisionLabCommandTests
             AdapterLuid: "0000000000000042",
             TargetProcessId: 42,
             RingName: "test",
-            RingAbiVersion: 2,
+            RingAbiVersion: 3,
             QpcFrequency: 10_000_000,
             EventCount: 20,
             LostSequenceCount: 0,
             NativeOverrunCount: 0,
             EventTypeCounts: new Dictionary<string, long> { ["CopyResource"] = 6 },
-            ResourceRetireCount: 2,
-            ResourceReuseCount: 1,
+            ResourceRetireCount: 1,
+            ResourceDestroyCount: 64,
+            ResourceReuseCount: 63,
             ActiveResourceCount: 5,
-            RetiredResourceIdCount: 2,
-            RetiredResourceIdentityCount: 1,
+            RetiredResourceIdCount: 65,
+            RetiredResourceIdentityCount: 2,
             ProvenanceFailureCount: 0,
+            ReleaseHookSlotCount: 2,
+            ReleaseHookFailureCount: 0,
             CopyResourceBytes: 49152,
             RedundantCopyCandidateCount: 3,
             RedundantCopyBytes: 24576,
@@ -162,8 +187,8 @@ public sealed class CopyElisionLabCommandTests
             GpuTimingDisjoint: false,
             GpuQueryTimedOut: false,
             GpuFrequency: 10_000_000,
-            GpuWorkloadTicks: 500,
-            GpuWorkloadMicroseconds: 50,
+            GpuWorkloadTicks: copyElisionEnabled ? 400UL : 500UL,
+            GpuWorkloadMicroseconds: copyElisionEnabled ? 40 : 50,
             TargetReport: document.RootElement.Clone());
     }
 }

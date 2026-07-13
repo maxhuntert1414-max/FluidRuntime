@@ -6,7 +6,7 @@ namespace FluidRuntime.Cli;
 public static class CopyElisionLabCommand
 {
     private const int MinimumPairsForPerformanceClaim = 10;
-    private const string PerformanceClaimScope = "owned-d3d11-copy-workload-only";
+    private const string PerformanceClaimScope = "owned-d3d11-copy-gpu-workload-only";
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -243,6 +243,14 @@ public static class CopyElisionLabCommand
             .Where(trial => trial.BaselineGpuMicroseconds.HasValue &&
                 trial.OptimizedGpuMicroseconds.HasValue)
             .ToArray();
+        var cpuSummary = SummarizePairs(
+            included.Select(trial => trial.BaselineCpuMicroseconds),
+            included.Select(trial => trial.OptimizedCpuMicroseconds));
+        var gpuSummary = gpuPairs.Length == 0
+            ? null
+            : SummarizePairs(
+                gpuPairs.Select(trial => trial.BaselineGpuMicroseconds!.Value),
+                gpuPairs.Select(trial => trial.OptimizedGpuMicroseconds!.Value));
         var blockers = new List<string>();
         if (included.Length < MinimumPairsForPerformanceClaim)
         {
@@ -252,6 +260,13 @@ public static class CopyElisionLabCommand
         {
             blockers.Add("invalid-or-missing-gpu-timing");
         }
+        if (gpuPairs.Length == included.Length &&
+            gpuSummary is not null &&
+            (gpuSummary.Delta.P95 >= 0 ||
+                gpuSummary.OptimizedLowerCount < Math.Ceiling(included.Length * 0.8)))
+        {
+            blockers.Add("gpu-improvement-not-consistent");
+        }
         if (included.Any(trial => !trial.AdapterIdentityMatched) ||
             included.Select(trial => trial.Baseline.AdapterLuid).Distinct().Count() != 1)
         {
@@ -259,7 +274,7 @@ public static class CopyElisionLabCommand
         }
 
         return new CopyElisionLabReport(
-            Mode: "fluidruntime-copy-elision-trace-v0.7",
+            Mode: "fluidruntime-copy-elision-trace-v0.7.1",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -280,14 +295,8 @@ public static class CopyElisionLabCommand
             PerformanceClaimAllowed: blockers.Count == 0,
             PerformanceClaimBlockers: blockers,
             GpuValidPairCount: gpuPairs.Length,
-            CpuWorkload: SummarizePairs(
-                included.Select(trial => trial.BaselineCpuMicroseconds),
-                included.Select(trial => trial.OptimizedCpuMicroseconds)),
-            GpuWorkload: gpuPairs.Length == 0
-                ? null
-                : SummarizePairs(
-                    gpuPairs.Select(trial => trial.BaselineGpuMicroseconds!.Value),
-                    gpuPairs.Select(trial => trial.OptimizedGpuMicroseconds!.Value)),
+            CpuWorkload: cpuSummary,
+            GpuWorkload: gpuSummary,
             Trials: trials);
     }
 
@@ -353,10 +362,15 @@ public static class CopyElisionLabCommand
             : null;
 
     private static bool HasSafeLifecycle(HookLabReport report) =>
-        report.RingAbiVersion == 2 &&
-        report.ResourceRetireCount == 2 &&
+        report.RingAbiVersion == 3 &&
+        report.AutomaticLifetimeTracking &&
+        report.ReleaseObservationScope == "owned-returned-buffer-texture-interface" &&
+        report.ResourceRetireCount == 1 &&
+        report.ResourceDestroyCount == 64 &&
         report.ActiveResourceCount == 5 &&
-        report.RetiredResourceIdCount == 2 &&
-        report.RetiredResourceIdentityCount + report.ResourceReuseCount == 2 &&
-        report.ProvenanceFailureCount == 0;
+        report.RetiredResourceIdCount == 65 &&
+        report.RetiredResourceIdentityCount + report.ResourceReuseCount == 65 &&
+        report.ProvenanceFailureCount == 0 &&
+        report.ReleaseHookSlotCount >= 2 &&
+        report.ReleaseHookFailureCount == 0;
 }

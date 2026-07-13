@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -49,7 +50,9 @@ using UpdateSubresourceFunction = void(STDMETHODCALLTYPE*)(
     const void*,
     UINT,
     UINT);
+using ReleaseFunction = ULONG(STDMETHODCALLTYPE*)(IUnknown*);
 
+constexpr size_t kReleaseVtableIndex = 2;
 constexpr size_t kPresentVtableIndex = 8;
 constexpr size_t kCreateBufferVtableIndex = 3;
 constexpr size_t kCreateTexture2DVtableIndex = 5;
@@ -90,8 +93,10 @@ std::mutex g_hook_mutex;
 std::mutex g_patch_mutex;
 std::mutex g_resource_mutex;
 std::array<HookSlot, kHookSlotCount> g_hook_slots{};
+std::vector<HookSlot> g_release_hook_slots;
 size_t g_installed_hook_count{};
 std::atomic<bool> g_detaching{false};
+std::atomic<bool> g_track_resource_lifetime{false};
 
 std::atomic<unsigned long> g_active_hook_calls{0};
 std::atomic<PresentFunction> g_original_present{nullptr};
@@ -123,6 +128,8 @@ std::atomic<std::uint64_t> g_hook_refresh_failure_count{0};
 std::atomic<std::uint64_t> g_resource_retire_count{0};
 std::atomic<std::uint64_t> g_resource_reuse_count{0};
 std::atomic<std::uint64_t> g_provenance_failure_count{0};
+std::atomic<std::uint64_t> g_resource_destroy_count{0};
+std::atomic<std::uint64_t> g_release_hook_failure_count{0};
 std::atomic<std::uint32_t> g_max_skipped_copy_count{0};
 
 std::unordered_map<ID3D11Resource*, ResourceState> g_resources;
@@ -135,6 +142,8 @@ std::uint64_t g_next_resource_id{};
 HANDLE g_ring_mapping{};
 FluidHookRingHeaderV1* g_ring_header{};
 FluidHookEventV1* g_ring_events{};
+
+ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object);
 
 class ActiveHookCall {
 public:
@@ -173,6 +182,54 @@ bool write_pointer(void** slot, void* value, void* rollback_value) {
     VirtualProtect(slot, sizeof(void*), old_protection, &ignored);
     SetLastError(restore_error);
     return false;
+}
+
+bool install_release_hook(IUnknown* object) {
+    if (!g_track_resource_lifetime.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (object == nullptr) {
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    auto** vtable = *reinterpret_cast<void***>(object);
+    auto** slot = &vtable[kReleaseVtableIndex];
+    const auto hook = reinterpret_cast<void*>(hooked_release);
+    const std::lock_guard patch_lock(g_patch_mutex);
+    if (g_detaching.load(std::memory_order_acquire)) {
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    const auto existing = std::find_if(
+        g_release_hook_slots.begin(),
+        g_release_hook_slots.end(),
+        [slot](const HookSlot& candidate) { return candidate.slot == slot; });
+    if (existing != g_release_hook_slots.end()) {
+        if (*slot == hook) {
+            return true;
+        }
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    const auto original = *slot;
+    if (original == nullptr || original == hook) {
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    g_release_hook_slots.push_back(HookSlot{
+        .slot = slot,
+        .original = original,
+        .hook = hook,
+    });
+    if (!write_pointer(slot, hook, original)) {
+        g_release_hook_slots.pop_back();
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
 }
 
 bool initialize_event_ring() {
@@ -465,10 +522,27 @@ void remember_retired_resource_locked(
     }
 }
 
+bool remove_resource_locked(
+    ID3D11Resource* resource,
+    std::uint64_t expected_resource_id,
+    ResourceState& removed) {
+    const auto current = g_resources.find(resource);
+    if (current == g_resources.end() ||
+        current->second.resource_id != expected_resource_id) {
+        return false;
+    }
+    removed = current->second;
+    erase_resource_provenance_locked(resource, removed.resource_id);
+    g_resources.erase(current);
+    remember_retired_resource_locked(resource, removed.resource_id);
+    return true;
+}
+
 ResourceRegistration register_resource_locked(
     ID3D11Resource* resource,
     std::uint64_t size_bytes,
-    std::uint64_t generation) {
+    std::uint64_t generation,
+    bool provenance_trusted) {
     ResourceRegistration registration;
     const auto active = g_resources.find(resource);
     if (active != g_resources.end()) {
@@ -491,7 +565,7 @@ ResourceRegistration register_resource_locked(
         .resource_id = ++g_next_resource_id,
         .size_bytes = size_bytes,
         .generation = generation,
-        .provenance_trusted = !registration.reuse_without_retire,
+        .provenance_trusted = provenance_trusted && !registration.reuse_without_retire,
     };
     registration.resource_id = state.resource_id;
     g_resources.emplace(resource, state);
@@ -516,6 +590,68 @@ void mark_resource_written_locked(ID3D11Resource* resource) {
     auto& state = ensure_resource_locked(resource);
     ++state.generation;
     g_last_copies.erase(resource);
+}
+
+ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object) {
+    const ActiveHookCall active_call;
+    if (object == nullptr) {
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return 1;
+    }
+
+    ReleaseFunction original = nullptr;
+    {
+        auto** vtable = *reinterpret_cast<void***>(object);
+        auto** slot = &vtable[kReleaseVtableIndex];
+        const std::lock_guard patch_lock(g_patch_mutex);
+        const auto installed = std::find_if(
+            g_release_hook_slots.begin(),
+            g_release_hook_slots.end(),
+            [slot](const HookSlot& candidate) { return candidate.slot == slot; });
+        if (installed != g_release_hook_slots.end()) {
+            original = reinterpret_cast<ReleaseFunction>(installed->original);
+        }
+    }
+    if (original == nullptr ||
+        original == reinterpret_cast<ReleaseFunction>(hooked_release)) {
+        g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return 1;
+    }
+
+    auto* resource = reinterpret_cast<ID3D11Resource*>(object);
+    std::uint64_t observed_resource_id = 0;
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        const auto current = g_resources.find(resource);
+        if (current != g_resources.end()) {
+            observed_resource_id = current->second.resource_id;
+        }
+    }
+
+    const auto remaining_references = original(object);
+    if (remaining_references != 0 || observed_resource_id == 0) {
+        return remaining_references;
+    }
+
+    ResourceState destroyed;
+    bool removed = false;
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        removed = remove_resource_locked(resource, observed_resource_id, destroyed);
+    }
+    if (!removed) {
+        g_provenance_failure_count.fetch_add(1, std::memory_order_relaxed);
+        return remaining_references;
+    }
+
+    g_resource_destroy_count.fetch_add(1, std::memory_order_relaxed);
+    emit_hook_event(
+        FluidHookEventTypeV1::resource_destroy,
+        destroyed.resource_id,
+        0,
+        destroyed.size_bytes,
+        destroyed.generation);
+    return remaining_references;
 }
 
 bool map_type_writes(D3D11_MAP map_type) {
@@ -547,6 +683,8 @@ void reset_metrics_and_resources() {
     g_resource_retire_count.store(0, std::memory_order_relaxed);
     g_resource_reuse_count.store(0, std::memory_order_relaxed);
     g_provenance_failure_count.store(0, std::memory_order_relaxed);
+    g_resource_destroy_count.store(0, std::memory_order_relaxed);
+    g_release_hook_failure_count.store(0, std::memory_order_relaxed);
 
     const std::lock_guard resource_lock(g_resource_mutex);
     g_resources.clear();
@@ -591,6 +729,10 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(
     if (SUCCEEDED(result) && description != nullptr && buffer != nullptr && *buffer != nullptr) {
         g_create_buffer_count.fetch_add(1, std::memory_order_relaxed);
         g_buffer_bytes_requested.fetch_add(description->ByteWidth, std::memory_order_relaxed);
+        const auto release_hook_ready = install_release_hook(*buffer);
+        if (!release_hook_ready) {
+            g_provenance_failure_count.fetch_add(1, std::memory_order_relaxed);
+        }
         ResourceRegistration registration;
         const auto generation = initial_data != nullptr ? 1ULL : 0ULL;
         {
@@ -598,7 +740,8 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(
             registration = register_resource_locked(
                 *buffer,
                 description->ByteWidth,
-                generation);
+                generation,
+                release_hook_ready);
         }
         emit_hook_event(
             FluidHookEventTypeV1::create_buffer,
@@ -637,6 +780,10 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(
         const auto estimated_bytes = estimate_texture_bytes(*description);
         g_create_texture2d_count.fetch_add(1, std::memory_order_relaxed);
         g_texture_bytes_estimated.fetch_add(estimated_bytes, std::memory_order_relaxed);
+        const auto release_hook_ready = install_release_hook(*texture);
+        if (!release_hook_ready) {
+            g_provenance_failure_count.fetch_add(1, std::memory_order_relaxed);
+        }
         ResourceRegistration registration;
         const auto generation = initial_data != nullptr ? 1ULL : 0ULL;
         {
@@ -644,7 +791,8 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(
             registration = register_resource_locked(
                 *texture,
                 estimated_bytes,
-                generation);
+                generation,
+                release_hook_ready);
         }
         emit_hook_event(
             FluidHookEventTypeV1::create_texture2d,
@@ -920,10 +1068,13 @@ HRESULT WINAPI FluidHookAttachEx(
     }
 
     std::uint32_t max_skipped_copy_count = 0;
+    bool track_resource_lifetime = false;
     if (options != nullptr) {
         if (options->struct_size < sizeof(FluidHookAttachOptionsV1) ||
             options->abi_version != fluid_hook_attach_options_abi_version ||
-            (options->flags & ~fluid_hook_attach_flag_skip_first_redundant_copy) != 0) {
+            (options->flags & ~(
+                fluid_hook_attach_flag_skip_first_redundant_copy |
+                fluid_hook_attach_flag_track_resource_lifetime)) != 0) {
             return E_INVALIDARG;
         }
         const auto skip_enabled =
@@ -933,10 +1084,12 @@ HRESULT WINAPI FluidHookAttachEx(
             return E_INVALIDARG;
         }
         max_skipped_copy_count = options->max_skipped_copy_count;
+        track_resource_lifetime =
+            (options->flags & fluid_hook_attach_flag_track_resource_lifetime) != 0;
     }
 
     const std::lock_guard hook_lock(g_hook_mutex);
-    if (g_installed_hook_count != 0) {
+    if (g_installed_hook_count != 0 || !g_release_hook_slots.empty()) {
         return HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
     }
 
@@ -1018,11 +1171,13 @@ HRESULT WINAPI FluidHookAttachEx(
         reinterpret_cast<UpdateSubresourceFunction>(slots[6].original),
         std::memory_order_release);
     g_max_skipped_copy_count.store(max_skipped_copy_count, std::memory_order_release);
+    g_track_resource_lifetime.store(track_resource_lifetime, std::memory_order_release);
     reset_metrics_and_resources();
     if (!initialize_event_ring()) {
         const auto ring_error = GetLastError();
         clear_original_functions();
         g_max_skipped_copy_count.store(0, std::memory_order_release);
+        g_track_resource_lifetime.store(false, std::memory_order_release);
         return HRESULT_FROM_WIN32(ring_error);
     }
 
@@ -1041,6 +1196,7 @@ HRESULT WINAPI FluidHookAttachEx(
             clear_original_functions();
             close_event_ring();
             g_max_skipped_copy_count.store(0, std::memory_order_release);
+            g_track_resource_lifetime.store(false, std::memory_order_release);
             return HRESULT_FROM_WIN32(patch_error);
         }
     }
@@ -1057,33 +1213,51 @@ HRESULT WINAPI FluidHookDetach() {
     }
 
     g_detaching.store(true, std::memory_order_release);
+    std::vector<HookSlot*> restored_slots;
     {
         const std::lock_guard patch_lock(g_patch_mutex);
+        std::vector<HookSlot*> installed_slots;
+        installed_slots.reserve(g_installed_hook_count + g_release_hook_slots.size());
         for (size_t index = 0; index < g_installed_hook_count; ++index) {
-            const auto& slot = g_hook_slots[index];
-            if (*slot.slot != slot.hook && *slot.slot != slot.original) {
+            installed_slots.push_back(&g_hook_slots[index]);
+        }
+        for (auto& slot : g_release_hook_slots) {
+            installed_slots.push_back(&slot);
+        }
+
+        for (const auto* slot : installed_slots) {
+            if (*slot->slot != slot->hook && *slot->slot != slot->original) {
+                g_detaching.store(false, std::memory_order_release);
                 return E_UNEXPECTED;
             }
         }
 
-        std::array<size_t, kHookSlotCount> restored_indices{};
-        size_t restored_count = 0;
-        for (size_t index = 0; index < g_installed_hook_count; ++index) {
-            const auto& slot = g_hook_slots[index];
-            if (*slot.slot == slot.original) {
+        restored_slots.reserve(installed_slots.size());
+        for (auto* slot : installed_slots) {
+            if (*slot->slot == slot->original) {
                 continue;
             }
-            if (!write_pointer(slot.slot, slot.original, slot.hook)) {
+            if (!write_pointer(slot->slot, slot->original, slot->hook)) {
                 const auto restore_error = GetLastError();
-                while (restored_count != 0) {
-                    const auto restored_index = restored_indices[--restored_count];
-                    const auto& restored = g_hook_slots[restored_index];
-                    write_pointer(restored.slot, restored.hook, restored.original);
+                auto rollback_succeeded = true;
+                for (auto restored = restored_slots.rbegin();
+                     restored != restored_slots.rend();
+                     ++restored) {
+                    if (*(*restored)->slot != (*restored)->original ||
+                        !write_pointer(
+                            (*restored)->slot,
+                            (*restored)->hook,
+                            (*restored)->original)) {
+                        rollback_succeeded = false;
+                        break;
+                    }
                 }
-                g_detaching.store(false, std::memory_order_release);
+                if (rollback_succeeded) {
+                    g_detaching.store(false, std::memory_order_release);
+                }
                 return HRESULT_FROM_WIN32(restore_error);
             }
-            restored_indices[restored_count++] = index;
+            restored_slots.push_back(slot);
         }
     }
 
@@ -1095,13 +1269,37 @@ HRESULT WINAPI FluidHookDetach() {
         ++waited_ms;
     }
     if (g_active_hook_calls.load(std::memory_order_acquire) != 0) {
+        auto rollback_succeeded = true;
+        {
+            const std::lock_guard patch_lock(g_patch_mutex);
+            for (auto restored = restored_slots.rbegin();
+                 restored != restored_slots.rend();
+                 ++restored) {
+                if (*(*restored)->slot == (*restored)->hook) {
+                    continue;
+                }
+                if (*(*restored)->slot != (*restored)->original ||
+                    !write_pointer(
+                        (*restored)->slot,
+                        (*restored)->hook,
+                        (*restored)->original)) {
+                    rollback_succeeded = false;
+                    break;
+                }
+            }
+        }
+        if (rollback_succeeded) {
+            g_detaching.store(false, std::memory_order_release);
+        }
         return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
     }
 
     g_installed_hook_count = 0;
     g_hook_slots = {};
+    g_release_hook_slots.clear();
     clear_original_functions();
     g_max_skipped_copy_count.store(0, std::memory_order_release);
+    g_track_resource_lifetime.store(false, std::memory_order_release);
     g_detaching.store(false, std::memory_order_release);
     {
         const std::lock_guard resource_lock(g_resource_mutex);
@@ -1146,10 +1344,11 @@ HRESULT WINAPI FluidHookRetireResource(ID3D11Resource* resource) {
         if (current == g_resources.end()) {
             return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
         }
-        retired = current->second;
-        erase_resource_provenance_locked(resource, retired.resource_id);
-        g_resources.erase(current);
-        remember_retired_resource_locked(resource, retired.resource_id);
+        const auto resource_id = current->second.resource_id;
+        if (!remove_resource_locked(resource, resource_id, retired)) {
+            g_provenance_failure_count.fetch_add(1, std::memory_order_relaxed);
+            return E_UNEXPECTED;
+        }
     }
 
     g_resource_retire_count.fetch_add(1, std::memory_order_relaxed);
@@ -1219,6 +1418,16 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_resource_reuse_count.load(std::memory_order_relaxed);
     result.provenance_failure_count =
         g_provenance_failure_count.load(std::memory_order_relaxed);
+    result.resource_destroy_count =
+        g_resource_destroy_count.load(std::memory_order_relaxed);
+    result.release_hook_failure_count =
+        g_release_hook_failure_count.load(std::memory_order_relaxed);
+    result.automatic_lifetime_tracking =
+        g_track_resource_lifetime.load(std::memory_order_acquire) ? 1 : 0;
+    {
+        const std::lock_guard patch_lock(g_patch_mutex);
+        result.release_hook_slot_count = g_release_hook_slots.size();
+    }
     if (g_ring_header != nullptr) {
         result.ipc_event_count = static_cast<std::uint64_t>(
             InterlockedCompareExchange64(&g_ring_header->next_sequence, 0, 0));

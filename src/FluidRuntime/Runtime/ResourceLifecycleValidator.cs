@@ -41,11 +41,19 @@ public static class ResourceLifecycleValidator
                     break;
 
                 case HookEventType.ResourceRetire:
-                    if (item.ResourceA == 0 || item.ResourceB != 0 || !active.Remove(item.ResourceA))
+                    var retireResult = MoveActiveToRetired("retire", item, active, retired);
+                    if (retireResult is not null)
                     {
-                        return Invalid("Resource retire must remove one active resource.", active, retired);
+                        return retireResult;
                     }
-                    retired.Add(item.ResourceA);
+                    break;
+
+                case HookEventType.ResourceDestroy:
+                    var destroyResult = MoveActiveToRetired("destroy", item, active, retired);
+                    if (destroyResult is not null)
+                    {
+                        return destroyResult;
+                    }
                     break;
 
                 case HookEventType.ResourceReuse:
@@ -95,4 +103,18 @@ public static class ResourceLifecycleValidator
         IEnumerable<ulong> active,
         IEnumerable<ulong> retired) =>
         new(false, active.ToArray(), retired.ToArray(), error);
+
+    private static ResourceLifecycleValidationResult? MoveActiveToRetired(
+        string action,
+        HookIpcEvent item,
+        SortedSet<ulong> active,
+        SortedSet<ulong> retired)
+    {
+        if (item.ResourceA == 0 || item.ResourceB != 0 || !active.Remove(item.ResourceA))
+        {
+            return Invalid($"Resource {action} must remove one active resource.", active, retired);
+        }
+        retired.Add(item.ResourceA);
+        return null;
+    }
 }

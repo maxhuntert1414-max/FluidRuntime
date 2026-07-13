@@ -72,7 +72,13 @@ public sealed class HookLabRunnerTests
 
     private static List<HookIpcEvent> BuildDeterministicWorkload()
     {
-        var definitions = new[]
+        var definitions = new List<(
+            HookEventType Type,
+            ulong ResourceA,
+            ulong ResourceB,
+            ulong SizeBytes,
+            ulong Generation,
+            uint Flags)>
         {
             (HookEventType.CreateBuffer, 1UL, 0UL, 4096UL, 1UL, 0U),
             (HookEventType.CreateBuffer, 2UL, 0UL, 4096UL, 0UL, 0U),
@@ -89,21 +95,32 @@ public sealed class HookLabRunnerTests
             (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 1UL, 0U),
             (HookEventType.CopyResource, 5UL, 4UL, 16384UL, 2UL, 1U),
             (HookEventType.CreateBuffer, 6UL, 0UL, 256UL, 0UL, 0U),
-            (HookEventType.ResourceRetire, 6UL, 0UL, 256UL, 0UL, 0U),
-            (HookEventType.CreateBuffer, 7UL, 0UL, 256UL, 0UL, 0U),
-            (HookEventType.ResourceReuse, 6UL, 7UL, 256UL, 0UL, 0U),
-            (HookEventType.ResourceRetire, 7UL, 0UL, 256UL, 0UL, 0U),
-            (HookEventType.Present, 0UL, 0UL, 0UL, 1UL, 0U)
+            (HookEventType.ResourceRetire, 6UL, 0UL, 256UL, 0UL, 0U)
         };
+        for (var cycle = 0; cycle < 64; ++cycle)
+        {
+            var resourceId = (ulong)(7 + cycle);
+            definitions.Add((HookEventType.CreateBuffer, resourceId, 0, 512, 0, 0));
+            definitions.Add((
+                HookEventType.ResourceReuse,
+                resourceId - 1,
+                resourceId,
+                512,
+                0,
+                0));
+            definitions.Add((HookEventType.ResourceDestroy, resourceId, 0, 512, 0, 0));
+        }
+        definitions.Add((HookEventType.Present, 0, 0, 0, 1, 0));
+
         return definitions.Select((item, index) => new HookIpcEvent(
             Sequence: index,
             QpcTicks: 1000 + index,
-            Type: item.Item1,
+            Type: item.Type,
             ThreadId: 7,
-            ResourceA: item.Item2,
-            ResourceB: item.Item3,
-            SizeBytes: item.Item4,
-            Generation: item.Item5,
-            Flags: item.Item6)).ToList();
+            ResourceA: item.ResourceA,
+            ResourceB: item.ResourceB,
+            SizeBytes: item.SizeBytes,
+            Generation: item.Generation,
+            Flags: item.Flags)).ToList();
     }
 }

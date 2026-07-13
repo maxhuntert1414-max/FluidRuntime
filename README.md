@@ -12,11 +12,12 @@ software. It is not a DLSS, FSR, or frame-generation clone.
 Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md) |
 [v0.6 evidence](docs/evidence/v0.6-copy-elision.md) |
 [v0.7 lifecycle evidence](docs/evidence/v0.7-resource-lifecycle.md) |
+[v0.7.1 destruction evidence](docs/evidence/v0.7.1-automatic-destruction.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.7 keeps normal inspection and external-process behavior advisory-only:
+Version 0.7.1 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -33,14 +34,22 @@ redundant `CopyResource`. The command fails unless readback hashes, event
 accounting, and hook rollback agree across all runs. This is not enabled for
 external software.
 
-Any allowed performance claim is scoped in the JSON as
-`owned-d3d11-copy-workload-only`; it is not a game-wide FPS claim.
+Any allowed positive performance claim is scoped in the JSON as
+`owned-d3d11-copy-gpu-workload-only`; it is not a game-wide FPS claim. Valid
+timing alone is insufficient: GPU p95 must improve and at least 80% of measured
+pairs must favor the optimized run.
 
 The owned target also exercises cooperative resource retirement. Retiring a
 resource removes its active state and copy provenance, while any later reuse of
 the same pointer receives a new monotonic resource ID. The managed reader
 reconstructs active and retired IDs and rejects writes or copies involving a
 retired resource. This is not automatic interception of COM destruction.
+
+Version 0.7.1 adds an explicit owned-lab lifetime mode that patches the
+`IUnknown::Release` slot of the returned `ID3D11Buffer` and `ID3D11Texture2D`
+interfaces. The target executes 64 automatic destruction cycles, restores every
+dynamic slot before DLL unload, and separately verifies that normal
+`FluidHookAttach` keeps zero Release hooks and uses cooperative retirement only.
 
 The v0.2 native probe is also read-only. It adds per-process Windows process
 memory and GPU performance-counter telemetry through a small C++ executable.
@@ -166,5 +175,7 @@ This is not remote injection and is not intended for protected or anti-cheat
 processes. It exists to verify resource observation, runtime thunk transitions,
 concurrent-call draining, and rollback in software we own before any
 external-process work is considered. Candidate detection and copy elision
-currently assume the controlled workload; automatic COM destruction,
-subresources, GPU shader/UAV writes, fences, and aliasing are not covered yet.
+currently assume the controlled workload. Automatic destruction is only proven
+for the same returned Buffer/Texture2D interface in the owned lab; interface
+aliases, subresources, GPU shader/UAV writes, fences, and aliasing are not
+covered yet.

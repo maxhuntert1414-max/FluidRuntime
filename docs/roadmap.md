@@ -25,13 +25,16 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - **v0.7.0:** cooperative owned-target resource retirement, bounded pointer-reuse
   history, monotonic resource IDs, provenance invalidation, IPC lifecycle events,
   and managed active/retired-state reconstruction.
+- **v0.7.1:** opt-in automatic destruction observation through returned D3D11
+  resource Release slots, dynamic-slot rollback before DLL unload, 64-cycle
+  churn validation, concurrent detach stress, cooperative fallback, and a
+  direction-aware GPU claim gate.
 
 ## Next Milestones
 
 ### v0.7.x: Complete Trustworthy Resource State
 
-- Add automatic resource-destruction observation without compromising DLL unload
-  or detach safety.
+- Cover destruction through interface aliases and non-primary resource views.
 - Cover subresources, `CopySubresourceRegion`, shader/UAV writes, and fences.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.

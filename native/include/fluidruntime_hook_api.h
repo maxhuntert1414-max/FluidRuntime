@@ -7,10 +7,10 @@
 
 struct ID3D11Resource;
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 5;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 6;
 constexpr std::uint32_t fluid_hook_attach_options_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 2;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 3;
 constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
 constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
 
@@ -25,12 +25,14 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     hook_refresh = 8,
     resource_retire = 9,
     resource_reuse = 10,
+    resource_destroy = 11,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
 constexpr std::uint32_t fluid_hook_event_flag_copy_skipped = 2;
 constexpr std::uint32_t fluid_hook_event_flag_reuse_without_retire = 4;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
+constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
 
 struct FluidHookAttachOptionsV1 {
     std::uint32_t struct_size;
@@ -100,6 +102,10 @@ struct FluidHookSnapshotV1 {
     std::uint64_t resource_reuse_count;
     std::uint64_t retired_resource_identity_count;
     std::uint64_t provenance_failure_count;
+    std::uint64_t resource_destroy_count;
+    std::uint64_t release_hook_slot_count;
+    std::uint64_t release_hook_failure_count;
+    std::uint64_t automatic_lifetime_tracking;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS

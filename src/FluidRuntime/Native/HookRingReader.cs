@@ -5,7 +5,7 @@ namespace FluidRuntime.Native;
 public sealed unsafe class HookRingReader : IDisposable
 {
     public const uint ExpectedMagic = 0x47524C46;
-    public const uint ExpectedAbiVersion = 2;
+    public const uint ExpectedAbiVersion = 3;
     public const int HeaderSize = 64;
     public const int ExpectedEventSize = 64;
     public const string MappingNamePrefix = "Local\\FluidRuntimeHook-";
