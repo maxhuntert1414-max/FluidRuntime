@@ -1,0 +1,20 @@
+{
+  "mode": "fluidruntime-concurrent-lifetime-detach-v0.8.0",
+  "target_owned": true,
+  "automatic_lifetime_tracking": true,
+  "module_pinned_until_process_exit": true,
+  "stale_create_forwarded": true,
+  "stale_release_forwarded": true,
+  "stale_calls_observation_neutral": true,
+  "reattach_rejected": true,
+  "completed_cycles": 123,
+  "release_hook_slot_count": 1,
+  "release_hook_failure_count": 0,
+  "provenance_failure_count": 0,
+  "attach_hresult": "0x00000000",
+  "snapshot_hresult": "0x00000000",
+  "detach_hresult": "0x00000000",
+  "reattach_hresult": "0x800700B7",
+  "final_detach_hresult": "0x00000001",
+  "rollback_restored": true
+}

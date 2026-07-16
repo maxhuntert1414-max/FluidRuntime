@@ -12,6 +12,11 @@ public sealed class HookLabRunner
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (options.SkipFirstRedundantCopy && options.UseManagedControlPolicy)
+        {
+            throw new ArgumentException(
+                "Attach-option and managed-policy copy elision cannot be combined.");
+        }
         var targetPath = RequireFile(options.TargetPath, "Hook target executable");
         var hookPath = RequireFile(options.HookPath, "Hook DLL");
 
@@ -39,9 +44,16 @@ public sealed class HookLabRunner
         {
             startInfo.ArgumentList.Add("--skip-first-redundant-copy");
         }
+        if (options.UseManagedControlPolicy)
+        {
+            startInfo.ArgumentList.Add("--managed-control");
+            startInfo.ArgumentList.Add("--control-timeout-ms");
+            startInfo.ArgumentList.Add("5000");
+        }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Unable to start the hook lab target.");
+        using var processGuard = new OwnedProcessGuard(process);
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
@@ -49,6 +61,16 @@ public sealed class HookLabRunner
         if (reader.ProcessId != (ulong)process.Id)
         {
             throw new InvalidDataException("Hook ring process identity did not match the target.");
+        }
+        HookControlPolicy? publishedControlPolicy = null;
+        if (options.UseManagedControlPolicy)
+        {
+            publishedControlPolicy = reader.PublishCopyElisionPolicy(
+                TimeSpan.FromSeconds(3));
+            await reader.WaitForControlAcknowledgmentAsync(
+                publishedControlPolicy.Epoch,
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
         }
         var events = new List<HookIpcEvent>();
         while (!process.HasExited)
@@ -70,7 +92,8 @@ public sealed class HookLabRunner
 
         using var targetDocument = JsonDocument.Parse(stdout);
         var targetReport = targetDocument.RootElement.Clone();
-        ValidateTargetReport(targetReport, options.SkipFirstRedundantCopy);
+        ValidateTargetReport(targetReport, options);
+        var controlSnapshot = reader.ControlSnapshot;
 
         var eventTypeCounts = events
             .GroupBy(item => item.Type)
@@ -95,6 +118,9 @@ public sealed class HookLabRunner
             .Where(item => item.Type is HookEventType.ClearRenderTargetView or
                 HookEventType.ClearUnorderedAccessViewFloat)
             .ToArray();
+        var controlPolicyEvents = events
+            .Where(item => item.Type == HookEventType.ControlPolicyAccepted)
+            .ToArray();
         var copyBytes = copyEvents.Aggregate(0UL, (total, item) => total + item.SizeBytes);
         var redundantBytes = redundantCopyEvents.Aggregate(
             0UL,
@@ -118,6 +144,7 @@ public sealed class HookLabRunner
             subresourceCopyEvents,
             redundantSubresourceCopyEvents,
             gpuViewWriteEvents,
+            controlPolicyEvents,
             copyBytes,
             redundantBytes,
             subresourceCopyBytes,
@@ -125,7 +152,7 @@ public sealed class HookLabRunner
             gpuViewWriteBytes,
             reader,
             lifecycle,
-            options.SkipFirstRedundantCopy);
+            options);
 
         var resources = targetReport.GetProperty("resources");
         var timing = targetReport.GetProperty("timing");
@@ -135,10 +162,11 @@ public sealed class HookLabRunner
         var gpuWorkloadTicks = timing.GetProperty("gpu_workload_ticks").GetUInt64();
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.7.3",
-            ReadOnly: !options.SkipFirstRedundantCopy,
+            "fluidruntime-hook-ipc-lab-v0.8.0",
+            ReadOnly: !options.SkipFirstRedundantCopy && !options.UseManagedControlPolicy,
             WouldModifySystem: false,
-            CopyElisionEnabled: options.SkipFirstRedundantCopy,
+            CopyElisionEnabled:
+                options.SkipFirstRedundantCopy || options.UseManagedControlPolicy,
             AutomaticLifetimeTracking:
                 targetReport.GetProperty("automatic_lifetime_tracking").GetBoolean(),
             ReleaseObservationScope:
@@ -232,7 +260,19 @@ public sealed class HookLabRunner
             ClearUnorderedAccessViewFloatCount:
                 gpuViewWriteEvents.LongCount(item =>
                     item.Type == HookEventType.ClearUnorderedAccessViewFloat),
-            GpuViewWriteBytes: gpuViewWriteBytes);
+            GpuViewWriteBytes: gpuViewWriteBytes,
+            ManagedControlPolicyEnabled: options.UseManagedControlPolicy,
+            ControlPlane:
+                targetReport.GetProperty("control_plane").GetString() ?? string.Empty,
+            ControlPolicyPublishedEpoch:
+                publishedControlPolicy?.Epoch ?? controlSnapshot.PublishedEpoch,
+            ControlPolicyAcknowledgedEpoch: controlSnapshot.AcknowledgedEpoch,
+            ControlPolicyAppliedActionCount: controlSnapshot.AppliedActionCount,
+            ControlPolicyRejectedCount:
+                resources.GetProperty("control_policy_rejected_count").GetInt64(),
+            ControlPolicyStatus: controlSnapshot.Status.ToString().ToLowerInvariant(),
+            ModulePinnedUntilProcessExit:
+                targetReport.GetProperty("module_pinned_until_process_exit").GetBoolean());
     }
 
     private static string RequireFile(string path, string label)
@@ -249,8 +289,8 @@ public sealed class HookLabRunner
         Process process,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (!process.HasExited && DateTimeOffset.UtcNow < deadline)
+        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 5;
+        while (!process.HasExited && Stopwatch.GetTimestamp() < deadline)
         {
             try
             {
@@ -267,16 +307,38 @@ public sealed class HookLabRunner
             $"Native hook ring for PID {process.Id} did not become available.");
     }
 
-    private static void ValidateTargetReport(JsonElement report, bool copyElisionEnabled)
+    private sealed class OwnedProcessGuard(Process process) : IDisposable
     {
+        public void Dispose()
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(milliseconds: 5000);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the state check and termination.
+            }
+        }
+    }
+
+    private static void ValidateTargetReport(JsonElement report, HookLabOptions options)
+    {
+        var copyElisionEnabled =
+            options.SkipFirstRedundantCopy || options.UseManagedControlPolicy;
         var timing = report.GetProperty("timing");
+        var resources = report.GetProperty("resources");
         var gpuTimingSupported = timing.GetProperty("gpu_timing_supported").GetBoolean();
         var gpuTimingValid = timing.GetProperty("gpu_timing_valid").GetBoolean();
         var gpuTimingDisjoint = timing.GetProperty("gpu_timing_disjoint").GetBoolean();
         var gpuQueryTimedOut = timing.GetProperty("gpu_query_timed_out").GetBoolean();
         var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
         if (report.GetProperty("mode").GetString() !=
-                "fluidruntime-resource-hook-lab-v0.7.3" ||
+                "fluidruntime-resource-hook-lab-v0.8.0" ||
             !report.GetProperty("automatic_lifetime_tracking").GetBoolean() ||
             report.GetProperty("release_observation_scope").GetString() !=
                 "owned-returned-buffer-texture-interface" ||
@@ -288,6 +350,30 @@ public sealed class HookLabRunner
             report.GetProperty("would_modify_frame_data").GetBoolean() ||
             report.GetProperty("would_skip_copies").GetBoolean() != copyElisionEnabled ||
             report.GetProperty("optimization_requested").GetBoolean() != copyElisionEnabled ||
+            report.GetProperty("control_policy_requested").GetBoolean() !=
+                options.UseManagedControlPolicy ||
+            !report.GetProperty("module_pinned_until_process_exit").GetBoolean() ||
+            report.GetProperty("control_plane").GetString() !=
+                (options.UseManagedControlPolicy
+                    ? "managed-shared-memory-policy-v1"
+                    : (options.SkipFirstRedundantCopy
+                        ? "immutable-attach-options"
+                        : "observe-only")) ||
+            report.GetProperty("control_policy_wait_hresult").GetString() !=
+                (options.UseManagedControlPolicy ? "0x00000000" : "0x00000001") ||
+            resources.GetProperty("control_policy_enabled").GetInt64() !=
+                (options.UseManagedControlPolicy ? 1 : 0) ||
+            resources.GetProperty("control_policy_epoch").GetInt64() !=
+                (options.UseManagedControlPolicy ? 1 : 0) ||
+            resources.GetProperty("control_policy_acknowledged_epoch").GetInt64() !=
+                (options.UseManagedControlPolicy ? 1 : 0) ||
+            resources.GetProperty("control_policy_applied_action_count").GetInt64() !=
+                (options.UseManagedControlPolicy ? 1 : 0) ||
+            resources.GetProperty("control_policy_rejected_count").GetInt64() != 0 ||
+            resources.GetProperty("control_policy_status").GetInt64() !=
+                (options.UseManagedControlPolicy
+                    ? (long)HookControlPolicyStatus.Exhausted
+                    : (long)HookControlPolicyStatus.None) ||
             !report.GetProperty("resource_metrics_matched").GetBoolean() ||
             !report.GetProperty("original_pointer_restored").GetBoolean() ||
             !report.GetProperty("content_readback_succeeded").GetBoolean() ||
@@ -313,6 +399,7 @@ public sealed class HookLabRunner
         IReadOnlyCollection<HookIpcEvent> subresourceCopyEvents,
         IReadOnlyCollection<HookIpcEvent> redundantSubresourceCopyEvents,
         IReadOnlyCollection<HookIpcEvent> gpuViewWriteEvents,
+        IReadOnlyCollection<HookIpcEvent> controlPolicyEvents,
         ulong copyBytes,
         ulong redundantBytes,
         ulong subresourceCopyBytes,
@@ -320,8 +407,10 @@ public sealed class HookLabRunner
         ulong gpuViewWriteBytes,
         HookRingReader reader,
         ResourceLifecycleValidationResult lifecycle,
-        bool copyElisionEnabled)
+        HookLabOptions options)
     {
+        var copyElisionEnabled =
+            options.SkipFirstRedundantCopy || options.UseManagedControlPolicy;
         var resources = targetReport.GetProperty("resources");
         var expectedEventCount = resources.GetProperty("ipc_event_count").GetInt64();
         var sequencesMatch = events.Select((item, index) => item.Sequence == index).All(value => value);
@@ -329,7 +418,8 @@ public sealed class HookLabRunner
         var workloadMatches = MatchesDeterministicWorkload(
             events,
             targetReport.GetProperty("observed_presents").GetInt64(),
-            copyElisionEnabled);
+            copyElisionEnabled,
+            options.UseManagedControlPolicy);
         var expectedSkippedCount = copyElisionEnabled ? 1 : 0;
         var expectedSkippedBytes = copyElisionEnabled ? 4096UL : 0UL;
         var eventTypesMatch =
@@ -353,6 +443,8 @@ public sealed class HookLabRunner
                 resources.GetProperty("clear_render_target_view_count").GetInt64() &&
             CountEvents(events, HookEventType.ClearUnorderedAccessViewFloat) ==
                 resources.GetProperty("clear_unordered_access_view_float_count").GetInt64() &&
+            CountEvents(events, HookEventType.ControlPolicyAccepted) ==
+                (options.UseManagedControlPolicy ? 1 : 0) &&
             CountEvents(events, HookEventType.HookRefresh) ==
                 resources.GetProperty("hook_refresh_count").GetInt64() &&
             CountEvents(events, HookEventType.ResourceRetire) ==
@@ -364,6 +456,7 @@ public sealed class HookLabRunner
         var completedLifecycleCount =
             resources.GetProperty("resource_retire_count").GetInt64() +
             resources.GetProperty("resource_destroy_count").GetInt64();
+        var controlSnapshot = reader.ControlSnapshot;
         if (events.Count != expectedEventCount ||
             !sequencesMatch ||
             !knownEventTypes ||
@@ -398,6 +491,13 @@ public sealed class HookLabRunner
             gpuViewWriteEvents.Any(item => !item.IsPreciseSubresourceWrite) ||
             gpuViewWriteBytes !=
                 resources.GetProperty("gpu_view_write_bytes_estimated").GetUInt64() ||
+            controlPolicyEvents.Count != (options.UseManagedControlPolicy ? 1 : 0) ||
+            controlSnapshot.PublishedEpoch != (options.UseManagedControlPolicy ? 1 : 0) ||
+            controlSnapshot.AcknowledgedEpoch != (options.UseManagedControlPolicy ? 1 : 0) ||
+            controlSnapshot.AppliedActionCount != (options.UseManagedControlPolicy ? 1 : 0) ||
+            controlSnapshot.Status != (options.UseManagedControlPolicy
+                ? HookControlPolicyStatus.Exhausted
+                : HookControlPolicyStatus.None) ||
             skippedCopyEvents.Count != expectedSkippedCount ||
             skippedCopyEvents.Aggregate(0UL, (total, item) => total + item.SizeBytes) !=
                 expectedSkippedBytes ||
@@ -447,7 +547,8 @@ public sealed class HookLabRunner
     internal static bool MatchesDeterministicWorkload(
         IReadOnlyList<HookIpcEvent> events,
         long expectedPresentCount,
-        bool copyElisionEnabled = false)
+        bool copyElisionEnabled = false,
+        bool managedControlPolicy = false)
     {
         if (expectedPresentCount < 0 ||
             events.Any(item => item.QpcTicks <= 0 || item.ThreadId == 0))
@@ -493,9 +594,36 @@ public sealed class HookLabRunner
         var nonRefreshEvents = events
             .Where(item => item.Type != HookEventType.HookRefresh)
             .ToArray();
+        var coreStart = 0;
+        if (managedControlPolicy)
+        {
+            if (nonRefreshEvents.Length == 0)
+            {
+                return false;
+            }
+            var control = nonRefreshEvents[0];
+            if (control.Type != HookEventType.ControlPolicyAccepted ||
+                control.ResourceA != 1 ||
+                control.ResourceB != HookRingReader.SkipRedundantCopyResourceAction ||
+                control.SizeBytes != 1 ||
+                control.Generation <= (ulong)control.QpcTicks ||
+                control.Flags != 0 ||
+                control.SubresourceA != 0 ||
+                control.SubresourceB != 0 ||
+                control.RegionKey != 0)
+            {
+                return false;
+            }
+            coreStart = 1;
+        }
+        else if (nonRefreshEvents.Any(item =>
+            item.Type == HookEventType.ControlPolicyAccepted))
+        {
+            return false;
+        }
         const int automaticLifetimeCycles = 64;
         if (nonRefreshEvents.LongLength <
-            expectedCoreEvents.LongLength + 2 +
+            coreStart + expectedCoreEvents.LongLength + 2 +
                 automaticLifetimeCycles * 2 + expectedPresentCount)
         {
             return false;
@@ -503,7 +631,7 @@ public sealed class HookLabRunner
 
         for (var index = 0; index < expectedCoreEvents.Length; ++index)
         {
-            var actual = nonRefreshEvents[index];
+            var actual = nonRefreshEvents[coreStart + index];
             var expected = expectedCoreEvents[index];
             if (actual.Type != expected.Item1 ||
                 actual.ResourceA != expected.Item2 ||
@@ -520,28 +648,28 @@ public sealed class HookLabRunner
             }
         }
 
-        var fullRegionKey = nonRefreshEvents[16].RegionKey;
-        var emptyRegionKey = nonRefreshEvents[17].RegionKey;
-        var firstPartialRegionKey = nonRefreshEvents[24].RegionKey;
-        var secondPartialRegionKey = nonRefreshEvents[25].RegionKey;
+        var fullRegionKey = nonRefreshEvents[coreStart + 16].RegionKey;
+        var emptyRegionKey = nonRefreshEvents[coreStart + 17].RegionKey;
+        var firstPartialRegionKey = nonRefreshEvents[coreStart + 24].RegionKey;
+        var secondPartialRegionKey = nonRefreshEvents[coreStart + 25].RegionKey;
         if (fullRegionKey == 0 ||
             emptyRegionKey == 0 || emptyRegionKey == fullRegionKey ||
-            nonRefreshEvents[18].RegionKey != fullRegionKey ||
-            nonRefreshEvents[20].RegionKey != fullRegionKey ||
-            nonRefreshEvents[22].RegionKey != fullRegionKey ||
+            nonRefreshEvents[coreStart + 18].RegionKey != fullRegionKey ||
+            nonRefreshEvents[coreStart + 20].RegionKey != fullRegionKey ||
+            nonRefreshEvents[coreStart + 22].RegionKey != fullRegionKey ||
             firstPartialRegionKey == 0 || firstPartialRegionKey == fullRegionKey ||
             secondPartialRegionKey == 0 ||
             secondPartialRegionKey == fullRegionKey ||
             secondPartialRegionKey == firstPartialRegionKey ||
-            nonRefreshEvents[26].RegionKey != fullRegionKey ||
-            nonRefreshEvents[27].RegionKey != fullRegionKey ||
-            nonRefreshEvents[29].RegionKey != fullRegionKey ||
-            nonRefreshEvents[30].RegionKey != fullRegionKey)
+            nonRefreshEvents[coreStart + 26].RegionKey != fullRegionKey ||
+            nonRefreshEvents[coreStart + 27].RegionKey != fullRegionKey ||
+            nonRefreshEvents[coreStart + 29].RegionKey != fullRegionKey ||
+            nonRefreshEvents[coreStart + 30].RegionKey != fullRegionKey)
         {
             return false;
         }
 
-        var cursor = expectedCoreEvents.Length;
+        var cursor = coreStart + expectedCoreEvents.Length;
         var cooperativeCreate = nonRefreshEvents[cursor++];
         var cooperativeRetire = nonRefreshEvents[cursor++];
         if (cooperativeCreate.Type != HookEventType.CreateBuffer ||

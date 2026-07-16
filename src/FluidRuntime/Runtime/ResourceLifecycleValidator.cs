@@ -91,6 +91,7 @@ public static class ResourceLifecycleValidator
 
                 case HookEventType.Present:
                 case HookEventType.HookRefresh:
+                case HookEventType.ControlPolicyAccepted:
                     break;
 
                 default:

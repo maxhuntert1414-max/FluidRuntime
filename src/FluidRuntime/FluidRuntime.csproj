@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>fluidruntime</AssemblyName>
     <RootNamespace>FluidRuntime</RootNamespace>
-    <Version>0.7.3</Version>
+    <Version>0.8.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 

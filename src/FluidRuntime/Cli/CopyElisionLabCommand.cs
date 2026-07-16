@@ -6,20 +6,30 @@ namespace FluidRuntime.Cli;
 public static class CopyElisionLabCommand
 {
     private const int MinimumPairsForPerformanceClaim = 10;
-    private const string PerformanceClaimScope =
+    private const string DirectPerformanceClaimScope =
         "owned-d3d11-copy-elision-gpu-workload-only";
+    private const string ManagedPerformanceClaimScope =
+        "owned-d3d11-managed-policy-copy-elision-only";
 
-    public static async Task<int> RunAsync(string[] args)
+    public static Task<int> RunAsync(string[] args) => RunCoreAsync(args, managedControl: false);
+
+    public static Task<int> RunManagerAsync(string[] args) =>
+        RunCoreAsync(args, managedControl: true);
+
+    private static async Task<int> RunCoreAsync(string[] args, bool managedControl)
     {
         if (args.Any(argument => argument is "--help" or "-h"))
         {
-            Console.WriteLine(HookLabOptions.CopyElisionUsage);
+            Console.WriteLine(
+                managedControl ? HookLabOptions.ManagerUsage : HookLabOptions.CopyElisionUsage);
             return 0;
         }
 
         try
         {
-            var options = HookLabOptions.ParseCopyElision(args);
+            var options = managedControl
+                ? HookLabOptions.ParseManager(args)
+                : HookLabOptions.ParseCopyElision(args);
             var runner = new HookLabRunner();
             var trials = new List<CopyElisionTrialReport>();
             for (var index = 0; index < options.WarmupPairs; ++index)
@@ -30,7 +40,8 @@ public static class CopyElisionLabCommand
                     pairIndex: index,
                     phase: "warmup",
                     includedInStatistics: false,
-                    baselineFirst: index % 2 == 0));
+                    baselineFirst: index % 2 == 0,
+                    managedControl: managedControl));
             }
             for (var index = 0; index < options.TrialPairs; ++index)
             {
@@ -40,13 +51,15 @@ public static class CopyElisionLabCommand
                     pairIndex: index,
                     phase: "measured",
                     includedInStatistics: true,
-                    baselineFirst: index % 2 == 0));
+                    baselineFirst: index % 2 == 0,
+                    managedControl: managedControl));
             }
 
             var report = BuildReport(
                 trials,
                 options.TrialPairs,
-                options.WarmupPairs);
+                options.WarmupPairs,
+                managedControl);
             var outputPath = Path.GetFullPath(options.OutputPath);
             var outputDirectory = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(outputDirectory))
@@ -62,7 +75,8 @@ public static class CopyElisionLabCommand
             await File.WriteAllTextAsync(outputPath, json + Environment.NewLine);
 
             Console.WriteLine(
-                $"FluidRuntime validated {report.IncludedTrialPairs} measured copy-elision pairs " +
+                $"FluidRuntime validated {report.IncludedTrialPairs} measured " +
+                $"{(managedControl ? "manager-control" : "copy-elision")} pairs " +
                 $"and {report.WarmupPairs} warmup pairs.");
             Console.WriteLine(
                 $"Avoided per optimized run: {report.AvoidedCopyCountPerOptimizedRun} " +
@@ -95,7 +109,9 @@ public static class CopyElisionLabCommand
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"Copy elision lab failed: {exception.Message}");
+            Console.Error.WriteLine(
+                $"{(managedControl ? "Manager" : "Copy elision")} lab failed: " +
+                exception.Message);
             return 1;
         }
     }
@@ -106,19 +122,30 @@ public static class CopyElisionLabCommand
         int pairIndex,
         string phase,
         bool includedInStatistics,
-        bool baselineFirst)
+        bool baselineFirst,
+        bool managedControl)
     {
+        var baselineOptions = options with
+        {
+            SkipFirstRedundantCopy = false,
+            UseManagedControlPolicy = false
+        };
+        var optimizedOptions = options with
+        {
+            SkipFirstRedundantCopy = !managedControl,
+            UseManagedControlPolicy = managedControl
+        };
         HookLabReport baseline;
         HookLabReport optimized;
         if (baselineFirst)
         {
-            baseline = await runner.RunAsync(options with { SkipFirstRedundantCopy = false });
-            optimized = await runner.RunAsync(options with { SkipFirstRedundantCopy = true });
+            baseline = await runner.RunAsync(baselineOptions);
+            optimized = await runner.RunAsync(optimizedOptions);
         }
         else
         {
-            optimized = await runner.RunAsync(options with { SkipFirstRedundantCopy = true });
-            baseline = await runner.RunAsync(options with { SkipFirstRedundantCopy = false });
+            optimized = await runner.RunAsync(optimizedOptions);
+            baseline = await runner.RunAsync(baselineOptions);
         }
         return BuildTrial(
             baseline,
@@ -126,7 +153,8 @@ public static class CopyElisionLabCommand
             pairIndex,
             phase,
             includedInStatistics,
-            baselineFirst ? "baseline-then-optimized" : "optimized-then-baseline");
+            baselineFirst ? "baseline-then-optimized" : "optimized-then-baseline",
+            managedControl);
     }
 
     internal static CopyElisionTrialReport BuildTrial(
@@ -135,7 +163,8 @@ public static class CopyElisionLabCommand
         int pairIndex = 0,
         string phase = "measured",
         bool includedInStatistics = true,
-        string executionOrder = "baseline-then-optimized")
+        string executionOrder = "baseline-then-optimized",
+        bool managedControlPolicy = false)
     {
         var contentEquivalent = baseline.ContentEquivalent &&
             optimized.ContentEquivalent &&
@@ -161,8 +190,33 @@ public static class CopyElisionLabCommand
             throw new InvalidDataException(
                 "Baseline and optimized runs used different graphics adapters.");
         }
+        var baselineControlIsIdle =
+            !baseline.ManagedControlPolicyEnabled &&
+            baseline.ControlPlane == "observe-only" &&
+            baseline.ControlPolicyPublishedEpoch == 0 &&
+            baseline.ControlPolicyAcknowledgedEpoch == 0 &&
+            baseline.ControlPolicyAppliedActionCount == 0 &&
+            baseline.ControlPolicyRejectedCount == 0 &&
+            baseline.ControlPolicyStatus == "none";
+        var optimizedControlMatches = managedControlPolicy
+            ? optimized.ManagedControlPolicyEnabled &&
+                optimized.ControlPlane == "managed-shared-memory-policy-v1" &&
+                optimized.ControlPolicyPublishedEpoch == 1 &&
+                optimized.ControlPolicyAcknowledgedEpoch == 1 &&
+                optimized.ControlPolicyAppliedActionCount == 1 &&
+                optimized.ControlPolicyRejectedCount == 0 &&
+                optimized.ControlPolicyStatus == "exhausted"
+            : !optimized.ManagedControlPolicyEnabled &&
+                optimized.ControlPlane == "immutable-attach-options" &&
+                optimized.ControlPolicyPublishedEpoch == 0 &&
+                optimized.ControlPolicyAcknowledgedEpoch == 0 &&
+                optimized.ControlPolicyAppliedActionCount == 0 &&
+                optimized.ControlPolicyRejectedCount == 0 &&
+                optimized.ControlPolicyStatus == "none";
         if (baseline.CopyElisionEnabled ||
             !optimized.CopyElisionEnabled ||
+            !baselineControlIsIdle ||
+            !optimizedControlMatches ||
             baseline.SkippedCopyCount != 0 ||
             baseline.SkippedCopyBytes != 0 ||
             optimized.SkippedCopyCount != 1 ||
@@ -219,7 +273,8 @@ public static class CopyElisionLabCommand
     internal static CopyElisionLabReport BuildReport(
         IReadOnlyList<CopyElisionTrialReport> trials,
         int trialPairsRequested,
-        int warmupPairs)
+        int warmupPairs,
+        bool managedControl = false)
     {
         var included = trials.Where(trial => trial.IncludedInStatistics).ToArray();
         var warmups = trials.Where(trial => !trial.IncludedInStatistics).ToArray();
@@ -240,7 +295,10 @@ public static class CopyElisionLabCommand
             included.Length == 0 ||
             !measuredOrderMatches ||
             !warmupOrderMatches ||
-            trials.Any(trial => !trial.ContentEquivalent || !trial.RollbackRestoredInBothRuns))
+            trials.Any(trial =>
+                !trial.ContentEquivalent ||
+                !trial.RollbackRestoredInBothRuns ||
+                trial.Optimized.ManagedControlPolicyEnabled != managedControl))
         {
             throw new InvalidDataException("Copy-elision trial trace is incomplete or unsafe.");
         }
@@ -280,7 +338,9 @@ public static class CopyElisionLabCommand
         }
 
         return new CopyElisionLabReport(
-            Mode: "fluidruntime-copy-elision-trace-v0.7.3",
+            Mode: managedControl
+                ? "fluidruntime-manager-control-trace-v0.8.0"
+                : "fluidruntime-copy-elision-trace-v0.8.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -297,14 +357,54 @@ public static class CopyElisionLabCommand
             ObservedCopyCountPerRun: included[0].ObservedCopyCount,
             AvoidedCopyCountPerOptimizedRun: included[0].AvoidedCopyCount,
             AvoidedCopyBytesPerOptimizedRun: included[0].AvoidedCopyBytes,
-            ClaimScope: PerformanceClaimScope,
+            ClaimScope: managedControl
+                ? ManagedPerformanceClaimScope
+                : DirectPerformanceClaimScope,
             PerformanceClaimAllowed: blockers.Count == 0,
             PerformanceClaimBlockers: blockers,
             GpuValidPairCount: gpuPairs.Length,
             CpuWorkload: cpuSummary,
             GpuWorkload: gpuSummary,
+            ControlPlane: managedControl
+                ? "managed-shared-memory-policy-v1"
+                : "immutable-attach-options",
+            PublishedPolicyEpochPerOptimizedRun:
+                included[0].Optimized.ControlPolicyPublishedEpoch,
+            AcknowledgedPolicyEpochPerOptimizedRun:
+                included[0].Optimized.ControlPolicyAcknowledgedEpoch,
+            AppliedPolicyActionsPerOptimizedRun:
+                included[0].Optimized.ControlPolicyAppliedActionCount,
+            ControlLanes: managedControl ? ManagerControlLanes() : [],
             Trials: trials);
     }
+
+    private static IReadOnlyList<ManagerControlLaneStatus> ManagerControlLanes() =>
+    [
+        new(
+            Lane: "copy-path",
+            State: "active-owned-lab",
+            NativeBackendAvailable: true,
+            ActuationEnabled: true,
+            SafetyBoundary: "owned-target-opt-in; one epoch; one action; four-second maximum"),
+        new(
+            Lane: "cpu-scheduling",
+            State: "blocked-no-native-backend",
+            NativeBackendAvailable: false,
+            ActuationEnabled: false,
+            SafetyBoundary: "observe-only until a reversible native backend is validated"),
+        new(
+            Lane: "ram-vram-residency",
+            State: "blocked-no-native-backend",
+            NativeBackendAvailable: false,
+            ActuationEnabled: false,
+            SafetyBoundary: "observe-only until residency ownership and rollback are proven"),
+        new(
+            Lane: "presentation",
+            State: "observe-only",
+            NativeBackendAvailable: true,
+            ActuationEnabled: false,
+            SafetyBoundary: "present hooks emit evidence but do not alter frame presentation")
+    ];
 
     internal static PairedMetricSummary SummarizePairs(
         IEnumerable<double> baselineValues,
@@ -368,7 +468,8 @@ public static class CopyElisionLabCommand
             : null;
 
     private static bool HasSafeLifecycle(HookLabReport report) =>
-        report.RingAbiVersion == 5 &&
+        report.RingAbiVersion == 6 &&
+        report.ModulePinnedUntilProcessExit &&
         report.AutomaticLifetimeTracking &&
         report.ReleaseObservationScope == "owned-returned-buffer-texture-interface" &&
         report.SubresourceProvenanceScope ==

@@ -21,6 +21,12 @@
 namespace {
 
 using Microsoft::WRL::ComPtr;
+using DelayedCreateBufferFunction = HRESULT(STDMETHODCALLTYPE*)(
+    ID3D11Device*,
+    const D3D11_BUFFER_DESC*,
+    const D3D11_SUBRESOURCE_DATA*,
+    ID3D11Buffer**);
+using DelayedReleaseFunction = ULONG(STDMETHODCALLTYPE*)(IUnknown*);
 
 constexpr UINT kBufferBytes = 4096;
 constexpr UINT kCooperativeBufferBytes = 256;
@@ -56,8 +62,10 @@ struct Options {
     unsigned long frames{60};
     unsigned long hold_ms{};
     unsigned long gpu_timeout_ms{1000};
+    unsigned long control_timeout_ms{5000};
     bool use_hardware{};
     bool skip_first_redundant_copy{};
+    bool managed_control{};
     bool automatic_lifetime_tracking{true};
     bool concurrent_lifetime_stress{};
 };
@@ -162,10 +170,18 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
                 return std::nullopt;
             }
             options.gpu_timeout_ms = *gpu_timeout_ms;
+        } else if (argument == L"--control-timeout-ms" && index + 1 < argc) {
+            const auto control_timeout_ms = parse_positive(argv[++index]);
+            if (!control_timeout_ms.has_value() || *control_timeout_ms > 5000) {
+                return std::nullopt;
+            }
+            options.control_timeout_ms = *control_timeout_ms;
         } else if (argument == L"--hardware") {
             options.use_hardware = true;
         } else if (argument == L"--skip-first-redundant-copy") {
             options.skip_first_redundant_copy = true;
+        } else if (argument == L"--managed-control") {
+            options.managed_control = true;
         } else if (argument == L"--cooperative-lifetime") {
             options.automatic_lifetime_tracking = false;
         } else if (argument == L"--concurrent-lifetime-stress") {
@@ -175,7 +191,11 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
         }
     }
 
-    if (options.hook_path.empty()) {
+    if (options.hook_path.empty() ||
+        (options.managed_control &&
+            (options.skip_first_redundant_copy ||
+             !options.automatic_lifetime_tracking ||
+             options.concurrent_lifetime_stress))) {
         return std::nullopt;
     }
     return options;
@@ -895,17 +915,43 @@ bool run_resource_lifetime_workload(
 
 bool run_concurrent_lifetime_detach_stress(
     ID3D11Device* device,
+    IDXGISwapChain* swap_chain,
+    FluidHookAttachExFunction attach_ex,
     FluidHookDetachFunction detach,
     FluidHookIsAttachedFunction is_attached,
     FluidHookReadSnapshotFunction read_snapshot,
     unsigned long& completed_cycles,
+    bool& stale_create_forwarded,
+    bool& stale_release_forwarded,
+    bool& stale_calls_observation_neutral,
+    bool& reattach_rejected,
     FluidHookSnapshotV1& pre_detach_snapshot,
     HRESULT& snapshot_result,
-    HRESULT& detach_result) {
-    if (device == nullptr || detach == nullptr || is_attached == nullptr ||
-        read_snapshot == nullptr) {
+    HRESULT& detach_result,
+    HRESULT& reattach_result,
+    HRESULT& final_detach_result) {
+    if (device == nullptr || swap_chain == nullptr || attach_ex == nullptr ||
+        detach == nullptr || is_attached == nullptr || read_snapshot == nullptr) {
         return false;
     }
+
+    D3D11_BUFFER_DESC delayed_description{};
+    delayed_description.ByteWidth = kAutomaticBufferBytes;
+    delayed_description.Usage = D3D11_USAGE_DEFAULT;
+    ComPtr<ID3D11Buffer> delayed_buffer;
+    if (FAILED(device->CreateBuffer(
+            &delayed_description,
+            nullptr,
+            &delayed_buffer))) {
+        return false;
+    }
+    auto** device_vtable = *reinterpret_cast<void***>(device);
+    auto** buffer_vtable = *reinterpret_cast<void***>(delayed_buffer.Get());
+    const auto delayed_create = reinterpret_cast<DelayedCreateBufferFunction>(
+        device_vtable[3]);
+    const auto delayed_release = reinterpret_cast<DelayedReleaseFunction>(
+        buffer_vtable[2]);
+    auto* delayed_buffer_raw = delayed_buffer.Detach();
 
     std::atomic<bool> start{false};
     std::atomic<bool> stop{false};
@@ -943,6 +989,55 @@ bool run_concurrent_lifetime_detach_stress(
     detach_result = detach();
     stop.store(true, std::memory_order_release);
     worker.join();
+
+    FluidHookSnapshotV1 before_stale_snapshot{};
+    before_stale_snapshot.struct_size = sizeof(before_stale_snapshot);
+    const auto before_stale_snapshot_result =
+        read_snapshot(&before_stale_snapshot);
+    ID3D11Buffer* post_detach_buffer{};
+    const auto delayed_create_result = delayed_create(
+        device,
+        &delayed_description,
+        nullptr,
+        &post_detach_buffer);
+    stale_create_forwarded = SUCCEEDED(delayed_create_result) &&
+        post_detach_buffer != nullptr;
+    if (post_detach_buffer != nullptr) {
+        stale_create_forwarded = stale_create_forwarded &&
+            delayed_release(post_detach_buffer) == 0;
+    }
+    stale_release_forwarded = delayed_release(delayed_buffer_raw) == 0;
+    FluidHookSnapshotV1 after_stale_snapshot{};
+    after_stale_snapshot.struct_size = sizeof(after_stale_snapshot);
+    const auto after_stale_snapshot_result = read_snapshot(&after_stale_snapshot);
+    stale_calls_observation_neutral =
+        SUCCEEDED(before_stale_snapshot_result) &&
+        SUCCEEDED(after_stale_snapshot_result) &&
+        std::memcmp(
+            &before_stale_snapshot,
+            &after_stale_snapshot,
+            sizeof(before_stale_snapshot)) == 0;
+
+    FluidHookAttachOptionsV1 reattach_options{};
+    reattach_options.struct_size = sizeof(reattach_options);
+    reattach_options.abi_version = fluid_hook_attach_options_abi_version;
+    reattach_options.flags = fluid_hook_attach_flag_track_resource_lifetime;
+    reattach_result = attach_ex(swap_chain, &reattach_options);
+    final_detach_result = detach();
+    FluidHookSnapshotV1 after_rejected_reattach_snapshot{};
+    after_rejected_reattach_snapshot.struct_size =
+        sizeof(after_rejected_reattach_snapshot);
+    const auto after_rejected_reattach_snapshot_result =
+        read_snapshot(&after_rejected_reattach_snapshot);
+    reattach_rejected =
+        reattach_result == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS) &&
+        final_detach_result == S_FALSE &&
+        is_attached() == FALSE &&
+        SUCCEEDED(after_rejected_reattach_snapshot_result) &&
+        std::memcmp(
+            &after_stale_snapshot,
+            &after_rejected_reattach_snapshot,
+            sizeof(after_stale_snapshot)) == 0;
     completed_cycles = completed.load(std::memory_order_acquire);
     return worker_succeeded.load(std::memory_order_acquire) &&
         completed_cycles >= 64 &&
@@ -952,16 +1047,21 @@ bool run_concurrent_lifetime_detach_stress(
         pre_detach_snapshot.release_hook_failure_count == 0 &&
         pre_detach_snapshot.provenance_failure_count == 0 &&
         SUCCEEDED(detach_result) &&
-        is_attached() == FALSE;
+        stale_create_forwarded &&
+        stale_release_forwarded &&
+        stale_calls_observation_neutral &&
+        reattach_rejected;
 }
 
 bool snapshot_matches_workload(
     const FluidHookSnapshotV1& snapshot,
     const Options& options) {
-    const auto expected_skipped_count = options.skip_first_redundant_copy
+    const auto optimization_enabled =
+        options.skip_first_redundant_copy || options.managed_control;
+    const auto expected_skipped_count = optimization_enabled
         ? kExpectedSkippedCopyCount
         : 0;
-    const auto expected_skipped_bytes = options.skip_first_redundant_copy
+    const auto expected_skipped_bytes = optimization_enabled
         ? kExpectedSkippedCopyBytes
         : 0;
     const auto expected_retire_count = options.automatic_lifetime_tracking
@@ -998,6 +1098,17 @@ bool snapshot_matches_workload(
         snapshot.clear_render_target_view_count == 1 &&
         snapshot.clear_unordered_access_view_float_count == 1 &&
         snapshot.gpu_view_write_bytes_estimated == kExpectedGpuViewWriteBytes &&
+        snapshot.control_policy_enabled == (options.managed_control ? 1ULL : 0ULL) &&
+        snapshot.control_policy_epoch == (options.managed_control ? 1ULL : 0ULL) &&
+        snapshot.control_policy_acknowledged_epoch ==
+            (options.managed_control ? 1ULL : 0ULL) &&
+        snapshot.control_policy_applied_action_count ==
+            (options.managed_control ? 1ULL : 0ULL) &&
+        snapshot.control_policy_rejected_count == 0 &&
+        snapshot.control_policy_status == static_cast<std::uint64_t>(
+            options.managed_control
+                ? FluidHookControlStatusV1::exhausted
+                : FluidHookControlStatusV1::none) &&
         snapshot.forwarded_copy_count == kExpectedCopyCount - expected_skipped_count &&
         snapshot.forwarded_copy_bytes_estimated ==
             kExpectedCopyBytes - expected_skipped_bytes &&
@@ -1018,7 +1129,8 @@ bool snapshot_matches_workload(
             (options.automatic_lifetime_tracking ? 1ULL : 0ULL) &&
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >=
-            snapshot.present_count + 161 + snapshot.resource_reuse_count &&
+            snapshot.present_count + 161 + snapshot.resource_reuse_count +
+                (options.managed_control ? 1 : 0) &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -1026,6 +1138,7 @@ std::string build_report(
     const Options& options,
     const FluidHookSnapshotV1& snapshot,
     HRESULT attach_result,
+    HRESULT control_policy_wait_result,
     HRESULT refresh_result,
     HRESULT snapshot_result,
     HRESULT detach_result,
@@ -1040,22 +1153,42 @@ std::string build_report(
     const ContentVerification& content,
     const TimingMetrics& timing,
     const AdapterIdentity& adapter) {
+    const auto optimization_enabled =
+        options.skip_first_redundant_copy || options.managed_control;
+    const auto optimization_kind = options.managed_control
+        ? "managed-policy-skip-redundant-copy-resource"
+        : (options.skip_first_redundant_copy
+            ? "attach-option-skip-redundant-copy-resource"
+            : "none");
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7.3\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.8.0\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
            << "  \"read_only_hook\": "
-           << (options.skip_first_redundant_copy ? "false" : "true") << ",\n"
+           << (optimization_enabled ? "false" : "true") << ",\n"
            << "  \"would_modify_frame_data\": false,\n"
            << "  \"would_skip_copies\": "
-           << (options.skip_first_redundant_copy ? "true" : "false") << ",\n"
+           << (optimization_enabled ? "true" : "false") << ",\n"
            << "  \"optimization_requested\": "
-           << (options.skip_first_redundant_copy ? "true" : "false") << ",\n"
-           << "  \"optimization_kind\": \"skip-first-redundant-copy-resource\",\n"
+           << (optimization_enabled ? "true" : "false") << ",\n"
+           << "  \"optimization_kind\": \"" << optimization_kind << "\",\n"
+           << "  \"module_pinned_until_process_exit\": "
+           << (SUCCEEDED(attach_result) ? "true" : "false") << ",\n"
            << "  \"max_skipped_copy_count\": "
-           << (options.skip_first_redundant_copy ? 1 : 0) << ",\n"
+           << (optimization_enabled ? 1 : 0) << ",\n"
+           << "  \"control_plane\": "
+           << (options.managed_control
+               ? "\"managed-shared-memory-policy-v1\""
+               : (options.skip_first_redundant_copy
+                    ? "\"immutable-attach-options\""
+                    : "\"observe-only\""))
+           << ",\n"
+           << "  \"control_policy_requested\": "
+           << (options.managed_control ? "true" : "false") << ",\n"
+           << "  \"control_policy_timeout_ms\": "
+           << options.control_timeout_ms << ",\n"
            << "  \"automatic_lifetime_tracking\": "
            << (snapshot.automatic_lifetime_tracking != 0 ? "true" : "false") << ",\n"
            << "  \"release_observation_scope\": "
@@ -1166,6 +1299,18 @@ std::string build_report(
            << snapshot.clear_unordered_access_view_float_count << ",\n"
            << "    \"gpu_view_write_bytes_estimated\": "
            << snapshot.gpu_view_write_bytes_estimated << ",\n"
+           << "    \"control_policy_enabled\": "
+           << snapshot.control_policy_enabled << ",\n"
+           << "    \"control_policy_epoch\": "
+           << snapshot.control_policy_epoch << ",\n"
+           << "    \"control_policy_acknowledged_epoch\": "
+           << snapshot.control_policy_acknowledged_epoch << ",\n"
+           << "    \"control_policy_applied_action_count\": "
+           << snapshot.control_policy_applied_action_count << ",\n"
+           << "    \"control_policy_rejected_count\": "
+           << snapshot.control_policy_rejected_count << ",\n"
+           << "    \"control_policy_status\": "
+           << snapshot.control_policy_status << ",\n"
            << "    \"redundant_copy_candidate_count\": "
            << snapshot.redundant_copy_candidate_count << ",\n"
            << "    \"redundant_copy_bytes_estimated\": "
@@ -1195,6 +1340,8 @@ std::string build_report(
            << "    \"ipc_overrun_count\": " << snapshot.ipc_overrun_count << "\n"
            << "  },\n"
            << "  \"attach_hresult\": \"" << hresult_hex(attach_result) << "\",\n"
+           << "  \"control_policy_wait_hresult\": \""
+           << hresult_hex(control_policy_wait_result) << "\",\n"
            << "  \"refresh_hresult\": \"" << hresult_hex(refresh_result) << "\",\n"
            << "  \"snapshot_hresult\": \"" << hresult_hex(snapshot_result) << "\",\n"
            << "  \"detach_hresult\": \"" << hresult_hex(detach_result) << "\"\n"
@@ -1210,8 +1357,10 @@ int wmain(int argc, wchar_t* argv[]) {
         std::wcerr << L"Usage: fluidruntime-hook-target --hook <dll> "
                       L"[--frames <count>] [--hold-ms <milliseconds>] "
                       L"[--gpu-timeout-ms <milliseconds>] "
+                      L"[--control-timeout-ms <milliseconds>] "
                       L"[--out <report.json>] [--hardware] "
-                      L"[--skip-first-redundant-copy] [--cooperative-lifetime] "
+                      L"[--skip-first-redundant-copy] [--managed-control] "
+                      L"[--cooperative-lifetime] "
                       L"[--concurrent-lifetime-stress]\n";
         return 2;
     }
@@ -1325,6 +1474,9 @@ int wmain(int argc, wchar_t* argv[]) {
         GetProcAddress(hook_module, "FluidHookDetach"));
     const auto refresh = reinterpret_cast<FluidHookRefreshFunction>(
         GetProcAddress(hook_module, "FluidHookRefresh"));
+    const auto wait_for_control_policy =
+        reinterpret_cast<FluidHookWaitForControlPolicyFunction>(
+            GetProcAddress(hook_module, "FluidHookWaitForControlPolicy"));
     const auto retire_resource = reinterpret_cast<FluidHookRetireResourceFunction>(
         GetProcAddress(hook_module, "FluidHookRetireResource"));
     const auto is_attached = reinterpret_cast<FluidHookIsAttachedFunction>(
@@ -1332,6 +1484,7 @@ int wmain(int argc, wchar_t* argv[]) {
     const auto read_snapshot = reinterpret_cast<FluidHookReadSnapshotFunction>(
         GetProcAddress(hook_module, "FluidHookReadSnapshot"));
     if (attach == nullptr || attach_ex == nullptr || detach == nullptr || refresh == nullptr ||
+        wait_for_control_policy == nullptr ||
         retire_resource == nullptr || is_attached == nullptr || read_snapshot == nullptr) {
         FreeLibrary(hook_module);
         DestroyWindow(window);
@@ -1351,33 +1504,67 @@ int wmain(int argc, wchar_t* argv[]) {
         attach_options.flags |= fluid_hook_attach_flag_skip_first_redundant_copy;
         attach_options.max_skipped_copy_count = 1;
     }
+    if (options->managed_control) {
+        attach_options.flags |= fluid_hook_attach_flag_allow_control_policy;
+    }
     const auto attach_result =
-        !options->automatic_lifetime_tracking && !options->skip_first_redundant_copy
+        !options->automatic_lifetime_tracking &&
+            !options->skip_first_redundant_copy &&
+            !options->managed_control
         ? attach(swap_chain.Get())
         : attach_ex(swap_chain.Get(), &attach_options);
+    const auto control_policy_wait_result = options->managed_control
+        ? (SUCCEEDED(attach_result)
+            ? wait_for_control_policy(options->control_timeout_ms)
+            : attach_result)
+        : S_FALSE;
     if (options->concurrent_lifetime_stress) {
         unsigned long completed_cycles = 0;
+        bool stale_create_forwarded = false;
+        bool stale_release_forwarded = false;
+        bool stale_calls_observation_neutral = false;
+        bool reattach_rejected = false;
         FluidHookSnapshotV1 stress_snapshot{};
         HRESULT stress_snapshot_result = E_UNEXPECTED;
         HRESULT stress_detach_result = E_UNEXPECTED;
+        HRESULT stress_reattach_result = E_UNEXPECTED;
+        HRESULT stress_final_detach_result = E_UNEXPECTED;
         const auto stress_succeeded =
             SUCCEEDED(attach_result) &&
             options->automatic_lifetime_tracking &&
             run_concurrent_lifetime_detach_stress(
                 device.Get(),
+                swap_chain.Get(),
+                attach_ex,
                 detach,
                 is_attached,
                 read_snapshot,
                 completed_cycles,
+                stale_create_forwarded,
+                stale_release_forwarded,
+                stale_calls_observation_neutral,
+                reattach_rejected,
                 stress_snapshot,
                 stress_snapshot_result,
-                stress_detach_result);
+                stress_detach_result,
+                stress_reattach_result,
+                stress_final_detach_result);
         std::ostringstream stress_output;
         stress_output << "{\n"
                       << "  \"mode\": "
-                         "\"fluidruntime-concurrent-lifetime-detach-v0.7.3\",\n"
+                         "\"fluidruntime-concurrent-lifetime-detach-v0.8.0\",\n"
                       << "  \"target_owned\": true,\n"
                       << "  \"automatic_lifetime_tracking\": true,\n"
+                      << "  \"module_pinned_until_process_exit\": true,\n"
+                      << "  \"stale_create_forwarded\": "
+                      << (stale_create_forwarded ? "true" : "false") << ",\n"
+                      << "  \"stale_release_forwarded\": "
+                      << (stale_release_forwarded ? "true" : "false") << ",\n"
+                      << "  \"stale_calls_observation_neutral\": "
+                      << (stale_calls_observation_neutral ? "true" : "false")
+                      << ",\n"
+                      << "  \"reattach_rejected\": "
+                      << (reattach_rejected ? "true" : "false") << ",\n"
                       << "  \"completed_cycles\": " << completed_cycles << ",\n"
                       << "  \"release_hook_slot_count\": "
                       << stress_snapshot.release_hook_slot_count << ",\n"
@@ -1391,6 +1578,10 @@ int wmain(int argc, wchar_t* argv[]) {
                       << hresult_hex(stress_snapshot_result) << "\",\n"
                       << "  \"detach_hresult\": \""
                       << hresult_hex(stress_detach_result) << "\",\n"
+                      << "  \"reattach_hresult\": \""
+                      << hresult_hex(stress_reattach_result) << "\",\n"
+                      << "  \"final_detach_hresult\": \""
+                      << hresult_hex(stress_final_detach_result) << "\",\n"
                       << "  \"rollback_restored\": "
                       << (stress_succeeded ? "true" : "false") << "\n"
                       << "}\n";
@@ -1429,6 +1620,7 @@ int wmain(int argc, wchar_t* argv[]) {
     QueryPerformanceCounter(&workload_start);
     auto resource_workload_succeeded =
         SUCCEEDED(attach_result) &&
+        (!options->managed_control || SUCCEEDED(control_policy_wait_result)) &&
         is_attached() != FALSE &&
         run_resource_workload(
             device.Get(),
@@ -1501,6 +1693,7 @@ int wmain(int argc, wchar_t* argv[]) {
         *options,
         snapshot,
         attach_result,
+        control_policy_wait_result,
         refresh_result,
         snapshot_result,
         detach_result,
@@ -1533,6 +1726,7 @@ int wmain(int argc, wchar_t* argv[]) {
     const auto passed = render_succeeded &&
         resource_workload_succeeded &&
         resource_metrics_matched &&
+        (!options->managed_control || SUCCEEDED(control_policy_wait_result)) &&
         original_pointer_restored &&
         context_vtable_pointer_stable &&
         context_copy_entry_stable &&

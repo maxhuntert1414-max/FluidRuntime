@@ -17,6 +17,13 @@ public sealed record PairedMetricSummary(
     int BaselineLowerCount,
     int TieCount);
 
+public sealed record ManagerControlLaneStatus(
+    string Lane,
+    string State,
+    bool NativeBackendAvailable,
+    bool ActuationEnabled,
+    string SafetyBoundary);
+
 public sealed record CopyElisionTrialReport(
     int PairIndex,
     string Phase,
@@ -63,4 +70,9 @@ public sealed record CopyElisionLabReport(
     int GpuValidPairCount,
     PairedMetricSummary CpuWorkload,
     PairedMetricSummary? GpuWorkload,
+    string ControlPlane,
+    long PublishedPolicyEpochPerOptimizedRun,
+    long AcknowledgedPolicyEpochPerOptimizedRun,
+    long AppliedPolicyActionsPerOptimizedRun,
+    IReadOnlyList<ManagerControlLaneStatus> ControlLanes,
     IReadOnlyList<CopyElisionTrialReport> Trials);

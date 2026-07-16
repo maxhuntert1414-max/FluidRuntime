@@ -14,7 +14,8 @@ flowchart LR
     D3D[D3D11 cooperative hook] --> R[Shared-memory event ring]
     R --> MR
     MR --> P[Validated control plan]
-    P -. owned lab opt-in only .-> D3D
+    P --> C[Shared-memory control block]
+    C -. owned lab opt-in only .-> D3D
 ```
 
 ## Components
@@ -34,14 +35,17 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.7.3 publishes 80-byte ABI-v5 events into a 1,024-slot named
-shared-memory ring.
+Version 0.8.0 publishes 80-byte ABI-v6 events into a 1,024-slot named
+shared-memory ring after a 64-byte ring header and a 64-byte ABI-v1 control
+block.
 The mapping is local to the Windows session and named for the target PID. The
-header and event layouts are versioned independently from the report schema.
+header, control, and event layouts are versioned independently from the report
+schema. The mapping and retained forwarding metadata stay alive until the owned
+target exits; policy authority is disabled at detach.
 
 The native writer:
 
-1. creates and initializes the mapping;
+1. creates and initializes the mapping, event header, and control block;
 2. publishes the header magic only after the complete header is visible;
 3. reserves event sequences atomically;
 4. invalidates a reused slot, writes its payload, and publishes its sequence;
@@ -50,7 +54,7 @@ The native writer:
 The managed reader:
 
 1. retries while a newly created header is incomplete;
-2. validates magic, ABI, capacity, event size, and process identity;
+2. validates ring and control magic, ABI, capacity, event size, and process identity;
 3. reads published sequences with cross-process atomic operations;
 4. detects overwritten or discontinuous sequences;
 5. publishes its cursor atomically;
@@ -60,12 +64,45 @@ The managed reader:
 
 Events contain opaque resource IDs, never raw resource pointer addresses.
 
+## Managed Control Plane
+
+The v0.8 control block is intentionally smaller than a general scheduler. The
+managed runtime writes all policy fields, executes a full memory barrier, and
+publishes epoch 1 atomically. The target waits only when its owned attach options
+explicitly allow managed policy. It copies a valid policy into native atomics,
+publishes status `accepted`, emits an evidence event, and acknowledges the epoch.
+
+The only accepted action mask is `skip_redundant_copy_resource`, the only
+accepted budget is one, and expiration must be in the future but no more than
+four seconds away. A second epoch, unknown bit, different budget, or invalid
+expiration is rejected. `CopyResource` consults cached native state only after
+the provenance model has identified an unchanged source/destination repeat.
+An atomic compare-and-swap reserves the one-action budget, so concurrent calls
+cannot both consume it. While managed policy is enabled, hook entries are
+serialized around provenance proof, original API forwarding, and state commit,
+so another tracked write cannot invalidate a proof before the decision. The
+final status is `exhausted`; expired policy fails without authorizing a skip.
+
+The managed comparison still uses separate baseline and optimized processes.
+It rejects any missing acknowledgment, policy rejection, wrong event order,
+budget mismatch, lost event, content drift, lifecycle error, or rollback error.
+CPU scheduling, RAM/VRAM residency, and presentation actuation have no policy
+action or writable backend in this ABI.
+
 ## Safety Boundary
 
 The current hook is loaded cooperatively by a process we own. It does not
 perform remote injection, mutate output frame data, install a driver, or target
 protected and anti-cheat processes. Detach restores current vtable entries and
-waits for in-flight hook calls before the DLL can be unloaded.
+waits for in-flight hook calls. The hook module is pinned until process exit;
+this prevents a delayed call that already loaded a hook pointer from entering
+unloaded code. Rollback means original dispatch and disabled actuation, not
+early removal of the module image. Retained hook entrypoints detect the detached
+state and call only the original function, without updating metrics, events, or
+resource provenance. The retained mapping and Release-slot metadata make a
+second attachment generation unsafe to distinguish, so the API rejects every
+reattach after the first successful attach. A fresh process starts a new
+session.
 
 Version 0.5 adds `FluidHookAttachEx` with an immutable, versioned option that can
 skip at most the first redundant `CopyResource`. The normal `FluidHookAttach`
@@ -75,6 +112,11 @@ snapshot, detaches the hook, and only then performs buffer/texture readback.
 Logical bytes are compared exactly and also hashed for the report while texture
 row padding is ignored. Any count, byte, digest, or rollback mismatch fails the
 run closed.
+
+Version 0.8 keeps the immutable attach-option experiment and adds a distinct
+managed-policy path. Both are disabled unless the owned target opts in. The
+control mapping is not an authorization boundary for hostile same-user
+processes, and this release does not expose external attach or remote injection.
 
 The v0.6 evidence layer wraps the owned resource workload in a D3D11
 `TIMESTAMP_DISJOINT` query and start/end timestamp queries. Query polling has a
@@ -100,7 +142,7 @@ short patch lock, releases all FluidRuntime locks, calls the original Release,
 and treats a zero test return as destruction of that exact interface identity.
 Destruction uses the same provenance invalidation and bounded ABA history as
 cooperative retirement. Detach restores both fixed and dynamic slots, waits for
-all in-flight calls, and clears the dynamic registry before DLL unload. A normal
+all in-flight calls, and clears the dynamic registry. A normal
 `FluidHookAttach` path installs no Release hooks.
 
 The v0.7.2 state model gives each Buffer/Texture2D an overall generation and a
@@ -131,5 +173,9 @@ observe-only, and all regional copies remain forwarded.
   part of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
-- The lab supports one active hook attachment per process mapping lifetime.
-- CPU scheduling and RAM/VRAM residency actions are still advisory.
+- The control plane supports one process-local epoch, one action bit, and one
+  applied action in the owned workload only.
+- The lab permits one successful hook attachment per process lifetime. Reattach
+  needs an explicit generation contract and is rejected in this ABI.
+- CPU scheduling and RAM/VRAM residency actions are still advisory; presentation
+  actuation is disabled.

@@ -20,6 +20,10 @@ jobs:
         run: cmake --build native/build --config Release
       - name: Test native probe
         run: ctest --test-dir native/build -C Release --output-on-failure
+      - name: Build native probe (Debug)
+        run: cmake --build native/build --config Debug
+      - name: Test native probe (Debug)
+        run: ctest --test-dir native/build -C Debug --output-on-failure
       - name: Test native hook IPC
         run: >-
           dotnet run --project src/FluidRuntime -c Release --no-build -- hook-lab
@@ -35,21 +39,58 @@ jobs:
           --frames 120 --hold-ms 500 --gpu-timeout-ms 1000
           --trial-pairs 2 --warmup-pairs 0 --hardware false
           --out artifacts/copy-elision-ci.json
-      - name: Validate copy-elision evidence contract
+      - name: Test managed control plane
+        run: >-
+          dotnet run --project src/FluidRuntime -c Release --no-build -- manager-lab
+          --target native/build/Release/fluidruntime-hook-target.exe
+          --hook native/build/Release/fluidruntime-present-hook.dll
+          --frames 120 --hold-ms 500 --gpu-timeout-ms 1000
+          --trial-pairs 2 --warmup-pairs 0 --hardware false
+          --out artifacts/manager-control-ci.json
+      - name: Validate v0.8 evidence contracts
         shell: pwsh
         run: |
-          $report = Get-Content artifacts/copy-elision-ci.json -Raw | ConvertFrom-Json
-          if ($report.mode -ne 'fluidruntime-copy-elision-trace-v0.7.3' -or
-              $report.claim_scope -ne 'owned-d3d11-copy-elision-gpu-workload-only' -or
-              $report.included_trial_pairs -ne 2 -or
-              $report.performance_claim_allowed -ne $false -or
-              $report.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
-            throw 'Copy-elision CI report violated the v0.7.3 evidence contract.'
+          $copy = Get-Content artifacts/copy-elision-ci.json -Raw | ConvertFrom-Json
+          $manager = Get-Content artifacts/manager-control-ci.json -Raw | ConvertFrom-Json
+          if ($copy.mode -ne 'fluidruntime-copy-elision-trace-v0.8.0' -or
+              $copy.claim_scope -ne 'owned-d3d11-copy-elision-gpu-workload-only' -or
+              $copy.control_plane -ne 'immutable-attach-options' -or
+              $copy.included_trial_pairs -ne 2 -or
+              $copy.applied_policy_actions_per_optimized_run -ne 0 -or
+              $copy.performance_claim_allowed -ne $false -or
+              $copy.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
+            throw 'Copy-elision CI report violated the v0.8 evidence contract.'
           }
-          $runs = $report.trials | ForEach-Object { $_.baseline; $_.optimized }
+          if ($manager.mode -ne 'fluidruntime-manager-control-trace-v0.8.0' -or
+              $manager.claim_scope -ne 'owned-d3d11-managed-policy-copy-elision-only' -or
+              $manager.control_plane -ne 'managed-shared-memory-policy-v1' -or
+              $manager.included_trial_pairs -ne 2 -or
+              $manager.published_policy_epoch_per_optimized_run -ne 1 -or
+              $manager.acknowledged_policy_epoch_per_optimized_run -ne 1 -or
+              $manager.applied_policy_actions_per_optimized_run -ne 1 -or
+              $manager.avoided_copy_count_per_optimized_run -ne 1 -or
+              $manager.avoided_copy_bytes_per_optimized_run -ne 4096 -or
+              $manager.performance_claim_allowed -ne $false -or
+              $manager.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
+            throw 'Manager CI report violated the v0.8 control contract.'
+          }
+          $copyLane = $manager.control_lanes | Where-Object lane -eq 'copy-path'
+          $memoryLane = $manager.control_lanes | Where-Object lane -eq 'ram-vram-residency'
+          if ($manager.control_lanes.Count -ne 4 -or
+              $copyLane.state -ne 'active-owned-lab' -or
+              -not $copyLane.actuation_enabled -or
+              $memoryLane.state -ne 'blocked-no-native-backend' -or
+              $memoryLane.actuation_enabled) {
+            throw 'Manager CI control lanes were not fail-closed.'
+          }
+          $runs = @(
+            $copy.trials | ForEach-Object { $_.baseline; $_.optimized }
+            $manager.trials | ForEach-Object { $_.baseline; $_.optimized }
+          )
           if ($runs | Where-Object {
-              $_.mode -ne 'fluidruntime-hook-ipc-lab-v0.7.3' -or
-              $_.ring_abi_version -ne 5 -or
+              $_.mode -ne 'fluidruntime-hook-ipc-lab-v0.8.0' -or
+              $_.ring_abi_version -ne 6 -or
+              -not $_.module_pinned_until_process_exit -or
               -not $_.automatic_lifetime_tracking -or
               $_.release_observation_scope -ne 'owned-returned-buffer-texture-interface' -or
               $_.subresource_provenance_scope -ne
@@ -75,5 +116,26 @@ jobs:
               $_.source_subresource_hash -ne $_.destination_subresource_hash -or
               -not $_.rollback_restored
             }) {
-            throw 'Copy-elision CI runs violated the v0.7.3 lifecycle contract.'
+            throw 'CI runs violated the v0.8 lifecycle contract.'
+          }
+          $managedBaselines = $manager.trials | ForEach-Object { $_.baseline }
+          if ($managedBaselines | Where-Object {
+              $_.managed_control_policy_enabled -or
+              $_.control_plane -ne 'observe-only' -or
+              $_.control_policy_published_epoch -ne 0 -or
+              $_.control_policy_status -ne 'none'
+            }) {
+            throw 'Manager baselines were not observe-only.'
+          }
+          $managedOptimized = $manager.trials | ForEach-Object { $_.optimized }
+          if ($managedOptimized | Where-Object {
+              -not $_.managed_control_policy_enabled -or
+              $_.control_plane -ne 'managed-shared-memory-policy-v1' -or
+              $_.control_policy_published_epoch -ne 1 -or
+              $_.control_policy_acknowledged_epoch -ne 1 -or
+              $_.control_policy_applied_action_count -ne 1 -or
+              $_.control_policy_rejected_count -ne 0 -or
+              $_.control_policy_status -ne 'exhausted'
+            }) {
+            throw 'Manager optimized runs violated the bounded policy contract.'
           }

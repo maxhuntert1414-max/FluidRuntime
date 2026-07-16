@@ -85,6 +85,23 @@ public sealed class HookLabOptionsTests
     }
 
     [Fact]
+    public void ParseManager_uses_paired_lab_defaults()
+    {
+        var options = HookLabOptions.ParseManager(
+            [
+                "manager-lab",
+                "--target", "target.exe",
+                "--hook", "hook.dll",
+                "--out", "report.json"
+            ]);
+
+        Assert.Equal(5, options.TrialPairs);
+        Assert.Equal(1, options.WarmupPairs);
+        Assert.False(options.SkipFirstRedundantCopy);
+        Assert.False(options.UseManagedControlPolicy);
+    }
+
+    [Fact]
     public void Parse_rejects_unbounded_or_implicit_values()
     {
         Assert.Throws<ArgumentException>(() => HookLabOptions.Parse(

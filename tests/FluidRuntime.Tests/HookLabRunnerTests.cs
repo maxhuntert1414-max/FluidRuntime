@@ -33,6 +33,36 @@ public sealed class HookLabRunnerTests
     }
 
     [Fact]
+    public void Deterministic_workload_requires_managed_policy_acceptance_event()
+    {
+        var events = BuildDeterministicWorkload();
+        events[6] = events[6] with { Flags = 3 };
+        events.Insert(0, new HookIpcEvent(
+            Sequence: 0,
+            QpcTicks: 900,
+            Type: HookEventType.ControlPolicyAccepted,
+            ThreadId: 7,
+            ResourceA: 1,
+            ResourceB: HookRingReader.SkipRedundantCopyResourceAction,
+            SizeBytes: 1,
+            Generation: 2000,
+            Flags: 0));
+
+        Assert.True(HookLabRunner.MatchesDeterministicWorkload(
+            events,
+            expectedPresentCount: 1,
+            copyElisionEnabled: true,
+            managedControlPolicy: true));
+
+        events.RemoveAt(0);
+        Assert.False(HookLabRunner.MatchesDeterministicWorkload(
+            events,
+            expectedPresentCount: 1,
+            copyElisionEnabled: true,
+            managedControlPolicy: true));
+    }
+
+    [Fact]
     public void Deterministic_workload_rejects_order_generation_flags_and_refresh_drift()
     {
         var reordered = BuildDeterministicWorkload();

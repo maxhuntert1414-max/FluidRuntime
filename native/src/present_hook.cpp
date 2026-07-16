@@ -199,9 +199,10 @@ struct ViewWriteTarget {
 std::mutex g_hook_mutex;
 std::mutex g_patch_mutex;
 std::mutex g_resource_mutex;
+std::recursive_mutex g_control_operation_mutex;
 std::array<HookSlot, kHookSlotCount> g_hook_slots{};
 std::vector<HookSlot> g_release_hook_slots;
-size_t g_installed_hook_count{};
+std::atomic<size_t> g_installed_hook_count{0};
 std::atomic<bool> g_detaching{false};
 std::atomic<bool> g_track_resource_lifetime{false};
 
@@ -249,6 +250,17 @@ std::atomic<std::uint64_t> g_provenance_failure_count{0};
 std::atomic<std::uint64_t> g_resource_destroy_count{0};
 std::atomic<std::uint64_t> g_release_hook_failure_count{0};
 std::atomic<std::uint32_t> g_max_skipped_copy_count{0};
+std::atomic<bool> g_allow_control_policy{false};
+std::atomic<std::uint64_t> g_processed_control_policy_epoch{0};
+std::atomic<std::uint64_t> g_active_control_policy_epoch{0};
+std::atomic<std::uint64_t> g_control_policy_action_mask{0};
+std::atomic<std::uint64_t> g_control_policy_action_budget{0};
+std::atomic<std::uint64_t> g_control_policy_expires_at_qpc{0};
+std::atomic<std::uint64_t> g_control_policy_applied_action_count{0};
+std::atomic<std::uint64_t> g_control_policy_rejected_count{0};
+std::atomic<std::uint64_t> g_control_policy_status{0};
+bool g_module_pinned{};
+bool g_attach_completed_once{};
 
 std::unordered_map<ID3D11Resource*, ResourceState> g_resources;
 std::unordered_map<ID3D11Resource*, LastCopy> g_last_copies;
@@ -261,22 +273,59 @@ std::uint64_t g_next_resource_id{};
 
 HANDLE g_ring_mapping{};
 FluidHookRingHeaderV1* g_ring_header{};
+FluidHookControlBlockV1* g_control_block{};
 FluidHookEventV1* g_ring_events{};
 
 ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object);
 
 class ActiveHookCall {
 public:
-    ActiveHookCall() {
+    ActiveHookCall()
+        : control_lock_(g_control_operation_mutex, std::defer_lock) {
         g_active_hook_calls.fetch_add(1, std::memory_order_acquire);
+        if (g_allow_control_policy.load(std::memory_order_acquire) ||
+            g_max_skipped_copy_count.load(std::memory_order_acquire) != 0) {
+            control_lock_.lock();
+        }
+        observation_active_ =
+            !g_detaching.load(std::memory_order_acquire) &&
+            g_installed_hook_count.load(std::memory_order_acquire) != 0;
     }
     ~ActiveHookCall() {
+        if (control_lock_.owns_lock()) {
+            control_lock_.unlock();
+        }
         g_active_hook_calls.fetch_sub(1, std::memory_order_release);
     }
 
     ActiveHookCall(const ActiveHookCall&) = delete;
     ActiveHookCall& operator=(const ActiveHookCall&) = delete;
+
+    [[nodiscard]] bool observation_active() const {
+        return observation_active_;
+    }
+
+private:
+    std::unique_lock<std::recursive_mutex> control_lock_;
+    bool observation_active_{};
 };
+
+bool pin_hook_module() {
+    if (g_module_pinned) {
+        return true;
+    }
+
+    HMODULE module{};
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(&g_hook_mutex),
+            &module)) {
+        return false;
+    }
+    g_module_pinned = true;
+    return true;
+}
 
 bool write_pointer(void** slot, void* value, void* rollback_value) {
     DWORD old_protection{};
@@ -386,8 +435,10 @@ bool initialize_event_ring() {
 
     ZeroMemory(view, static_cast<SIZE_T>(fluid_hook_ring_mapping_size));
     auto* header = reinterpret_cast<FluidHookRingHeaderV1*>(view);
-    auto* events = reinterpret_cast<FluidHookEventV1*>(
+    auto* control = reinterpret_cast<FluidHookControlBlockV1*>(
         view + sizeof(FluidHookRingHeaderV1));
+    auto* events = reinterpret_cast<FluidHookEventV1*>(
+        view + sizeof(FluidHookRingHeaderV1) + sizeof(FluidHookControlBlockV1));
     LARGE_INTEGER frequency{};
     QueryPerformanceFrequency(&frequency);
     header->magic = 0;
@@ -399,6 +450,8 @@ bool initialize_event_ring() {
     header->overrun_count = 0;
     header->qpc_frequency = static_cast<std::uint64_t>(frequency.QuadPart);
     header->process_id = GetCurrentProcessId();
+    control->magic = fluid_hook_control_magic;
+    control->abi_version = fluid_hook_control_abi_version;
     for (std::uint32_t index = 0; index < fluid_hook_ring_capacity; ++index) {
         events[index].sequence = -1;
     }
@@ -410,6 +463,7 @@ bool initialize_event_ring() {
 
     g_ring_mapping = mapping;
     g_ring_header = header;
+    g_control_block = control;
     g_ring_events = events;
     return true;
 }
@@ -418,6 +472,7 @@ void close_event_ring() {
     auto* header = g_ring_header;
     const auto mapping = g_ring_mapping;
     g_ring_header = nullptr;
+    g_control_block = nullptr;
     g_ring_events = nullptr;
     g_ring_mapping = nullptr;
     if (header != nullptr) {
@@ -473,6 +528,184 @@ void emit_hook_event(
     InterlockedExchange64(&event.sequence, sequence);
 }
 
+void publish_control_status(FluidHookControlStatusV1 status) {
+    const auto value = static_cast<std::uint64_t>(status);
+    g_control_policy_status.store(value, std::memory_order_release);
+    if (g_control_block != nullptr) {
+        InterlockedExchange64(
+            &g_control_block->status,
+            static_cast<LONG64>(value));
+    }
+}
+
+HRESULT process_published_control_policy() {
+    auto* control = g_control_block;
+    auto* header = g_ring_header;
+    if (control == nullptr || header == nullptr) {
+        return E_UNEXPECTED;
+    }
+    if (!g_allow_control_policy.load(std::memory_order_acquire)) {
+        return E_ACCESSDENIED;
+    }
+
+    const auto published_epoch = InterlockedCompareExchange64(
+        &control->published_epoch,
+        0,
+        0);
+    if (published_epoch <= 0) {
+        return S_FALSE;
+    }
+
+    const auto processed_epoch = g_processed_control_policy_epoch.load(
+        std::memory_order_acquire);
+    if (static_cast<std::uint64_t>(published_epoch) <= processed_epoch) {
+        const auto acknowledged_epoch = InterlockedCompareExchange64(
+            &control->acknowledged_epoch,
+            0,
+            0);
+        const auto status = static_cast<FluidHookControlStatusV1>(
+            g_control_policy_status.load(std::memory_order_acquire));
+        if (acknowledged_epoch != published_epoch) {
+            return S_FALSE;
+        }
+        if (status == FluidHookControlStatusV1::rejected) {
+            return E_INVALIDARG;
+        }
+        if (status == FluidHookControlStatusV1::expired) {
+            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        }
+        return S_OK;
+    }
+
+    const auto expires_at_qpc = InterlockedCompareExchange64(
+        &control->expires_at_qpc,
+        0,
+        0);
+    const auto action_mask = InterlockedCompareExchange64(
+        &control->action_mask,
+        0,
+        0);
+    const auto action_budget = InterlockedCompareExchange64(
+        &control->action_budget,
+        0,
+        0);
+    MemoryBarrier();
+    if (InterlockedCompareExchange64(&control->published_epoch, 0, 0) !=
+        published_epoch) {
+        return S_FALSE;
+    }
+
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    const auto maximum_lifetime = static_cast<LONG64>(header->qpc_frequency * 4);
+    const auto valid =
+        published_epoch == 1 &&
+        processed_epoch == 0 &&
+        action_mask == static_cast<LONG64>(
+            fluid_hook_control_action_skip_redundant_copy_resource) &&
+        action_budget == 1 &&
+        expires_at_qpc > now.QuadPart &&
+        expires_at_qpc - now.QuadPart <= maximum_lifetime;
+
+    g_processed_control_policy_epoch.store(
+        static_cast<std::uint64_t>(published_epoch),
+        std::memory_order_release);
+    if (!valid) {
+        g_control_policy_rejected_count.fetch_add(1, std::memory_order_relaxed);
+        publish_control_status(FluidHookControlStatusV1::rejected);
+        MemoryBarrier();
+        InterlockedExchange64(&control->acknowledged_epoch, published_epoch);
+        return E_INVALIDARG;
+    }
+
+    g_active_control_policy_epoch.store(
+        static_cast<std::uint64_t>(published_epoch),
+        std::memory_order_release);
+    g_control_policy_action_mask.store(
+        static_cast<std::uint64_t>(action_mask),
+        std::memory_order_release);
+    g_control_policy_action_budget.store(
+        static_cast<std::uint64_t>(action_budget),
+        std::memory_order_release);
+    g_control_policy_expires_at_qpc.store(
+        static_cast<std::uint64_t>(expires_at_qpc),
+        std::memory_order_release);
+    g_control_policy_applied_action_count.store(0, std::memory_order_release);
+    InterlockedExchange64(&control->applied_action_count, 0);
+    publish_control_status(FluidHookControlStatusV1::accepted);
+    emit_hook_event(
+        FluidHookEventTypeV1::control_policy_accepted,
+        static_cast<std::uint64_t>(published_epoch),
+        static_cast<std::uint64_t>(action_mask),
+        static_cast<std::uint64_t>(action_budget),
+        static_cast<std::uint64_t>(expires_at_qpc));
+    MemoryBarrier();
+    InterlockedExchange64(&control->acknowledged_epoch, published_epoch);
+    return S_OK;
+}
+
+bool reserve_control_policy_action() {
+    auto* control = g_control_block;
+    if (control == nullptr ||
+        !g_allow_control_policy.load(std::memory_order_acquire) ||
+        g_active_control_policy_epoch.load(std::memory_order_acquire) == 0 ||
+        (g_control_policy_action_mask.load(std::memory_order_acquire) &
+            fluid_hook_control_action_skip_redundant_copy_resource) == 0) {
+        return false;
+    }
+
+    const auto status = static_cast<FluidHookControlStatusV1>(
+        g_control_policy_status.load(std::memory_order_acquire));
+    if (status != FluidHookControlStatusV1::accepted) {
+        return false;
+    }
+
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    if (static_cast<std::uint64_t>(now.QuadPart) >=
+        g_control_policy_expires_at_qpc.load(std::memory_order_acquire)) {
+        publish_control_status(FluidHookControlStatusV1::expired);
+        return false;
+    }
+
+    const auto budget = g_control_policy_action_budget.load(
+        std::memory_order_acquire);
+    auto applied = g_control_policy_applied_action_count.load(
+        std::memory_order_relaxed);
+    while (applied < budget &&
+           !g_control_policy_applied_action_count.compare_exchange_weak(
+               applied,
+               applied + 1,
+               std::memory_order_acq_rel,
+               std::memory_order_relaxed)) {
+    }
+    if (applied >= budget) {
+        publish_control_status(FluidHookControlStatusV1::exhausted);
+        return false;
+    }
+
+    const auto new_count = applied + 1;
+    QueryPerformanceCounter(&now);
+    if (static_cast<std::uint64_t>(now.QuadPart) >=
+        g_control_policy_expires_at_qpc.load(std::memory_order_acquire)) {
+        g_control_policy_applied_action_count.store(
+            applied,
+            std::memory_order_release);
+        InterlockedExchange64(
+            &control->applied_action_count,
+            static_cast<LONG64>(applied));
+        publish_control_status(FluidHookControlStatusV1::expired);
+        return false;
+    }
+    InterlockedExchange64(
+        &control->applied_action_count,
+        static_cast<LONG64>(new_count));
+    if (new_count >= budget) {
+        publish_control_status(FluidHookControlStatusV1::exhausted);
+    }
+    return true;
+}
+
 void update_context_original(size_t slot_index, void* original) {
     switch (slot_index) {
     case 3:
@@ -518,8 +751,10 @@ void update_context_original(size_t slot_index, void* original) {
 void refresh_context_hook_slots() {
     constexpr size_t first_context_slot = 3;
     const std::lock_guard patch_lock(g_patch_mutex);
+    const auto installed_hook_count = g_installed_hook_count.load(
+        std::memory_order_acquire);
     if (g_detaching.load(std::memory_order_acquire) ||
-        g_installed_hook_count < kHookSlotCount) {
+        installed_hook_count < kHookSlotCount) {
         return;
     }
 
@@ -531,7 +766,7 @@ void refresh_context_hook_slots() {
         const auto transitioned_original = *slot.slot;
         const auto points_to_another_hook = std::any_of(
             g_hook_slots.begin(),
-            g_hook_slots.begin() + static_cast<std::ptrdiff_t>(g_installed_hook_count),
+            g_hook_slots.begin() + static_cast<std::ptrdiff_t>(installed_hook_count),
             [transitioned_original](const HookSlot& candidate) {
                 return candidate.hook == transitioned_original;
             });
@@ -1099,6 +1334,9 @@ ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object) {
         g_release_hook_failure_count.fetch_add(1, std::memory_order_relaxed);
         return 1;
     }
+    if (!active_call.observation_active()) {
+        return original(object);
+    }
 
     auto* resource = reinterpret_cast<ID3D11Resource*>(object);
     std::uint64_t observed_resource_id = 0;
@@ -1174,6 +1412,16 @@ void reset_metrics_and_resources() {
     g_provenance_failure_count.store(0, std::memory_order_relaxed);
     g_resource_destroy_count.store(0, std::memory_order_relaxed);
     g_release_hook_failure_count.store(0, std::memory_order_relaxed);
+    g_processed_control_policy_epoch.store(0, std::memory_order_relaxed);
+    g_active_control_policy_epoch.store(0, std::memory_order_relaxed);
+    g_control_policy_action_mask.store(0, std::memory_order_relaxed);
+    g_control_policy_action_budget.store(0, std::memory_order_relaxed);
+    g_control_policy_expires_at_qpc.store(0, std::memory_order_relaxed);
+    g_control_policy_applied_action_count.store(0, std::memory_order_relaxed);
+    g_control_policy_rejected_count.store(0, std::memory_order_relaxed);
+    g_control_policy_status.store(
+        static_cast<std::uint64_t>(FluidHookControlStatusV1::none),
+        std::memory_order_relaxed);
 
     const std::lock_guard resource_lock(g_resource_mutex);
     g_resources.clear();
@@ -1190,6 +1438,13 @@ HRESULT STDMETHODCALLTYPE hooked_present(
     UINT sync_interval,
     UINT flags) {
     const ActiveHookCall active_call;
+    const auto original = g_original_present.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        return E_UNEXPECTED;
+    }
+    if (!active_call.observation_active()) {
+        return original(swap_chain, sync_interval, flags);
+    }
     const auto present_count =
         g_present_count.fetch_add(1, std::memory_order_relaxed) + 1;
     emit_hook_event(
@@ -1198,10 +1453,7 @@ HRESULT STDMETHODCALLTYPE hooked_present(
         0,
         0,
         present_count);
-    const auto original = g_original_present.load(std::memory_order_acquire);
-    return original != nullptr
-        ? original(swap_chain, sync_interval, flags)
-        : E_UNEXPECTED;
+    return original(swap_chain, sync_interval, flags);
 }
 
 HRESULT STDMETHODCALLTYPE hooked_create_buffer(
@@ -1213,6 +1465,9 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(
     const auto original = g_original_create_buffer.load(std::memory_order_acquire);
     if (original == nullptr) {
         return E_UNEXPECTED;
+    }
+    if (!active_call.observation_active()) {
+        return original(device, description, initial_data, buffer);
     }
 
     const auto result = original(device, description, initial_data, buffer);
@@ -1264,6 +1519,9 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(
     const auto original = g_original_create_texture2d.load(std::memory_order_acquire);
     if (original == nullptr) {
         return E_UNEXPECTED;
+    }
+    if (!active_call.observation_active()) {
+        return original(device, description, initial_data, texture);
     }
 
     const auto result = original(device, description, initial_data, texture);
@@ -1320,6 +1578,15 @@ HRESULT STDMETHODCALLTYPE hooked_map(
     if (original == nullptr) {
         return E_UNEXPECTED;
     }
+    if (!active_call.observation_active()) {
+        return original(
+            context,
+            resource,
+            subresource,
+            map_type,
+            map_flags,
+            mapped_resource);
+    }
 
     const auto result = original(
         context,
@@ -1365,6 +1632,10 @@ void STDMETHODCALLTYPE hooked_unmap(
     const ActiveHookCall active_call;
     const auto original = g_original_unmap.load(std::memory_order_acquire);
     if (original == nullptr) {
+        return;
+    }
+    if (!active_call.observation_active()) {
+        original(context, resource, subresource);
         return;
     }
 
@@ -1413,6 +1684,17 @@ void STDMETHODCALLTYPE hooked_update_subresource(
     const ActiveHookCall active_call;
     const auto original = g_original_update_subresource.load(std::memory_order_acquire);
     if (original == nullptr) {
+        return;
+    }
+    if (!active_call.observation_active()) {
+        original(
+            context,
+            destination,
+            destination_subresource,
+            destination_box,
+            source_data,
+            source_row_pitch,
+            source_depth_pitch);
         return;
     }
 
@@ -1464,6 +1746,10 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(
     if (original == nullptr) {
         return;
     }
+    if (!active_call.observation_active()) {
+        original(context, render_target_view, color_rgba);
+        return;
+    }
 
     auto target = resolve_render_target_view(render_target_view);
     original(context, render_target_view, color_rgba);
@@ -1483,6 +1769,10 @@ void STDMETHODCALLTYPE hooked_clear_unordered_access_view_float(
     const auto original =
         g_original_clear_unordered_access_view_float.load(std::memory_order_acquire);
     if (original == nullptr) {
+        return;
+    }
+    if (!active_call.observation_active()) {
+        original(context, unordered_access_view, values);
         return;
     }
 
@@ -1512,6 +1802,19 @@ void STDMETHODCALLTYPE hooked_copy_subresource_region(
     const auto original =
         g_original_copy_subresource_region.load(std::memory_order_acquire);
     if (original == nullptr) {
+        return;
+    }
+    if (!active_call.observation_active()) {
+        original(
+            context,
+            destination,
+            destination_subresource,
+            destination_x,
+            destination_y,
+            destination_z,
+            source,
+            source_subresource,
+            source_box);
         return;
     }
     if (destination == nullptr || source == nullptr) {
@@ -1665,6 +1968,10 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     if (original == nullptr) {
         return;
     }
+    if (!active_call.observation_active()) {
+        original(context, destination, source);
+        return;
+    }
     if (destination == nullptr || source == nullptr) {
         original(context, destination, source);
         refresh_context_hook_slots();
@@ -1708,6 +2015,11 @@ void STDMETHODCALLTYPE hooked_copy_resource(
                    std::memory_order_relaxed)) {
         }
         skipped_copy = skipped_count < skip_limit;
+    } else if (redundant_candidate &&
+               copy_bytes != 0 &&
+               reserve_control_policy_action()) {
+        g_skipped_copy_count.fetch_add(1, std::memory_order_relaxed);
+        skipped_copy = true;
     }
 
     if (skipped_copy) {
@@ -1783,18 +2095,23 @@ HRESULT WINAPI FluidHookAttachEx(
 
     std::uint32_t max_skipped_copy_count = 0;
     bool track_resource_lifetime = false;
+    bool allow_control_policy = false;
     if (options != nullptr) {
         if (options->struct_size < sizeof(FluidHookAttachOptionsV1) ||
             options->abi_version != fluid_hook_attach_options_abi_version ||
             (options->flags & ~(
                 fluid_hook_attach_flag_skip_first_redundant_copy |
-                fluid_hook_attach_flag_track_resource_lifetime)) != 0) {
+                fluid_hook_attach_flag_track_resource_lifetime |
+                fluid_hook_attach_flag_allow_control_policy)) != 0) {
             return E_INVALIDARG;
         }
         const auto skip_enabled =
             (options->flags & fluid_hook_attach_flag_skip_first_redundant_copy) != 0;
+        allow_control_policy =
+            (options->flags & fluid_hook_attach_flag_allow_control_policy) != 0;
         if ((skip_enabled && options->max_skipped_copy_count != 1) ||
-            (!skip_enabled && options->max_skipped_copy_count != 0)) {
+            (!skip_enabled && options->max_skipped_copy_count != 0) ||
+            (skip_enabled && allow_control_policy)) {
             return E_INVALIDARG;
         }
         max_skipped_copy_count = options->max_skipped_copy_count;
@@ -1803,8 +2120,13 @@ HRESULT WINAPI FluidHookAttachEx(
     }
 
     const std::lock_guard hook_lock(g_hook_mutex);
-    if (g_installed_hook_count != 0 || !g_release_hook_slots.empty()) {
+    if (g_installed_hook_count.load(std::memory_order_acquire) != 0 ||
+        !g_release_hook_slots.empty() ||
+        g_attach_completed_once) {
         return HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
+    }
+    if (!pin_hook_module()) {
+        return HRESULT_FROM_WIN32(GetLastError());
     }
 
     ID3D11Device* device{};
@@ -1907,12 +2229,14 @@ HRESULT WINAPI FluidHookAttachEx(
         std::memory_order_release);
     g_max_skipped_copy_count.store(max_skipped_copy_count, std::memory_order_release);
     g_track_resource_lifetime.store(track_resource_lifetime, std::memory_order_release);
+    g_allow_control_policy.store(allow_control_policy, std::memory_order_release);
     reset_metrics_and_resources();
     if (!initialize_event_ring()) {
         const auto ring_error = GetLastError();
         clear_original_functions();
         g_max_skipped_copy_count.store(0, std::memory_order_release);
         g_track_resource_lifetime.store(false, std::memory_order_release);
+        g_allow_control_policy.store(false, std::memory_order_release);
         return HRESULT_FROM_WIN32(ring_error);
     }
 
@@ -1932,18 +2256,22 @@ HRESULT WINAPI FluidHookAttachEx(
             close_event_ring();
             g_max_skipped_copy_count.store(0, std::memory_order_release);
             g_track_resource_lifetime.store(false, std::memory_order_release);
+            g_allow_control_policy.store(false, std::memory_order_release);
             return HRESULT_FROM_WIN32(patch_error);
         }
     }
 
     g_hook_slots = slots;
-    g_installed_hook_count = slots.size();
+    g_installed_hook_count.store(slots.size(), std::memory_order_release);
+    g_attach_completed_once = true;
     return S_OK;
 }
 
 HRESULT WINAPI FluidHookDetach() {
     const std::lock_guard hook_lock(g_hook_mutex);
-    if (g_installed_hook_count == 0) {
+    const auto installed_hook_count = g_installed_hook_count.load(
+        std::memory_order_acquire);
+    if (installed_hook_count == 0) {
         return S_FALSE;
     }
 
@@ -1952,8 +2280,8 @@ HRESULT WINAPI FluidHookDetach() {
     {
         const std::lock_guard patch_lock(g_patch_mutex);
         std::vector<HookSlot*> installed_slots;
-        installed_slots.reserve(g_installed_hook_count + g_release_hook_slots.size());
-        for (size_t index = 0; index < g_installed_hook_count; ++index) {
+        installed_slots.reserve(installed_hook_count + g_release_hook_slots.size());
+        for (size_t index = 0; index < installed_hook_count; ++index) {
             installed_slots.push_back(&g_hook_slots[index]);
         }
         for (auto& slot : g_release_hook_slots) {
@@ -2029,29 +2357,18 @@ HRESULT WINAPI FluidHookDetach() {
         return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
     }
 
-    g_installed_hook_count = 0;
+    g_installed_hook_count.store(0, std::memory_order_release);
     g_hook_slots = {};
-    g_release_hook_slots.clear();
-    clear_original_functions();
     g_max_skipped_copy_count.store(0, std::memory_order_release);
     g_track_resource_lifetime.store(false, std::memory_order_release);
+    g_allow_control_policy.store(false, std::memory_order_release);
     g_detaching.store(false, std::memory_order_release);
-    {
-        const std::lock_guard resource_lock(g_resource_mutex);
-        g_resources.clear();
-        g_last_copies.clear();
-        g_last_subresource_copies.clear();
-        g_pending_write_maps.clear();
-        g_retired_resources.clear();
-        g_retired_resource_order.clear();
-    }
-    close_event_ring();
     return S_OK;
 }
 
 HRESULT WINAPI FluidHookRefresh() {
     const std::lock_guard hook_lock(g_hook_mutex);
-    if (g_installed_hook_count == 0) {
+    if (g_installed_hook_count.load(std::memory_order_acquire) == 0) {
         return S_FALSE;
     }
 
@@ -2063,13 +2380,41 @@ HRESULT WINAPI FluidHookRefresh() {
         : E_FAIL;
 }
 
+HRESULT WINAPI FluidHookWaitForControlPolicy(DWORD timeout_ms) {
+    constexpr DWORD maximum_timeout_ms = 5000;
+    if (timeout_ms == 0 || timeout_ms > maximum_timeout_ms) {
+        return E_INVALIDARG;
+    }
+    if (!g_allow_control_policy.load(std::memory_order_acquire)) {
+        return E_ACCESSDENIED;
+    }
+
+    for (DWORD waited_ms = 0; waited_ms < timeout_ms; ++waited_ms) {
+        HRESULT result = S_FALSE;
+        {
+            const std::lock_guard hook_lock(g_hook_mutex);
+            if (g_detaching.load(std::memory_order_acquire) ||
+                g_installed_hook_count.load(std::memory_order_acquire) == 0) {
+                return E_ABORT;
+            }
+            result = process_published_control_policy();
+        }
+        if (result != S_FALSE) {
+            return result;
+        }
+        Sleep(1);
+    }
+    return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+}
+
 HRESULT WINAPI FluidHookRetireResource(ID3D11Resource* resource) {
     if (resource == nullptr) {
         return E_POINTER;
     }
 
     const std::lock_guard hook_lock(g_hook_mutex);
-    if (g_installed_hook_count == 0 || g_detaching.load(std::memory_order_acquire)) {
+    if (g_installed_hook_count.load(std::memory_order_acquire) == 0 ||
+        g_detaching.load(std::memory_order_acquire)) {
         return S_FALSE;
     }
 
@@ -2103,7 +2448,9 @@ std::uint64_t WINAPI FluidHookPresentCount() {
 
 BOOL WINAPI FluidHookIsAttached() {
     const std::lock_guard hook_lock(g_hook_mutex);
-    return g_installed_hook_count != 0 ? TRUE : FALSE;
+    return g_installed_hook_count.load(std::memory_order_acquire) != 0
+        ? TRUE
+        : FALSE;
 }
 
 HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
@@ -2174,6 +2521,22 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_clear_unordered_access_view_float_count.load(std::memory_order_relaxed);
     result.gpu_view_write_bytes_estimated =
         g_gpu_view_write_bytes_estimated.load(std::memory_order_relaxed);
+    result.control_policy_enabled =
+        g_allow_control_policy.load(std::memory_order_acquire) ? 1 : 0;
+    result.control_policy_epoch =
+        g_active_control_policy_epoch.load(std::memory_order_acquire);
+    result.control_policy_acknowledged_epoch = g_control_block != nullptr
+        ? static_cast<std::uint64_t>(InterlockedCompareExchange64(
+            &g_control_block->acknowledged_epoch,
+            0,
+            0))
+        : 0;
+    result.control_policy_applied_action_count =
+        g_control_policy_applied_action_count.load(std::memory_order_acquire);
+    result.control_policy_rejected_count =
+        g_control_policy_rejected_count.load(std::memory_order_relaxed);
+    result.control_policy_status =
+        g_control_policy_status.load(std::memory_order_acquire);
     {
         const std::lock_guard patch_lock(g_patch_mutex);
         result.release_hook_slot_count = g_release_hook_slots.size();

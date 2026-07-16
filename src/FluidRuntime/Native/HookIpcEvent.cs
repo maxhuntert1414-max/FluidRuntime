@@ -15,7 +15,8 @@ public enum HookEventType : uint
     ResourceDestroy = 11,
     CopySubresourceRegion = 12,
     ClearRenderTargetView = 13,
-    ClearUnorderedAccessViewFloat = 14
+    ClearUnorderedAccessViewFloat = 14,
+    ControlPolicyAccepted = 15
 }
 
 public sealed record HookIpcEvent(

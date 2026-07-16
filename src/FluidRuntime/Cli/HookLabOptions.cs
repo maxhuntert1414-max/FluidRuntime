@@ -10,7 +10,8 @@ public sealed record HookLabOptions(
     int TrialPairs,
     int WarmupPairs,
     bool UseHardware,
-    bool SkipFirstRedundantCopy)
+    bool SkipFirstRedundantCopy,
+    bool UseManagedControlPolicy = false)
 {
     public const string Usage =
         "Usage: fluidruntime hook-lab --target <hook-target.exe> --hook <hook.dll> " +
@@ -19,6 +20,13 @@ public sealed record HookLabOptions(
 
     public const string CopyElisionUsage =
         "Usage: fluidruntime copy-elision-lab --target <hook-target.exe> " +
+        "--hook <hook.dll> --out <report.json> [--frames <count>] " +
+        "[--hold-ms <milliseconds>] [--gpu-timeout-ms <milliseconds>] " +
+        "[--trial-pairs <count>] [--warmup-pairs <count>] " +
+        "[--hardware <true|false>]";
+
+    public const string ManagerUsage =
+        "Usage: fluidruntime manager-lab --target <hook-target.exe> " +
         "--hook <hook.dll> --out <report.json> [--frames <count>] " +
         "[--hold-ms <milliseconds>] [--gpu-timeout-ms <milliseconds>] " +
         "[--trial-pairs <count>] [--warmup-pairs <count>] " +
@@ -35,6 +43,15 @@ public sealed record HookLabOptions(
             args,
             "copy-elision-lab",
             CopyElisionUsage,
+            allowExperimentOptions: true);
+    }
+
+    public static HookLabOptions ParseManager(string[] args)
+    {
+        return ParseCore(
+            args,
+            "manager-lab",
+            ManagerUsage,
             allowExperimentOptions: true);
     }
 
@@ -127,7 +144,8 @@ public sealed record HookLabOptions(
             trialPairs,
             warmupPairs,
             useHardware,
-            skipFirstRedundantCopy);
+            skipFirstRedundantCopy,
+            UseManagedControlPolicy: false);
     }
 
     private static int ParsePositiveInt(string value, string option, int maximum)

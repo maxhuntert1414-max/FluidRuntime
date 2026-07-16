@@ -15,11 +15,12 @@ Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md)
 [v0.7.1 destruction evidence](docs/evidence/v0.7.1-automatic-destruction.md) |
 [v0.7.2 subresource evidence](docs/evidence/v0.7.2-subresource-provenance.md) |
 [v0.7.3 GPU-view write evidence](docs/evidence/v0.7.3-gpu-view-writes.md) |
+[v0.8 managed control evidence](docs/evidence/v0.8.0-managed-control-plane.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.7.3 keeps normal inspection and external-process behavior advisory-only:
+Version 0.8.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -41,6 +42,22 @@ Any allowed positive performance claim is scoped in the JSON as
 timing alone is insufficient: GPU p95 must improve and at least 80% of measured
 pairs must favor the optimized run.
 
+Version 0.8.0 adds the first managed control plane. In `manager-lab`, the .NET
+runtime opens the target's shared mapping and publishes one short-lived policy
+epoch with a one-action budget. The native hook validates and acknowledges the
+policy, then may consume it only for the same proven redundant `CopyResource`
+used by the owned experiment. The hook uses cached atomics on the API path; it
+does not call managed code per copy. The report exposes copy-path control as
+active only in the owned lab, while CPU scheduling and RAM/VRAM residency stay
+blocked and presentation stays observe-only.
+
+Detach is a reversible dispatch boundary, not an unsafe unload shortcut. The
+module, event mapping, original function pointers, and Release-slot metadata
+remain valid until process exit. A delayed hook pointer only forwards while
+detached, without changing observation state. To prevent a delayed pointer or
+surviving reader from crossing attachment generations, a successful attach is
+one-shot per process; the owned stress proves that a later attach is rejected.
+
 The owned target also exercises cooperative resource retirement. Retiring a
 resource removes its active state and copy provenance, while any later reuse of
 the same pointer receives a new monotonic resource ID. The managed reader
@@ -50,7 +67,7 @@ retired resource. This is not automatic interception of COM destruction.
 Version 0.7.1 added an explicit owned-lab lifetime mode that patches the
 `IUnknown::Release` slot of the returned `ID3D11Buffer` and `ID3D11Texture2D`
 interfaces. The target executes 64 automatic destruction cycles, restores every
-dynamic slot before DLL unload, and separately verifies that normal
+dynamic slot at detach, and separately verifies that normal
 `FluidHookAttach` keeps zero Release hooks and uses cooperative retirement only.
 
 Version 0.7.2 tracks generations per Buffer/Texture2D subresource. The owned
@@ -122,8 +139,11 @@ loads the hook DLL cooperatively. The DLL observes `IDXGISwapChain::Present`,
 buffer and texture creation, write-oriented `Map/Unmap`, `UpdateSubresource`,
 `ClearRenderTargetView`, `ClearUnorderedAccessViewFloat`,
 `CopySubresourceRegion`, and `CopyResource`. Detach restores every current
-original vtable entry before
-the DLL can be unloaded.
+original vtable entry. Version 0.8 pins the DLL inside the owned target until
+process exit so a delayed call cannot enter unloaded hook code; detach disables
+actuation and restores dispatch, but does not remove the module image early.
+Retained entrypoints are observation-neutral while detached. A new session
+requires a new owned target process.
 
 ```powershell
 native/build/Release/fluidruntime-hook-target.exe `
@@ -179,10 +199,27 @@ dotnet run --project src/FluidRuntime -c Release -- copy-elision-lab `
   --out artifacts/copy-elision-comparison.json
 ```
 
+Run the same intervention through the managed control plane:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- manager-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --frames 300 `
+  --hold-ms 500 `
+  --gpu-timeout-ms 1000 `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
+  --hardware true `
+  --out artifacts/manager-control-comparison.json
+```
+
 Each pair contains a baseline and optimized process, and pair order alternates
 to reduce first/second-run bias. Warmups remain in the trace but are excluded
 from statistics. Baselines forward all six copies; optimized runs observe the
 same six, forward five, and skip the first redundant 4,096-byte buffer copy.
+`copy-elision-lab` requests that bound through immutable attach options;
+`manager-lab` publishes it after the target is alive and waiting for policy.
 After hook detach, the target reads buffer and texture contents back through
 staging resources, compares logical bytes exactly, and computes stable FNV-1a
 hashes for the report, including the addressed mip.
@@ -201,4 +238,7 @@ currently assume the controlled workload. Automatic destruction is only proven
 for the same returned Buffer/Texture2D interface in the owned lab; interface
 aliases, shader draw/dispatch writes, other clear operations, fences, deferred
 contexts, and general resource-view aliasing are not covered yet. Regional-copy
-candidates remain diagnostic-only.
+candidates remain diagnostic-only. The manager currently supports one epoch,
+one action type, and one action per owned target process. It is the control-plane
+foundation for broader scheduling and memory work, not yet a general game
+manager.

@@ -12,6 +12,12 @@ public static class RuntimeApplication
     public static async Task<int> RunAsync(string[] args)
     {
         if (args.Length > 0 &&
+            string.Equals(args[0], "manager-lab", StringComparison.OrdinalIgnoreCase))
+        {
+            return await CopyElisionLabCommand.RunManagerAsync(args);
+        }
+
+        if (args.Length > 0 &&
             string.Equals(args[0], "copy-elision-lab", StringComparison.OrdinalIgnoreCase))
         {
             return await CopyElisionLabCommand.RunAsync(args);
@@ -28,6 +34,7 @@ public static class RuntimeApplication
             Console.WriteLine(RuntimeOptions.Usage);
             Console.WriteLine(HookLabOptions.Usage);
             Console.WriteLine(HookLabOptions.CopyElisionUsage);
+            Console.WriteLine(HookLabOptions.ManagerUsage);
             return 0;
         }
 

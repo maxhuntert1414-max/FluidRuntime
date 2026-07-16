@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "release": "v0.8.0",
+  "objective": "First bounded managed-to-native control action in an owned D3D11 workload",
+  "abi": {
+    "snapshot": 9,
+    "attach_options": 2,
+    "ring": 6,
+    "control": 1,
+    "mapping_bytes": 82048
+  },
+  "decisions": [
+    "Keep copy-elision-lab immutable and add manager-lab as a separate path",
+    "Allow one epoch, one action bit, one action budget, and short expiry",
+    "Keep policy classification and action on the native path",
+    "Pin the hook module and retain forwarding state until process exit",
+    "Make stale entrypoints observation-neutral after detach",
+    "Reject reattach because ABI v1 has no attachment generation",
+    "Block performance claims unsupported by paired evidence"
+  ],
+  "resolved_issues": [
+    "expiry and terminal-state race",
+    "provenance proof/action race",
+    "delayed-entry unload race",
+    "unsafe truncated mapping",
+    "mixed control snapshots",
+    "multi-publisher ownership",
+    "stale create observation after detach",
+    "unsafe reattach generation crossover"
+  ],
+  "limitations": [
+    "owned cooperative D3D11 target only",
+    "one whole-resource copy action only",
+    "no CPU scheduler backend",
+    "no RAM or VRAM residency backend",
+    "presentation actuation disabled",
+    "no external attach or game support",
+    "no physical unified-memory claim"
+  ],
+  "next_slice": "v0.8.1 native control-policy negative matrix"
+}

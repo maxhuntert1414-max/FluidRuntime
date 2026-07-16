@@ -50,11 +50,45 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
-        Assert.Equal("fluidruntime-copy-elision-trace-v0.7.3", report.Mode);
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.8.0", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
         Assert.Contains("insufficient-trial-pairs", report.PerformanceClaimBlockers);
+    }
+
+    [Fact]
+    public void Managed_report_requires_acknowledged_bounded_policy()
+    {
+        var baseline = CreateRun(false, 6, 0);
+        var optimized = CreateRun(true, 5, 1, managedControlPolicy: true);
+        var trial = CopyElisionLabCommand.BuildTrial(
+            baseline,
+            optimized,
+            managedControlPolicy: true);
+
+        var report = CopyElisionLabCommand.BuildReport(
+            [trial],
+            trialPairsRequested: 1,
+            warmupPairs: 0,
+            managedControl: true);
+
+        Assert.Equal("fluidruntime-manager-control-trace-v0.8.0", report.Mode);
+        Assert.Equal("managed-shared-memory-policy-v1", report.ControlPlane);
+        Assert.Equal(1, report.PublishedPolicyEpochPerOptimizedRun);
+        Assert.Equal(1, report.AcknowledgedPolicyEpochPerOptimizedRun);
+        Assert.Equal(1, report.AppliedPolicyActionsPerOptimizedRun);
+        Assert.Contains(report.ControlLanes, lane =>
+            lane.Lane == "copy-path" && lane.ActuationEnabled);
+        Assert.Contains(report.ControlLanes, lane =>
+            lane.Lane == "ram-vram-residency" && !lane.NativeBackendAvailable);
+
+        var missingAck = optimized with { ControlPolicyAcknowledgedEpoch = 0 };
+        Assert.Throws<InvalidDataException>(() =>
+            CopyElisionLabCommand.BuildTrial(
+                baseline,
+                missingAck,
+                managedControlPolicy: true));
     }
 
     [Fact]
@@ -136,11 +170,12 @@ public sealed class CopyElisionLabCommandTests
     private static HookLabReport CreateRun(
         bool copyElisionEnabled,
         long forwardedCopies,
-        long skippedCopies)
+        long skippedCopies,
+        bool managedControlPolicy = false)
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.7.3",
+            Mode: "fluidruntime-hook-ipc-lab-v0.8.0",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,
@@ -156,7 +191,7 @@ public sealed class CopyElisionLabCommandTests
             AdapterLuid: "0000000000000042",
             TargetProcessId: 42,
             RingName: "test",
-            RingAbiVersion: 5,
+            RingAbiVersion: 6,
             QpcFrequency: 10_000_000,
             EventCount: 20,
             LostSequenceCount: 0,
@@ -207,6 +242,16 @@ public sealed class CopyElisionLabCommandTests
                 "owned-texture2d-single-subresource-rtv-uav-clear",
             ClearRenderTargetViewCount: 1,
             ClearUnorderedAccessViewFloatCount: 1,
-            GpuViewWriteBytes: 5120);
+            GpuViewWriteBytes: 5120,
+            ManagedControlPolicyEnabled: managedControlPolicy,
+            ControlPlane: managedControlPolicy
+                ? "managed-shared-memory-policy-v1"
+                : (copyElisionEnabled ? "immutable-attach-options" : "observe-only"),
+            ControlPolicyPublishedEpoch: managedControlPolicy ? 1 : 0,
+            ControlPolicyAcknowledgedEpoch: managedControlPolicy ? 1 : 0,
+            ControlPolicyAppliedActionCount: managedControlPolicy ? 1 : 0,
+            ControlPolicyRejectedCount: 0,
+            ControlPolicyStatus: managedControlPolicy ? "exhausted" : "none",
+            ModulePinnedUntilProcessExit: true);
     }
 }

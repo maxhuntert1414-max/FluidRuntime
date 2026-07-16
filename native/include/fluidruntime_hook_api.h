@@ -7,10 +7,12 @@
 
 struct ID3D11Resource;
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 8;
-constexpr std::uint32_t fluid_hook_attach_options_abi_version = 1;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 9;
+constexpr std::uint32_t fluid_hook_attach_options_abi_version = 2;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 5;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 6;
+constexpr std::uint32_t fluid_hook_control_magic = 0x4C544346;
+constexpr std::uint32_t fluid_hook_control_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
 constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
 
@@ -29,6 +31,7 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     copy_subresource_region = 12,
     clear_render_target_view = 13,
     clear_unordered_access_view_float = 14,
+    control_policy_accepted = 15,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
@@ -37,6 +40,16 @@ constexpr std::uint32_t fluid_hook_event_flag_reuse_without_retire = 4;
 constexpr std::uint32_t fluid_hook_event_flag_precise_subresource_write = 8;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
+constexpr std::uint32_t fluid_hook_attach_flag_allow_control_policy = 4;
+constexpr std::uint64_t fluid_hook_control_action_skip_redundant_copy_resource = 1;
+
+enum class FluidHookControlStatusV1 : std::uint64_t {
+    none = 0,
+    accepted = 1,
+    rejected = 2,
+    expired = 3,
+    exhausted = 4,
+};
 
 struct FluidHookAttachOptionsV1 {
     std::uint32_t struct_size;
@@ -74,11 +87,24 @@ struct alignas(8) FluidHookEventV1 {
     std::uint64_t region_key;
 };
 
+struct alignas(64) FluidHookControlBlockV1 {
+    std::uint32_t magic;
+    std::uint32_t abi_version;
+    volatile LONG64 published_epoch;
+    volatile LONG64 acknowledged_epoch;
+    volatile LONG64 expires_at_qpc;
+    volatile LONG64 action_mask;
+    volatile LONG64 action_budget;
+    volatile LONG64 applied_action_count;
+    volatile LONG64 status;
+};
+
 static_assert(sizeof(FluidHookRingHeaderV1) == 64);
+static_assert(sizeof(FluidHookControlBlockV1) == 64);
 static_assert(sizeof(FluidHookEventV1) == 80);
 
 constexpr std::uint64_t fluid_hook_ring_mapping_size =
-    sizeof(FluidHookRingHeaderV1) +
+    sizeof(FluidHookRingHeaderV1) + sizeof(FluidHookControlBlockV1) +
     static_cast<std::uint64_t>(fluid_hook_ring_capacity) * sizeof(FluidHookEventV1);
 
 struct FluidHookSnapshotV1 {
@@ -120,6 +146,12 @@ struct FluidHookSnapshotV1 {
     std::uint64_t clear_render_target_view_count;
     std::uint64_t clear_unordered_access_view_float_count;
     std::uint64_t gpu_view_write_bytes_estimated;
+    std::uint64_t control_policy_enabled;
+    std::uint64_t control_policy_epoch;
+    std::uint64_t control_policy_acknowledged_epoch;
+    std::uint64_t control_policy_applied_action_count;
+    std::uint64_t control_policy_rejected_count;
+    std::uint64_t control_policy_status;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS
@@ -134,6 +166,7 @@ FLUID_HOOK_API HRESULT WINAPI FluidHookAttachEx(
     const FluidHookAttachOptionsV1* options);
 FLUID_HOOK_API HRESULT WINAPI FluidHookDetach();
 FLUID_HOOK_API HRESULT WINAPI FluidHookRefresh();
+FLUID_HOOK_API HRESULT WINAPI FluidHookWaitForControlPolicy(DWORD timeout_ms);
 FLUID_HOOK_API HRESULT WINAPI FluidHookRetireResource(ID3D11Resource* resource);
 FLUID_HOOK_API std::uint64_t WINAPI FluidHookPresentCount();
 FLUID_HOOK_API BOOL WINAPI FluidHookIsAttached();
@@ -145,6 +178,7 @@ using FluidHookAttachExFunction = HRESULT(WINAPI*)(
     const FluidHookAttachOptionsV1*);
 using FluidHookDetachFunction = HRESULT(WINAPI*)();
 using FluidHookRefreshFunction = HRESULT(WINAPI*)();
+using FluidHookWaitForControlPolicyFunction = HRESULT(WINAPI*)(DWORD);
 using FluidHookRetireResourceFunction = HRESULT(WINAPI*)(ID3D11Resource*);
 using FluidHookPresentCountFunction = std::uint64_t(WINAPI*)();
 using FluidHookIsAttachedFunction = BOOL(WINAPI*)();

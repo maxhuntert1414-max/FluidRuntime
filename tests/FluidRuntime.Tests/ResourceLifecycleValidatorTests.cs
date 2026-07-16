@@ -6,6 +6,16 @@ namespace FluidRuntime.Tests;
 public sealed class ResourceLifecycleValidatorTests
 {
     [Fact]
+    public void Validate_ignores_control_policy_metadata_event()
+    {
+        var result = ResourceLifecycleValidator.Validate(
+            [Event(0, HookEventType.ControlPolicyAccepted, resourceA: 1)]);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.ActiveResourceIds);
+    }
+
+    [Fact]
     public void Validate_accepts_create_retire_create_reuse_flow()
     {
         var result = ResourceLifecycleValidator.Validate(

@@ -68,4 +68,12 @@ public sealed record HookLabReport(
     string GpuViewWriteScope = "",
     long ClearRenderTargetViewCount = 0,
     long ClearUnorderedAccessViewFloatCount = 0,
-    ulong GpuViewWriteBytes = 0);
+    ulong GpuViewWriteBytes = 0,
+    bool ManagedControlPolicyEnabled = false,
+    string ControlPlane = "observe-only",
+    long ControlPolicyPublishedEpoch = 0,
+    long ControlPolicyAcknowledgedEpoch = 0,
+    long ControlPolicyAppliedActionCount = 0,
+    long ControlPolicyRejectedCount = 0,
+    string ControlPolicyStatus = "none",
+    bool ModulePinnedUntilProcessExit = false);
