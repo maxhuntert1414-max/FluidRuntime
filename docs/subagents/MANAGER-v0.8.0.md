@@ -26,4 +26,8 @@ version/ABI alignment, exact local CI predicates, STARK documents, and the
 Runtime-first publication order. Tagging and final release publication remain
 blocked until GitHub Actions is green on both exact pushed SHAs.
 
+Both gates later closed: Runtime CI run `29468677595` passed implementation
+commit `1e64acf`, and Gateway CI run `29468682839` passed documentation commit
+`306ce2d`. The release was approved for tag `v0.8.0` with no open blocker.
+
 The manager was read-only and did not edit files.

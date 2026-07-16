@@ -37,5 +37,13 @@
     "no external attach or game support",
     "no physical unified-memory claim"
   ],
+  "publication": {
+    "runtime_implementation_commit": "1e64acfb13f8a2db4236499e17966d0beb7d0349",
+    "runtime_ci_run": 29468677595,
+    "gateway_commit": "306ce2d021259dd180db8fe5cb90d9cb58bf481c",
+    "gateway_ci_run": 29468682839,
+    "release_tag": "v0.8.0",
+    "remote_ci": "success"
+  },
   "next_slice": "v0.8.1 native control-policy negative matrix"
 }

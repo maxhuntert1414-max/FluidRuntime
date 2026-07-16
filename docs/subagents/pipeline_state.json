@@ -2,12 +2,9 @@
   "schema_version": 1,
   "release": "v0.8.0",
   "delegation_mode": "real-subagents",
-  "stage": "local-verification-complete",
-  "current_gate": "commit-push-remote-ci",
-  "blockers": [
-    "Runtime and Gateway candidate commits are not pushed yet",
-    "Remote GitHub Actions must pass on the exact pushed SHAs"
-  ],
+  "stage": "release-approved",
+  "current_gate": "tag-v0.8.0",
+  "blockers": [],
   "roles": {
     "researcher": "019f689e-8d77-7ff3-a2e5-5371e0f817af",
     "planner": "019f68a6-177a-7623-b61b-b2b187d99d62",
@@ -30,5 +27,14 @@
     "stale_one_shot_stress": "100/100",
     "exact_ci_evidence_predicate": "pass",
     "performance_claim_allowed": false
+  },
+  "publication": {
+    "runtime_implementation_commit": "1e64acfb13f8a2db4236499e17966d0beb7d0349",
+    "runtime_ci_run": 29468677595,
+    "runtime_ci_conclusion": "success",
+    "gateway_commit": "306ce2d021259dd180db8fe5cb90d9cb58bf481c",
+    "gateway_ci_run": 29468682839,
+    "gateway_ci_conclusion": "success",
+    "release_tag": "v0.8.0"
   }
 }

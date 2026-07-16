@@ -19,4 +19,8 @@ WARP and RX 580 prove control, equivalence, event accounting, lifecycle, and
 rollback. They do not prove a speedup. The next slice is the deterministic
 negative policy matrix.
 
+Publication checkpoint: Runtime implementation commit `1e64acf` and Gateway
+documentation commit `306ce2d` both passed their exact GitHub Actions runs. The
+approved release tag is `v0.8.0`.
+
 The memory agent was read-only and did not edit files or global Codex memory.
