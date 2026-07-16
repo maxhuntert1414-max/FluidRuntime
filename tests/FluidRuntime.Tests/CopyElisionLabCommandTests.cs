@@ -29,6 +29,10 @@ public sealed class CopyElisionLabCommandTests
         var provenanceFailed = optimized with { ProvenanceFailureCount = 1 };
         Assert.Throws<InvalidDataException>(() =>
             CopyElisionLabCommand.BuildTrial(baseline, provenanceFailed));
+
+        var gpuWriteDrifted = optimized with { GpuViewWriteBytes = 0 };
+        Assert.Throws<InvalidDataException>(() =>
+            CopyElisionLabCommand.BuildTrial(baseline, gpuWriteDrifted));
     }
 
     [Fact]
@@ -46,7 +50,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
-        Assert.Equal("fluidruntime-copy-elision-trace-v0.7.2", report.Mode);
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.7.3", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
@@ -136,7 +140,7 @@ public sealed class CopyElisionLabCommandTests
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.7.2",
+            Mode: "fluidruntime-hook-ipc-lab-v0.7.3",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,
@@ -152,7 +156,7 @@ public sealed class CopyElisionLabCommandTests
             AdapterLuid: "0000000000000042",
             TargetProcessId: 42,
             RingName: "test",
-            RingAbiVersion: 4,
+            RingAbiVersion: 5,
             QpcFrequency: 10_000_000,
             EventCount: 20,
             LostSequenceCount: 0,
@@ -192,12 +196,17 @@ public sealed class CopyElisionLabCommandTests
             TargetReport: document.RootElement.Clone(),
             SubresourceProvenanceScope:
                 "owned-buffer-texture2d-map-update-copy-region",
-            CopySubresourceRegionCount: 8,
-            CopySubresourceRegionBytes: 5632,
-            RedundantSubresourceCopyCandidateCount: 3,
-            RedundantSubresourceCopyBytes: 3072,
+            CopySubresourceRegionCount: 11,
+            CopySubresourceRegionBytes: 8704,
+            RedundantSubresourceCopyCandidateCount: 5,
+            RedundantSubresourceCopyBytes: 5120,
             SubresourceContentEquivalent: true,
             SourceSubresourceHash: "subresource",
-            DestinationSubresourceHash: "subresource");
+            DestinationSubresourceHash: "subresource",
+            GpuViewWriteScope:
+                "owned-texture2d-single-subresource-rtv-uav-clear",
+            ClearRenderTargetViewCount: 1,
+            ClearUnorderedAccessViewFloatCount: 1,
+            GpuViewWriteBytes: 5120);
     }
 }

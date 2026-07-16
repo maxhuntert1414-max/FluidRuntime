@@ -61,6 +61,14 @@ using UpdateSubresourceFunction = void(STDMETHODCALLTYPE*)(
     const void*,
     UINT,
     UINT);
+using ClearRenderTargetViewFunction = void(STDMETHODCALLTYPE*)(
+    ID3D11DeviceContext*,
+    ID3D11RenderTargetView*,
+    const FLOAT[4]);
+using ClearUnorderedAccessViewFloatFunction = void(STDMETHODCALLTYPE*)(
+    ID3D11DeviceContext*,
+    ID3D11UnorderedAccessView*,
+    const FLOAT[4]);
 using ReleaseFunction = ULONG(STDMETHODCALLTYPE*)(IUnknown*);
 
 constexpr size_t kReleaseVtableIndex = 2;
@@ -72,8 +80,11 @@ constexpr size_t kUnmapVtableIndex = 15;
 constexpr size_t kCopySubresourceRegionVtableIndex = 46;
 constexpr size_t kCopyResourceVtableIndex = 47;
 constexpr size_t kUpdateSubresourceVtableIndex = 48;
-constexpr size_t kHookSlotCount = 8;
+constexpr size_t kClearRenderTargetViewVtableIndex = 50;
+constexpr size_t kClearUnorderedAccessViewFloatVtableIndex = 52;
+constexpr size_t kHookSlotCount = 10;
 constexpr size_t kRetiredResourceIdentityCapacity = 4096;
+constexpr UINT kWholeResourceSubresource = 0xFFFFFFFFU;
 
 struct HookSlot {
     void** slot{};
@@ -179,6 +190,12 @@ struct ResourceRegistration {
     bool reuse_without_retire{};
 };
 
+struct ViewWriteTarget {
+    ID3D11Resource* resource{};
+    UINT subresource{kWholeResourceSubresource};
+    bool precise_subresource{};
+};
+
 std::mutex g_hook_mutex;
 std::mutex g_patch_mutex;
 std::mutex g_resource_mutex;
@@ -197,6 +214,9 @@ std::atomic<UnmapFunction> g_original_unmap{nullptr};
 std::atomic<CopySubresourceRegionFunction> g_original_copy_subresource_region{nullptr};
 std::atomic<CopyResourceFunction> g_original_copy_resource{nullptr};
 std::atomic<UpdateSubresourceFunction> g_original_update_subresource{nullptr};
+std::atomic<ClearRenderTargetViewFunction> g_original_clear_render_target_view{nullptr};
+std::atomic<ClearUnorderedAccessViewFloatFunction>
+    g_original_clear_unordered_access_view_float{nullptr};
 
 std::atomic<std::uint64_t> g_present_count{0};
 std::atomic<std::uint64_t> g_create_buffer_count{0};
@@ -212,6 +232,9 @@ std::atomic<std::uint64_t> g_copy_subresource_region_count{0};
 std::atomic<std::uint64_t> g_copy_subresource_region_bytes_estimated{0};
 std::atomic<std::uint64_t> g_redundant_subresource_copy_candidate_count{0};
 std::atomic<std::uint64_t> g_redundant_subresource_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_clear_render_target_view_count{0};
+std::atomic<std::uint64_t> g_clear_unordered_access_view_float_count{0};
+std::atomic<std::uint64_t> g_gpu_view_write_bytes_estimated{0};
 std::atomic<std::uint64_t> g_redundant_copy_candidate_count{0};
 std::atomic<std::uint64_t> g_redundant_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_forwarded_copy_count{0};
@@ -477,6 +500,16 @@ void update_context_original(size_t slot_index, void* original) {
             reinterpret_cast<UpdateSubresourceFunction>(original),
             std::memory_order_release);
         break;
+    case 8:
+        g_original_clear_render_target_view.store(
+            reinterpret_cast<ClearRenderTargetViewFunction>(original),
+            std::memory_order_release);
+        break;
+    case 9:
+        g_original_clear_unordered_access_view_float.store(
+            reinterpret_cast<ClearUnorderedAccessViewFloatFunction>(original),
+            std::memory_order_release);
+        break;
     default:
         break;
     }
@@ -702,6 +735,130 @@ std::uint64_t query_resource_size(ID3D11Resource* resource) {
     return 0;
 }
 
+bool resolve_texture2d_subresource(
+    ViewWriteTarget& target,
+    UINT mip_slice,
+    UINT first_array_slice,
+    UINT array_size) {
+    if (target.resource == nullptr || array_size != 1) {
+        return false;
+    }
+
+    D3D11_RESOURCE_DIMENSION dimension{};
+    target.resource->GetType(&dimension);
+    if (dimension != D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC description{};
+    static_cast<ID3D11Texture2D*>(target.resource)->GetDesc(&description);
+    const auto mip_levels = texture_mip_levels(description);
+    if (mip_slice >= mip_levels || first_array_slice >= description.ArraySize) {
+        return false;
+    }
+
+    target.subresource = D3D11CalcSubresource(
+        mip_slice,
+        first_array_slice,
+        mip_levels);
+    target.precise_subresource = true;
+    return true;
+}
+
+ViewWriteTarget resolve_render_target_view(ID3D11RenderTargetView* view) {
+    ViewWriteTarget target;
+    if (view == nullptr) {
+        return target;
+    }
+    view->GetResource(&target.resource);
+    if (target.resource == nullptr) {
+        return target;
+    }
+
+    D3D11_RENDER_TARGET_VIEW_DESC description{};
+    view->GetDesc(&description);
+    D3D11_RESOURCE_DIMENSION dimension{};
+    target.resource->GetType(&dimension);
+    if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER &&
+        description.ViewDimension == D3D11_RTV_DIMENSION_BUFFER) {
+        target.subresource = 0;
+        target.precise_subresource = true;
+        return target;
+    }
+
+    switch (description.ViewDimension) {
+    case D3D11_RTV_DIMENSION_TEXTURE2D:
+        resolve_texture2d_subresource(
+            target,
+            description.Texture2D.MipSlice,
+            0,
+            1);
+        break;
+    case D3D11_RTV_DIMENSION_TEXTURE2DARRAY:
+        resolve_texture2d_subresource(
+            target,
+            description.Texture2DArray.MipSlice,
+            description.Texture2DArray.FirstArraySlice,
+            description.Texture2DArray.ArraySize);
+        break;
+    case D3D11_RTV_DIMENSION_TEXTURE2DMS:
+        resolve_texture2d_subresource(target, 0, 0, 1);
+        break;
+    case D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY:
+        resolve_texture2d_subresource(
+            target,
+            0,
+            description.Texture2DMSArray.FirstArraySlice,
+            description.Texture2DMSArray.ArraySize);
+        break;
+    default:
+        break;
+    }
+    return target;
+}
+
+ViewWriteTarget resolve_unordered_access_view(ID3D11UnorderedAccessView* view) {
+    ViewWriteTarget target;
+    if (view == nullptr) {
+        return target;
+    }
+    view->GetResource(&target.resource);
+    if (target.resource == nullptr) {
+        return target;
+    }
+
+    D3D11_UNORDERED_ACCESS_VIEW_DESC description{};
+    view->GetDesc(&description);
+    D3D11_RESOURCE_DIMENSION dimension{};
+    target.resource->GetType(&dimension);
+    if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER &&
+        description.ViewDimension == D3D11_UAV_DIMENSION_BUFFER) {
+        target.subresource = 0;
+        target.precise_subresource = true;
+        return target;
+    }
+
+    switch (description.ViewDimension) {
+    case D3D11_UAV_DIMENSION_TEXTURE2D:
+        resolve_texture2d_subresource(
+            target,
+            description.Texture2D.MipSlice,
+            0,
+            1);
+        break;
+    case D3D11_UAV_DIMENSION_TEXTURE2DARRAY:
+        resolve_texture2d_subresource(
+            target,
+            description.Texture2DArray.MipSlice,
+            description.Texture2DArray.FirstArraySlice,
+            description.Texture2DArray.ArraySize);
+        break;
+    default:
+        break;
+    }
+    return target;
+}
+
 void erase_resource_provenance_locked(
     ID3D11Resource* resource,
     std::uint64_t resource_id) {
@@ -855,6 +1012,68 @@ bool mark_subresource_written_locked(
     return true;
 }
 
+bool record_gpu_view_write(
+    ViewWriteTarget target,
+    FluidHookEventTypeV1 event_type) {
+    if (target.resource == nullptr) {
+        return false;
+    }
+
+    std::uint64_t resource_id = 0;
+    std::uint64_t size_bytes = 0;
+    std::uint64_t generation = 0;
+    std::uint32_t flags = 0;
+    bool tracked = false;
+    {
+        const std::lock_guard resource_lock(g_resource_mutex);
+        tracked = g_resources.contains(target.resource);
+        if (tracked) {
+            if (target.precise_subresource) {
+                if (mark_subresource_written_locked(
+                        target.resource,
+                        target.subresource,
+                        generation)) {
+                    flags = fluid_hook_event_flag_precise_subresource_write;
+                    size_bytes = query_subresource_size(
+                        target.resource,
+                        target.subresource);
+                } else {
+                    target.subresource = kWholeResourceSubresource;
+                    size_bytes = ensure_resource_locked(target.resource).size_bytes;
+                }
+            } else {
+                target.subresource = kWholeResourceSubresource;
+                mark_resource_written_locked(target.resource);
+                const auto& state = ensure_resource_locked(target.resource);
+                generation = state.generation;
+                size_bytes = state.size_bytes;
+            }
+            resource_id = ensure_resource_locked(target.resource).resource_id;
+        }
+    }
+
+    if (!tracked) {
+        // Pre-attach resources such as the swap-chain backbuffer are outside
+        // the owned-resource provenance scope.
+        target.resource->Release();
+        return false;
+    }
+
+    g_gpu_view_write_bytes_estimated.fetch_add(
+        size_bytes,
+        std::memory_order_relaxed);
+    emit_hook_event(
+        event_type,
+        resource_id,
+        0,
+        size_bytes,
+        generation,
+        flags,
+        target.subresource);
+    target.resource->Release();
+    return true;
+}
+
 ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object) {
     const ActiveHookCall active_call;
     if (object == nullptr) {
@@ -939,6 +1158,9 @@ void reset_metrics_and_resources() {
     g_copy_subresource_region_bytes_estimated.store(0, std::memory_order_relaxed);
     g_redundant_subresource_copy_candidate_count.store(0, std::memory_order_relaxed);
     g_redundant_subresource_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_clear_render_target_view_count.store(0, std::memory_order_relaxed);
+    g_clear_unordered_access_view_float_count.store(0, std::memory_order_relaxed);
+    g_gpu_view_write_bytes_estimated.store(0, std::memory_order_relaxed);
     g_redundant_copy_candidate_count.store(0, std::memory_order_relaxed);
     g_redundant_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_forwarded_copy_count.store(0, std::memory_order_relaxed);
@@ -1232,6 +1454,50 @@ void STDMETHODCALLTYPE hooked_update_subresource(
     }
 }
 
+void STDMETHODCALLTYPE hooked_clear_render_target_view(
+    ID3D11DeviceContext* context,
+    ID3D11RenderTargetView* render_target_view,
+    const FLOAT color_rgba[4]) {
+    const ActiveHookCall active_call;
+    const auto original =
+        g_original_clear_render_target_view.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        return;
+    }
+
+    auto target = resolve_render_target_view(render_target_view);
+    original(context, render_target_view, color_rgba);
+    refresh_context_hook_slots();
+    if (record_gpu_view_write(
+            target,
+            FluidHookEventTypeV1::clear_render_target_view)) {
+        g_clear_render_target_view_count.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void STDMETHODCALLTYPE hooked_clear_unordered_access_view_float(
+    ID3D11DeviceContext* context,
+    ID3D11UnorderedAccessView* unordered_access_view,
+    const FLOAT values[4]) {
+    const ActiveHookCall active_call;
+    const auto original =
+        g_original_clear_unordered_access_view_float.load(std::memory_order_acquire);
+    if (original == nullptr) {
+        return;
+    }
+
+    auto target = resolve_unordered_access_view(unordered_access_view);
+    original(context, unordered_access_view, values);
+    refresh_context_hook_slots();
+    if (record_gpu_view_write(
+            target,
+            FluidHookEventTypeV1::clear_unordered_access_view_float)) {
+        g_clear_unordered_access_view_float_count.fetch_add(
+            1,
+            std::memory_order_relaxed);
+    }
+}
+
 void STDMETHODCALLTYPE hooked_copy_subresource_region(
     ID3D11DeviceContext* context,
     ID3D11Resource* destination,
@@ -1496,6 +1762,10 @@ void clear_original_functions() {
     g_original_copy_subresource_region.store(nullptr, std::memory_order_release);
     g_original_copy_resource.store(nullptr, std::memory_order_release);
     g_original_update_subresource.store(nullptr, std::memory_order_release);
+    g_original_clear_render_target_view.store(nullptr, std::memory_order_release);
+    g_original_clear_unordered_access_view_float.store(
+        nullptr,
+        std::memory_order_release);
 }
 
 } // namespace
@@ -1586,6 +1856,14 @@ HRESULT WINAPI FluidHookAttachEx(
             &context_vtable[kUpdateSubresourceVtableIndex],
             context_vtable[kUpdateSubresourceVtableIndex],
             reinterpret_cast<void*>(hooked_update_subresource)},
+        HookSlot{
+            &context_vtable[kClearRenderTargetViewVtableIndex],
+            context_vtable[kClearRenderTargetViewVtableIndex],
+            reinterpret_cast<void*>(hooked_clear_render_target_view)},
+        HookSlot{
+            &context_vtable[kClearUnorderedAccessViewFloatVtableIndex],
+            context_vtable[kClearUnorderedAccessViewFloatVtableIndex],
+            reinterpret_cast<void*>(hooked_clear_unordered_access_view_float)},
     };
 
     context->Release();
@@ -1620,6 +1898,12 @@ HRESULT WINAPI FluidHookAttachEx(
         std::memory_order_release);
     g_original_update_subresource.store(
         reinterpret_cast<UpdateSubresourceFunction>(slots[7].original),
+        std::memory_order_release);
+    g_original_clear_render_target_view.store(
+        reinterpret_cast<ClearRenderTargetViewFunction>(slots[8].original),
+        std::memory_order_release);
+    g_original_clear_unordered_access_view_float.store(
+        reinterpret_cast<ClearUnorderedAccessViewFloatFunction>(slots[9].original),
         std::memory_order_release);
     g_max_skipped_copy_count.store(max_skipped_copy_count, std::memory_order_release);
     g_track_resource_lifetime.store(track_resource_lifetime, std::memory_order_release);
@@ -1884,6 +2168,12 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_redundant_subresource_copy_candidate_count.load(std::memory_order_relaxed);
     result.redundant_subresource_copy_bytes_estimated =
         g_redundant_subresource_copy_bytes_estimated.load(std::memory_order_relaxed);
+    result.clear_render_target_view_count =
+        g_clear_render_target_view_count.load(std::memory_order_relaxed);
+    result.clear_unordered_access_view_float_count =
+        g_clear_unordered_access_view_float_count.load(std::memory_order_relaxed);
+    result.gpu_view_write_bytes_estimated =
+        g_gpu_view_write_bytes_estimated.load(std::memory_order_relaxed);
     {
         const std::lock_guard patch_lock(g_patch_mutex);
         result.release_hook_slot_count = g_release_hook_slots.size();

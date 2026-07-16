@@ -27,13 +27,14 @@ flowchart LR
   and GPU-engine counters for one PID.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
   resource creation, retirement, pointer reuse, CPU writes, updates, and
-  whole-resource and subresource-region copies.
+  GPU clears through owned RTV/UAV views, plus whole-resource and
+  subresource-region copies.
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
   installation, event delivery, validation, and complete rollback.
 
 ## Hook Event Transport
 
-Version 0.7.2 publishes 80-byte ABI-v4 events into a 1,024-slot named
+Version 0.7.3 publishes 80-byte ABI-v5 events into a 1,024-slot named
 shared-memory ring.
 The mapping is local to the Windows session and named for the target PID. The
 header and event layouts are versioned independently from the report schema.
@@ -55,7 +56,7 @@ The managed reader:
 5. publishes its cursor atomically;
 6. accepts the lab run only when exact event order, types, resource IDs,
    source/destination pairs, subresource indices, generations, flags, byte totals, sequence
-   continuity, and the final native snapshot agree.
+   continuity, GPU-view write attribution, and the final native snapshot agree.
 
 Events contain opaque resource IDs, never raw resource pointer addresses.
 
@@ -110,13 +111,24 @@ source/destination indices, source generation, destination generation, and a
 stable key over offsets/source box. Only an exact unchanged repeat is a candidate. Regional copies
 are always forwarded, and post-detach readback compares the addressed mip.
 
+The v0.7.3 model resolves an RTV or UAV through `ID3D11View::GetResource` and
+its view descriptor before forwarding `ClearRenderTargetView` or
+`ClearUnorderedAccessViewFloat`. A single Texture2D mip receives an exact
+subresource generation update and an ABI flag marking precise attribution. A
+tracked view that spans an unsupported or multi-subresource shape falls back
+to whole-resource invalidation. A view for a resource that was never registered
+by the owned hook is ignored by provenance accounting; this keeps pre-attach
+swap-chain clears from manufacturing untrusted state. Both clear methods remain
+observe-only, and all regional copies remain forwarded.
+
 ## Known Limits
 
 - D3D11 only; D3D12 and Vulkan are not instrumented yet.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
-- Shader/UAV writes, fences, interface/view aliases, and deferred-context
-  command-list effects are not yet part of the resource-generation model.
+- Shader draw/dispatch writes, UAV integer clears, depth/stencil clears, fences,
+  interface/view aliases, and deferred-context command-list effects are not yet
+  part of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
 - The lab supports one active hook attachment per process mapping lifetime.

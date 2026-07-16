@@ -37,11 +37,14 @@ constexpr std::uint64_t kExpectedRedundantCopyCount = 3;
 constexpr std::uint64_t kExpectedRedundantCopyBytes = 24576;
 constexpr std::uint64_t kExpectedSkippedCopyCount = 1;
 constexpr std::uint64_t kExpectedSkippedCopyBytes = kBufferBytes;
-constexpr std::uint64_t kExpectedCopySubresourceCount = 8;
+constexpr std::uint64_t kExpectedCopySubresourceCount = 11;
 constexpr std::uint64_t kExpectedCopySubresourceBytes =
-    5 * 16 * 16 * 4 + 2 * 8 * 8 * 4;
-constexpr std::uint64_t kExpectedRedundantSubresourceCopyCount = 3;
-constexpr std::uint64_t kExpectedRedundantSubresourceCopyBytes = 3 * 16 * 16 * 4;
+    8 * 16 * 16 * 4 + 2 * 8 * 8 * 4;
+constexpr std::uint64_t kExpectedRedundantSubresourceCopyCount = 5;
+constexpr std::uint64_t kExpectedRedundantSubresourceCopyBytes = 5 * 16 * 16 * 4;
+constexpr std::uint64_t kExpectedGpuViewWriteBytes =
+    (kSubresourceTextureWidth * kSubresourceTextureHeight +
+        (kSubresourceTextureWidth / 2) * (kSubresourceTextureHeight / 2)) * 4;
 constexpr std::uint64_t kExpectedResourceRetireCount = 1;
 constexpr std::uint64_t kExpectedResourceDestroyCount = kAutomaticLifetimeCycles;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
@@ -67,6 +70,8 @@ struct WorkloadResources {
     ComPtr<ID3D11Texture2D> destination_texture;
     ComPtr<ID3D11Texture2D> source_subresource_texture;
     ComPtr<ID3D11Texture2D> destination_subresource_texture;
+    ComPtr<ID3D11RenderTargetView> source_mip_zero_render_target_view;
+    ComPtr<ID3D11UnorderedAccessView> source_mip_one_unordered_access_view;
 };
 
 struct ContentVerification {
@@ -564,7 +569,8 @@ bool run_resource_workload(
     WorkloadResources& resources,
     bool& context_vtable_pointer_stable,
     bool& context_copy_entry_stable,
-    bool& context_subresource_copy_entry_stable) {
+    bool& context_subresource_copy_entry_stable,
+    bool& context_gpu_view_write_entries_stable) {
     std::array<std::uint32_t, kBufferBytes / sizeof(std::uint32_t)> buffer_data{};
     for (size_t index = 0; index < buffer_data.size(); ++index) {
         buffer_data[index] = static_cast<std::uint32_t>(index);
@@ -619,6 +625,8 @@ bool run_resource_workload(
     auto** context_vtable_before_update = *reinterpret_cast<void***>(context);
     const auto subresource_copy_entry_before_update = context_vtable_before_update[46];
     const auto copy_entry_before_update = context_vtable_before_update[47];
+    const auto clear_render_target_entry_before_update = context_vtable_before_update[50];
+    const auto clear_uav_float_entry_before_update = context_vtable_before_update[52];
     context->CopyResource(
         resources.destination_buffer.Get(),
         resources.source_buffer.Get());
@@ -708,6 +716,8 @@ bool run_resource_workload(
     subresource_texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     subresource_texture_description.SampleDesc.Count = 1;
     subresource_texture_description.Usage = D3D11_USAGE_DEFAULT;
+    subresource_texture_description.BindFlags =
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
     std::array<D3D11_SUBRESOURCE_DATA, kSubresourceTextureMipLevels>
         subresource_initial_data{};
     subresource_initial_data[0].pSysMem = mip_zero_data.data();
@@ -720,6 +730,30 @@ bool run_resource_workload(
         &subresource_texture_description,
         subresource_initial_data.data(),
         &resources.source_subresource_texture);
+    if (FAILED(result)) {
+        return false;
+    }
+
+    D3D11_RENDER_TARGET_VIEW_DESC render_target_view_description{};
+    render_target_view_description.Format = subresource_texture_description.Format;
+    render_target_view_description.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    render_target_view_description.Texture2D.MipSlice = 0;
+    result = device->CreateRenderTargetView(
+        resources.source_subresource_texture.Get(),
+        &render_target_view_description,
+        &resources.source_mip_zero_render_target_view);
+    if (FAILED(result)) {
+        return false;
+    }
+
+    D3D11_UNORDERED_ACCESS_VIEW_DESC unordered_access_view_description{};
+    unordered_access_view_description.Format = subresource_texture_description.Format;
+    unordered_access_view_description.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+    unordered_access_view_description.Texture2D.MipSlice = 1;
+    result = device->CreateUnorderedAccessView(
+        resources.source_subresource_texture.Get(),
+        &unordered_access_view_description,
+        &resources.source_mip_one_unordered_access_view);
     if (FAILED(result)) {
         return false;
     }
@@ -767,6 +801,12 @@ bool run_resource_workload(
         0);
     copy_mip_one();
 
+    const FLOAT render_target_clear[4]{0.25F, 0.5F, 0.75F, 1.0F};
+    context->ClearRenderTargetView(
+        resources.source_mip_zero_render_target_view.Get(),
+        render_target_clear);
+    copy_mip_one();
+
     for (auto& value : mip_one_data) {
         value ^= 0x00FF0000U;
     }
@@ -798,6 +838,17 @@ bool run_resource_workload(
         &partial_box);
     copy_mip_one();
     copy_mip_one();
+    const FLOAT unordered_access_clear[4]{0.125F, 0.375F, 0.625F, 1.0F};
+    context->ClearUnorderedAccessViewFloat(
+        resources.source_mip_one_unordered_access_view.Get(),
+        unordered_access_clear);
+    copy_mip_one();
+    copy_mip_one();
+
+    auto** context_vtable_after_gpu_writes = *reinterpret_cast<void***>(context);
+    context_gpu_view_write_entries_stable =
+        context_vtable_after_gpu_writes[50] == clear_render_target_entry_before_update &&
+        context_vtable_after_gpu_writes[52] == clear_uav_float_entry_before_update;
     return true;
 }
 
@@ -944,6 +995,9 @@ bool snapshot_matches_workload(
             kExpectedRedundantSubresourceCopyCount &&
         snapshot.redundant_subresource_copy_bytes_estimated ==
             kExpectedRedundantSubresourceCopyBytes &&
+        snapshot.clear_render_target_view_count == 1 &&
+        snapshot.clear_unordered_access_view_float_count == 1 &&
+        snapshot.gpu_view_write_bytes_estimated == kExpectedGpuViewWriteBytes &&
         snapshot.forwarded_copy_count == kExpectedCopyCount - expected_skipped_count &&
         snapshot.forwarded_copy_bytes_estimated ==
             kExpectedCopyBytes - expected_skipped_bytes &&
@@ -964,7 +1018,7 @@ bool snapshot_matches_workload(
             (options.automatic_lifetime_tracking ? 1ULL : 0ULL) &&
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >=
-            snapshot.present_count + 156 + snapshot.resource_reuse_count &&
+            snapshot.present_count + 161 + snapshot.resource_reuse_count &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -982,12 +1036,13 @@ std::string build_report(
     bool context_vtable_pointer_stable,
     bool context_copy_entry_stable,
     bool context_subresource_copy_entry_stable,
+    bool context_gpu_view_write_entries_stable,
     const ContentVerification& content,
     const TimingMetrics& timing,
     const AdapterIdentity& adapter) {
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7.2\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.7.3\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -1010,6 +1065,8 @@ std::string build_report(
            << ",\n"
            << "  \"subresource_provenance_scope\": "
               "\"owned-buffer-texture2d-map-update-copy-region\",\n"
+           << "  \"gpu_view_write_scope\": "
+              "\"owned-texture2d-single-subresource-rtv-uav-clear\",\n"
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
            << "  \"adapter\": {\n"
@@ -1041,6 +1098,8 @@ std::string build_report(
            << (context_copy_entry_stable ? "true" : "false") << ",\n"
            << "  \"context_subresource_copy_entry_stable\": "
            << (context_subresource_copy_entry_stable ? "true" : "false") << ",\n"
+           << "  \"context_gpu_view_write_entries_stable\": "
+           << (context_gpu_view_write_entries_stable ? "true" : "false") << ",\n"
            << "  \"original_pointer_restored\": "
            << (original_pointer_restored ? "true" : "false") << ",\n"
            << "  \"content_readback_succeeded\": "
@@ -1101,6 +1160,12 @@ std::string build_report(
            << snapshot.redundant_subresource_copy_candidate_count << ",\n"
            << "    \"redundant_subresource_copy_bytes_estimated\": "
            << snapshot.redundant_subresource_copy_bytes_estimated << ",\n"
+           << "    \"clear_render_target_view_count\": "
+           << snapshot.clear_render_target_view_count << ",\n"
+           << "    \"clear_unordered_access_view_float_count\": "
+           << snapshot.clear_unordered_access_view_float_count << ",\n"
+           << "    \"gpu_view_write_bytes_estimated\": "
+           << snapshot.gpu_view_write_bytes_estimated << ",\n"
            << "    \"redundant_copy_candidate_count\": "
            << snapshot.redundant_copy_candidate_count << ",\n"
            << "    \"redundant_copy_bytes_estimated\": "
@@ -1310,7 +1375,7 @@ int wmain(int argc, wchar_t* argv[]) {
         std::ostringstream stress_output;
         stress_output << "{\n"
                       << "  \"mode\": "
-                         "\"fluidruntime-concurrent-lifetime-detach-v0.7.2\",\n"
+                         "\"fluidruntime-concurrent-lifetime-detach-v0.7.3\",\n"
                       << "  \"target_owned\": true,\n"
                       << "  \"automatic_lifetime_tracking\": true,\n"
                       << "  \"completed_cycles\": " << completed_cycles << ",\n"
@@ -1354,6 +1419,7 @@ int wmain(int argc, wchar_t* argv[]) {
     bool context_vtable_pointer_stable = false;
     bool context_copy_entry_stable = false;
     bool context_subresource_copy_entry_stable = false;
+    bool context_gpu_view_write_entries_stable = false;
     LARGE_INTEGER workload_start{};
     LARGE_INTEGER workload_end{};
     if (gpu_timing_queries.disjoint != nullptr) {
@@ -1370,7 +1436,8 @@ int wmain(int argc, wchar_t* argv[]) {
             workload_resources,
             context_vtable_pointer_stable,
             context_copy_entry_stable,
-            context_subresource_copy_entry_stable);
+            context_subresource_copy_entry_stable,
+            context_gpu_view_write_entries_stable);
     QueryPerformanceCounter(&workload_end);
     if (gpu_timing_queries.disjoint != nullptr) {
         context->End(gpu_timing_queries.end.Get());
@@ -1444,6 +1511,7 @@ int wmain(int argc, wchar_t* argv[]) {
         context_vtable_pointer_stable,
         context_copy_entry_stable,
         context_subresource_copy_entry_stable,
+        context_gpu_view_write_entries_stable,
         content,
         timing,
         adapter_identity);
@@ -1469,6 +1537,7 @@ int wmain(int argc, wchar_t* argv[]) {
         context_vtable_pointer_stable &&
         context_copy_entry_stable &&
         context_subresource_copy_entry_stable &&
+        context_gpu_view_write_entries_stable &&
         content.readback_succeeded &&
         content.buffer_contents_equal &&
         content.texture_contents_equal &&

@@ -15,7 +15,7 @@ public sealed class HookRingReaderTests
         }
 
         var mappingName = $"Local\\FluidRuntimeHook-Test-{Guid.NewGuid():N}";
-        const int capacity = 2;
+        const int capacity = 3;
         const int mappingSize = HookRingReader.HeaderSize +
             capacity * HookRingReader.ExpectedEventSize;
         using var mapping = MemoryMappedFile.CreateNew(
@@ -37,12 +37,19 @@ public sealed class HookRingReaderTests
             subresourceA: 3,
             subresourceB: 2,
             regionKey: 0x123456789ABCDEF0UL);
-        writer.Write(16, 2L);
+        WriteEvent(
+            writer,
+            2,
+            HookEventType.ClearUnorderedAccessViewFloat,
+            sizeBytes: 1024,
+            flags: 8,
+            subresourceA: 1);
+        writer.Write(16, 3L);
 
         using var reader = HookRingReader.Open(mappingName);
         var events = reader.ReadAvailable();
 
-        Assert.Equal(2, events.Count);
+        Assert.Equal(3, events.Count);
         Assert.Equal(HookEventType.Present, events[0].Type);
         Assert.Equal(HookEventType.CopySubresourceRegion, events[1].Type);
         Assert.Equal(4096UL, events[1].SizeBytes);
@@ -50,7 +57,10 @@ public sealed class HookRingReaderTests
         Assert.Equal(3U, events[1].SubresourceA);
         Assert.Equal(2U, events[1].SubresourceB);
         Assert.Equal(0x123456789ABCDEF0UL, events[1].RegionKey);
-        Assert.Equal(2, writer.ReadInt64(24));
+        Assert.Equal(HookEventType.ClearUnorderedAccessViewFloat, events[2].Type);
+        Assert.True(events[2].IsPreciseSubresourceWrite);
+        Assert.Equal(1U, events[2].SubresourceA);
+        Assert.Equal(3, writer.ReadInt64(24));
         Assert.Equal(0, reader.LostSequenceCount);
     }
 

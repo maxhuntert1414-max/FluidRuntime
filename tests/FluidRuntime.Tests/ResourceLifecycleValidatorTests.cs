@@ -20,8 +20,10 @@ public sealed class ResourceLifecycleValidatorTests
                 Event(7, HookEventType.UpdateSubresource, resourceA: 2),
                 Event(8, HookEventType.CopyResource, resourceA: 3, resourceB: 2),
                 Event(9, HookEventType.CopySubresourceRegion, resourceA: 3, resourceB: 2),
-                Event(10, HookEventType.Present),
-                Event(11, HookEventType.HookRefresh)
+                Event(10, HookEventType.ClearRenderTargetView, resourceA: 2),
+                Event(11, HookEventType.ClearUnorderedAccessViewFloat, resourceA: 2),
+                Event(12, HookEventType.Present),
+                Event(13, HookEventType.HookRefresh)
             ]);
 
         Assert.True(result.IsValid, result.Error);
@@ -94,6 +96,21 @@ public sealed class ResourceLifecycleValidatorTests
 
         Assert.False(copyResult.IsValid);
         Assert.False(writeResult.IsValid);
+    }
+
+    [Theory]
+    [InlineData(HookEventType.ClearRenderTargetView)]
+    [InlineData(HookEventType.ClearUnorderedAccessViewFloat)]
+    public void Validate_rejects_gpu_view_write_after_destroy(HookEventType eventType)
+    {
+        var result = ResourceLifecycleValidator.Validate(
+            [
+                Event(0, HookEventType.CreateTexture2D, resourceA: 1),
+                Event(1, HookEventType.ResourceDestroy, resourceA: 1),
+                Event(2, eventType, resourceA: 1)
+            ]);
+
+        Assert.False(result.IsValid);
     }
 
     [Fact]

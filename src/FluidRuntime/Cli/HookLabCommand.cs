@@ -46,6 +46,10 @@ public static class HookLabCommand
                 $"{report.CopySubresourceRegionBytes} bytes; " +
                 $"{report.RedundantSubresourceCopyCandidateCount} candidates / " +
                 $"{report.RedundantSubresourceCopyBytes} bytes, all forwarded.");
+            Console.WriteLine(
+                $"GPU view writes: RTV clears={report.ClearRenderTargetViewCount}; " +
+                $"UAV float clears={report.ClearUnorderedAccessViewFloatCount}; " +
+                $"{report.GpuViewWriteBytes} bytes attributed to exact subresources.");
             Console.WriteLine($"Report: {outputPath}");
             return 0;
         }

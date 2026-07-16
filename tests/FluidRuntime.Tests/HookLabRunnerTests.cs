@@ -52,8 +52,12 @@ public sealed class HookLabRunnerTests
         Assert.False(HookLabRunner.MatchesDeterministicWorkload(wrongSubresource, 1));
 
         var wrongRegion = BuildDeterministicWorkload();
-        wrongRegion[23] = wrongRegion[23] with { RegionKey = wrongRegion[22].RegionKey };
+        wrongRegion[25] = wrongRegion[25] with { RegionKey = wrongRegion[24].RegionKey };
         Assert.False(HookLabRunner.MatchesDeterministicWorkload(wrongRegion, 1));
+
+        var impreciseGpuWrite = BuildDeterministicWorkload();
+        impreciseGpuWrite[21] = impreciseGpuWrite[21] with { Flags = 0 };
+        Assert.False(HookLabRunner.MatchesDeterministicWorkload(impreciseGpuWrite, 1));
 
         var invalidRefresh = BuildDeterministicWorkload();
         invalidRefresh.Insert(5, new HookIpcEvent(
@@ -111,11 +115,16 @@ public sealed class HookLabRunnerTests
             (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 2UL, 1U, 1U, 1U),
             (HookEventType.UpdateSubresource, 6UL, 0UL, 4096UL, 2UL, 0U, 0U, 0U),
             (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 3UL, 1U, 1U, 1U),
-            (HookEventType.UpdateSubresource, 6UL, 0UL, 1024UL, 3UL, 0U, 1U, 0U),
-            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 4UL, 0U, 1U, 1U),
+            (HookEventType.ClearRenderTargetView, 6UL, 0UL, 4096UL, 3UL, 8U, 0U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 4UL, 1U, 1U, 1U),
+            (HookEventType.UpdateSubresource, 6UL, 0UL, 1024UL, 4UL, 0U, 1U, 0U),
             (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 5UL, 0U, 1U, 1U),
-            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 6UL, 0U, 1U, 1U),
-            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 7UL, 1U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 6UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 7UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 8UL, 1U, 1U, 1U),
+            (HookEventType.ClearUnorderedAccessViewFloat, 6UL, 0UL, 1024UL, 5UL, 8U, 1U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 9UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 10UL, 1U, 1U, 1U),
             (HookEventType.CreateBuffer, 8UL, 0UL, 256UL, 0UL, 0U, 0U, 0U),
             (HookEventType.ResourceRetire, 8UL, 0UL, 256UL, 0UL, 0U, 0U, 0U)
         };
@@ -153,10 +162,13 @@ public sealed class HookLabRunnerTests
         events[17] = events[17] with { RegionKey = 200 };
         events[18] = events[18] with { RegionKey = fullRegion };
         events[20] = events[20] with { RegionKey = fullRegion };
-        events[22] = events[22] with { RegionKey = 300 };
-        events[23] = events[23] with { RegionKey = 400 };
-        events[24] = events[24] with { RegionKey = fullRegion };
-        events[25] = events[25] with { RegionKey = fullRegion };
+        events[22] = events[22] with { RegionKey = fullRegion };
+        events[24] = events[24] with { RegionKey = 300 };
+        events[25] = events[25] with { RegionKey = 400 };
+        events[26] = events[26] with { RegionKey = fullRegion };
+        events[27] = events[27] with { RegionKey = fullRegion };
+        events[29] = events[29] with { RegionKey = fullRegion };
+        events[30] = events[30] with { RegionKey = fullRegion };
         return events;
     }
 }

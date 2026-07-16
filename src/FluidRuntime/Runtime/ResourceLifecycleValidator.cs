@@ -73,6 +73,8 @@ public static class ResourceLifecycleValidator
                 case HookEventType.MapWrite:
                 case HookEventType.UnmapWrite:
                 case HookEventType.UpdateSubresource:
+                case HookEventType.ClearRenderTargetView:
+                case HookEventType.ClearUnorderedAccessViewFloat:
                     if (!active.Contains(item.ResourceA))
                     {
                         return Invalid("Resource write event must reference an active resource.", active, retired);

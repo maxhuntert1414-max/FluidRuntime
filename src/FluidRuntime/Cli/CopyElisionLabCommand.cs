@@ -280,7 +280,7 @@ public static class CopyElisionLabCommand
         }
 
         return new CopyElisionLabReport(
-            Mode: "fluidruntime-copy-elision-trace-v0.7.2",
+            Mode: "fluidruntime-copy-elision-trace-v0.7.3",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -368,11 +368,13 @@ public static class CopyElisionLabCommand
             : null;
 
     private static bool HasSafeLifecycle(HookLabReport report) =>
-        report.RingAbiVersion == 4 &&
+        report.RingAbiVersion == 5 &&
         report.AutomaticLifetimeTracking &&
         report.ReleaseObservationScope == "owned-returned-buffer-texture-interface" &&
         report.SubresourceProvenanceScope ==
             "owned-buffer-texture2d-map-update-copy-region" &&
+        report.GpuViewWriteScope ==
+            "owned-texture2d-single-subresource-rtv-uav-clear" &&
         report.ResourceRetireCount == 1 &&
         report.ResourceDestroyCount == 64 &&
         report.ActiveResourceCount == 7 &&
@@ -381,10 +383,13 @@ public static class CopyElisionLabCommand
         report.ProvenanceFailureCount == 0 &&
         report.ReleaseHookSlotCount >= 2 &&
         report.ReleaseHookFailureCount == 0 &&
-        report.CopySubresourceRegionCount == 8 &&
-        report.CopySubresourceRegionBytes == 5632 &&
-        report.RedundantSubresourceCopyCandidateCount == 3 &&
-        report.RedundantSubresourceCopyBytes == 3072 &&
+        report.CopySubresourceRegionCount == 11 &&
+        report.CopySubresourceRegionBytes == 8704 &&
+        report.RedundantSubresourceCopyCandidateCount == 5 &&
+        report.RedundantSubresourceCopyBytes == 5120 &&
+        report.ClearRenderTargetViewCount == 1 &&
+        report.ClearUnorderedAccessViewFloatCount == 1 &&
+        report.GpuViewWriteBytes == 5120 &&
         report.SubresourceContentEquivalent &&
         report.SourceSubresourceHash == report.DestinationSubresourceHash;
 }

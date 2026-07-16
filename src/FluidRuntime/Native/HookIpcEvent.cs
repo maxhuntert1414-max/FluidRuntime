@@ -13,7 +13,9 @@ public enum HookEventType : uint
     ResourceRetire = 9,
     ResourceReuse = 10,
     ResourceDestroy = 11,
-    CopySubresourceRegion = 12
+    CopySubresourceRegion = 12,
+    ClearRenderTargetView = 13,
+    ClearUnorderedAccessViewFloat = 14
 }
 
 public sealed record HookIpcEvent(
@@ -38,4 +40,9 @@ public sealed record HookIpcEvent(
 
     public bool IsRedundantSubresourceCopyCandidate =>
         Type == HookEventType.CopySubresourceRegion && (Flags & 1) != 0;
+
+    public bool IsPreciseSubresourceWrite =>
+        (Type is HookEventType.ClearRenderTargetView or
+            HookEventType.ClearUnorderedAccessViewFloat) &&
+        (Flags & 8) != 0;
 }

@@ -14,11 +14,12 @@ Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md)
 [v0.7 lifecycle evidence](docs/evidence/v0.7-resource-lifecycle.md) |
 [v0.7.1 destruction evidence](docs/evidence/v0.7.1-automatic-destruction.md) |
 [v0.7.2 subresource evidence](docs/evidence/v0.7.2-subresource-provenance.md) |
+[v0.7.3 GPU-view write evidence](docs/evidence/v0.7.3-gpu-view-writes.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.7.2 keeps normal inspection and external-process behavior advisory-only:
+Version 0.7.3 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -56,6 +57,13 @@ Version 0.7.2 tracks generations per Buffer/Texture2D subresource. The owned
 workload proves that a write to mip 0 does not invalidate unchanged mip 1,
 while a write to mip 1 does. Eight `CopySubresourceRegion` calls are observed;
 three repeated regions are candidates, but all eight are forwarded.
+
+Version 0.7.3 resolves owned `ID3D11RenderTargetView` and
+`ID3D11UnorderedAccessView` objects back to their Texture2D subresources. It
+observes `ClearRenderTargetView` and `ClearUnorderedAccessViewFloat` as GPU
+writes, preserves unrelated-mip provenance, and invalidates the addressed mip.
+Views for pre-attach resources such as the swap-chain backbuffer are outside
+the owned-resource scope and do not become fabricated tracked resources.
 
 The v0.2 native probe is also read-only. It adds per-process Windows process
 memory and GPU performance-counter telemetry through a small C++ executable.
@@ -112,6 +120,7 @@ binary built from this repository or another binary you explicitly trust.
 The native build also contains a controlled D3D11 hook lab. An owned target
 loads the hook DLL cooperatively. The DLL observes `IDXGISwapChain::Present`,
 buffer and texture creation, write-oriented `Map/Unmap`, `UpdateSubresource`,
+`ClearRenderTargetView`, `ClearUnorderedAccessViewFloat`,
 `CopySubresourceRegion`, and `CopyResource`. Detach restores every current
 original vtable entry before
 the DLL can be unloaded.
@@ -129,9 +138,11 @@ unchanged source/destination generation and are reported as candidates, never
 skipped by the default mode. The expected result is 49,152 bytes observed and
 24,576 bytes classified as potentially avoidable.
 
-The same workload performs five full-mip copies, two partial copies, and one
-empty-box no-op. Three are repeated regional candidates (3,072 bytes), but
-v0.7.2 never skips a regional copy.
+The same workload performs eight full-mip copies, two partial copies, and one
+empty-box no-op. Five are repeated regional candidates (5,120 bytes), but all
+11 regional calls remain diagnostic-only and are forwarded. A clear through
+the mip-0 RTV preserves mip-1 provenance; a clear through the mip-1 UAV
+invalidates the next mip-1 repeat.
 
 Run the managed IPC lab to consume those events while the target is alive:
 
@@ -150,9 +161,8 @@ ring. Events carry opaque resource IDs instead of pointer addresses. The managed
 reader checks the ABI, sequence continuity, native overrun count, event totals,
 exact deterministic event order, resource IDs and source/destination pairs,
 subresource indices, generations, lifecycle transitions, active-resource
-references, flags, copy
-counts, and byte estimates against the target snapshot before accepting a
-report.
+references, precise GPU-view write flags, copy/write counts, and byte estimates
+against the target snapshot before accepting a report.
 
 Run the first controlled before/after intervention:
 
@@ -189,5 +199,6 @@ concurrent-call draining, and rollback in software we own before any
 external-process work is considered. Candidate detection and copy elision
 currently assume the controlled workload. Automatic destruction is only proven
 for the same returned Buffer/Texture2D interface in the owned lab; interface
-aliases, GPU shader/UAV writes, fences, and resource-view aliasing are not
-covered yet. Regional-copy candidates remain diagnostic-only.
+aliases, shader draw/dispatch writes, other clear operations, fences, deferred
+contexts, and general resource-view aliasing are not covered yet. Regional-copy
+candidates remain diagnostic-only.

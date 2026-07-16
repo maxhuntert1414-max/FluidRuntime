@@ -91,6 +91,10 @@ public sealed class HookLabRunner
         var redundantSubresourceCopyEvents = subresourceCopyEvents
             .Where(item => item.IsRedundantSubresourceCopyCandidate)
             .ToArray();
+        var gpuViewWriteEvents = events
+            .Where(item => item.Type is HookEventType.ClearRenderTargetView or
+                HookEventType.ClearUnorderedAccessViewFloat)
+            .ToArray();
         var copyBytes = copyEvents.Aggregate(0UL, (total, item) => total + item.SizeBytes);
         var redundantBytes = redundantCopyEvents.Aggregate(
             0UL,
@@ -99,6 +103,9 @@ public sealed class HookLabRunner
             0UL,
             (total, item) => total + item.SizeBytes);
         var redundantSubresourceCopyBytes = redundantSubresourceCopyEvents.Aggregate(
+            0UL,
+            (total, item) => total + item.SizeBytes);
+        var gpuViewWriteBytes = gpuViewWriteEvents.Aggregate(
             0UL,
             (total, item) => total + item.SizeBytes);
 
@@ -110,10 +117,12 @@ public sealed class HookLabRunner
             skippedCopyEvents,
             subresourceCopyEvents,
             redundantSubresourceCopyEvents,
+            gpuViewWriteEvents,
             copyBytes,
             redundantBytes,
             subresourceCopyBytes,
             redundantSubresourceCopyBytes,
+            gpuViewWriteBytes,
             reader,
             lifecycle,
             options.SkipFirstRedundantCopy);
@@ -126,7 +135,7 @@ public sealed class HookLabRunner
         var gpuWorkloadTicks = timing.GetProperty("gpu_workload_ticks").GetUInt64();
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.7.2",
+            "fluidruntime-hook-ipc-lab-v0.7.3",
             ReadOnly: !options.SkipFirstRedundantCopy,
             WouldModifySystem: false,
             CopyElisionEnabled: options.SkipFirstRedundantCopy,
@@ -214,7 +223,16 @@ public sealed class HookLabRunner
                 targetReport.GetProperty("source_subresource_hash").GetString() ?? string.Empty,
             DestinationSubresourceHash:
                 targetReport.GetProperty("destination_subresource_hash").GetString() ??
-                    string.Empty);
+                    string.Empty,
+            GpuViewWriteScope:
+                targetReport.GetProperty("gpu_view_write_scope").GetString() ?? string.Empty,
+            ClearRenderTargetViewCount:
+                gpuViewWriteEvents.LongCount(item =>
+                    item.Type == HookEventType.ClearRenderTargetView),
+            ClearUnorderedAccessViewFloatCount:
+                gpuViewWriteEvents.LongCount(item =>
+                    item.Type == HookEventType.ClearUnorderedAccessViewFloat),
+            GpuViewWriteBytes: gpuViewWriteBytes);
     }
 
     private static string RequireFile(string path, string label)
@@ -258,12 +276,14 @@ public sealed class HookLabRunner
         var gpuQueryTimedOut = timing.GetProperty("gpu_query_timed_out").GetBoolean();
         var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
         if (report.GetProperty("mode").GetString() !=
-                "fluidruntime-resource-hook-lab-v0.7.2" ||
+                "fluidruntime-resource-hook-lab-v0.7.3" ||
             !report.GetProperty("automatic_lifetime_tracking").GetBoolean() ||
             report.GetProperty("release_observation_scope").GetString() !=
                 "owned-returned-buffer-texture-interface" ||
             report.GetProperty("subresource_provenance_scope").GetString() !=
                 "owned-buffer-texture2d-map-update-copy-region" ||
+            report.GetProperty("gpu_view_write_scope").GetString() !=
+                "owned-texture2d-single-subresource-rtv-uav-clear" ||
             report.GetProperty("read_only_hook").GetBoolean() == copyElisionEnabled ||
             report.GetProperty("would_modify_frame_data").GetBoolean() ||
             report.GetProperty("would_skip_copies").GetBoolean() != copyElisionEnabled ||
@@ -275,6 +295,7 @@ public sealed class HookLabRunner
             !report.GetProperty("texture_contents_equal").GetBoolean() ||
             !report.GetProperty("subresource_contents_equal").GetBoolean() ||
             !report.GetProperty("context_subresource_copy_entry_stable").GetBoolean() ||
+            !report.GetProperty("context_gpu_view_write_entries_stable").GetBoolean() ||
             report.GetProperty("refresh_hresult").GetString() != "0x00000000" ||
             (gpuTimingValid &&
                 (!gpuTimingSupported || gpuTimingDisjoint || gpuQueryTimedOut || gpuFrequency == 0)))
@@ -291,10 +312,12 @@ public sealed class HookLabRunner
         IReadOnlyCollection<HookIpcEvent> skippedCopyEvents,
         IReadOnlyCollection<HookIpcEvent> subresourceCopyEvents,
         IReadOnlyCollection<HookIpcEvent> redundantSubresourceCopyEvents,
+        IReadOnlyCollection<HookIpcEvent> gpuViewWriteEvents,
         ulong copyBytes,
         ulong redundantBytes,
         ulong subresourceCopyBytes,
         ulong redundantSubresourceCopyBytes,
+        ulong gpuViewWriteBytes,
         HookRingReader reader,
         ResourceLifecycleValidationResult lifecycle,
         bool copyElisionEnabled)
@@ -326,6 +349,10 @@ public sealed class HookLabRunner
                 resources.GetProperty("copy_resource_count").GetInt64() &&
             CountEvents(events, HookEventType.CopySubresourceRegion) ==
                 resources.GetProperty("copy_subresource_region_count").GetInt64() &&
+            CountEvents(events, HookEventType.ClearRenderTargetView) ==
+                resources.GetProperty("clear_render_target_view_count").GetInt64() &&
+            CountEvents(events, HookEventType.ClearUnorderedAccessViewFloat) ==
+                resources.GetProperty("clear_unordered_access_view_float_count").GetInt64() &&
             CountEvents(events, HookEventType.HookRefresh) ==
                 resources.GetProperty("hook_refresh_count").GetInt64() &&
             CountEvents(events, HookEventType.ResourceRetire) ==
@@ -368,6 +395,9 @@ public sealed class HookLabRunner
                 resources.GetProperty("redundant_subresource_copy_candidate_count").GetInt64() ||
             redundantSubresourceCopyBytes !=
                 resources.GetProperty("redundant_subresource_copy_bytes_estimated").GetUInt64() ||
+            gpuViewWriteEvents.Any(item => !item.IsPreciseSubresourceWrite) ||
+            gpuViewWriteBytes !=
+                resources.GetProperty("gpu_view_write_bytes_estimated").GetUInt64() ||
             skippedCopyEvents.Count != expectedSkippedCount ||
             skippedCopyEvents.Aggregate(0UL, (total, item) => total + item.SizeBytes) !=
                 expectedSkippedBytes ||
@@ -449,11 +479,16 @@ public sealed class HookLabRunner
             (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 2UL, 1U, 1U, 1U),
             (HookEventType.UpdateSubresource, 6UL, 0UL, 4096UL, 2UL, 0U, 0U, 0U),
             (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 3UL, 1U, 1U, 1U),
-            (HookEventType.UpdateSubresource, 6UL, 0UL, 1024UL, 3UL, 0U, 1U, 0U),
-            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 4UL, 0U, 1U, 1U),
+            (HookEventType.ClearRenderTargetView, 6UL, 0UL, 4096UL, 3UL, 8U, 0U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 4UL, 1U, 1U, 1U),
+            (HookEventType.UpdateSubresource, 6UL, 0UL, 1024UL, 4UL, 0U, 1U, 0U),
             (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 5UL, 0U, 1U, 1U),
-            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 6UL, 0U, 1U, 1U),
-            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 7UL, 1U, 1U, 1U)
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 256UL, 6UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 7UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 8UL, 1U, 1U, 1U),
+            (HookEventType.ClearUnorderedAccessViewFloat, 6UL, 0UL, 1024UL, 5UL, 8U, 1U, 0U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 9UL, 0U, 1U, 1U),
+            (HookEventType.CopySubresourceRegion, 7UL, 6UL, 1024UL, 10UL, 1U, 1U, 1U)
         };
         var nonRefreshEvents = events
             .Where(item => item.Type != HookEventType.HookRefresh)
@@ -487,18 +522,21 @@ public sealed class HookLabRunner
 
         var fullRegionKey = nonRefreshEvents[16].RegionKey;
         var emptyRegionKey = nonRefreshEvents[17].RegionKey;
-        var firstPartialRegionKey = nonRefreshEvents[22].RegionKey;
-        var secondPartialRegionKey = nonRefreshEvents[23].RegionKey;
+        var firstPartialRegionKey = nonRefreshEvents[24].RegionKey;
+        var secondPartialRegionKey = nonRefreshEvents[25].RegionKey;
         if (fullRegionKey == 0 ||
             emptyRegionKey == 0 || emptyRegionKey == fullRegionKey ||
             nonRefreshEvents[18].RegionKey != fullRegionKey ||
             nonRefreshEvents[20].RegionKey != fullRegionKey ||
+            nonRefreshEvents[22].RegionKey != fullRegionKey ||
             firstPartialRegionKey == 0 || firstPartialRegionKey == fullRegionKey ||
             secondPartialRegionKey == 0 ||
             secondPartialRegionKey == fullRegionKey ||
             secondPartialRegionKey == firstPartialRegionKey ||
-            nonRefreshEvents[24].RegionKey != fullRegionKey ||
-            nonRefreshEvents[25].RegionKey != fullRegionKey)
+            nonRefreshEvents[26].RegionKey != fullRegionKey ||
+            nonRefreshEvents[27].RegionKey != fullRegionKey ||
+            nonRefreshEvents[29].RegionKey != fullRegionKey ||
+            nonRefreshEvents[30].RegionKey != fullRegionKey)
         {
             return false;
         }
@@ -616,7 +654,7 @@ public sealed class HookLabRunner
         for (var index = 0; index < refreshEvents.Length; ++index)
         {
             var actual = refreshEvents[index];
-            if (actual.ResourceA is < 3 or > 7 ||
+            if (actual.ResourceA is < 3 or > 9 ||
                 actual.ResourceB != 0 ||
                 actual.SizeBytes != 0 ||
                 actual.Generation != (ulong)index + 1 ||

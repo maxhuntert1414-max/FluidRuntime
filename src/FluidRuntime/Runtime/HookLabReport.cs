@@ -64,4 +64,8 @@ public sealed record HookLabReport(
     ulong RedundantSubresourceCopyBytes = 0,
     bool SubresourceContentEquivalent = false,
     string SourceSubresourceHash = "",
-    string DestinationSubresourceHash = "");
+    string DestinationSubresourceHash = "",
+    string GpuViewWriteScope = "",
+    long ClearRenderTargetViewCount = 0,
+    long ClearUnorderedAccessViewFloatCount = 0,
+    ulong GpuViewWriteBytes = 0);

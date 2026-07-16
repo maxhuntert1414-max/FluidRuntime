@@ -7,10 +7,10 @@
 
 struct ID3D11Resource;
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 7;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 8;
 constexpr std::uint32_t fluid_hook_attach_options_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 4;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 5;
 constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
 constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
 
@@ -27,11 +27,14 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     resource_reuse = 10,
     resource_destroy = 11,
     copy_subresource_region = 12,
+    clear_render_target_view = 13,
+    clear_unordered_access_view_float = 14,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
 constexpr std::uint32_t fluid_hook_event_flag_copy_skipped = 2;
 constexpr std::uint32_t fluid_hook_event_flag_reuse_without_retire = 4;
+constexpr std::uint32_t fluid_hook_event_flag_precise_subresource_write = 8;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
 
@@ -114,6 +117,9 @@ struct FluidHookSnapshotV1 {
     std::uint64_t copy_subresource_region_bytes_estimated;
     std::uint64_t redundant_subresource_copy_candidate_count;
     std::uint64_t redundant_subresource_copy_bytes_estimated;
+    std::uint64_t clear_render_target_view_count;
+    std::uint64_t clear_unordered_access_view_float_count;
+    std::uint64_t gpu_view_write_bytes_estimated;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS

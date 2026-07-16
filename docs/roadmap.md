@@ -32,14 +32,18 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - **v0.7.2:** ABI-v4 subresource indices, per-mip generations,
   `CopySubresourceRegion` observation, unrelated-mip provenance preservation,
   exact regional repeat detection, mip readback, and WARP/AMD evidence.
+- **v0.7.3:** ABI-v5 GPU-view write events, exact Texture2D mip resolution for
+  `ClearRenderTargetView` and `ClearUnorderedAccessViewFloat`, conservative
+  fallback for wider views, pre-attach resource exclusion, and WARP/AMD
+  evidence with a blocked performance claim when p95 regressed.
 
 ## Next Milestones
 
 ### v0.7.x: Complete Trustworthy Resource State
 
 - Cover destruction through interface aliases and non-primary resource views.
-- Cover shader/UAV/render-target writes, fences, queries, and command-list
-  synchronization.
+- Cover draw/dispatch shader writes, remaining UAV/render-target/depth clears,
+  fences, queries, and command-list synchronization.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.
 - Add longer stress, race, and fault-injection tests.
