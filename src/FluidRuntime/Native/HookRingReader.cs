@@ -205,9 +205,30 @@ public sealed class HookRingReader : IDisposable
             throw new InvalidDataException(
                 "Managed and native QPC frequencies do not match.");
         }
-        const long epoch = 1;
         var lifetimeTicks = checked((long)Math.Ceiling(lifetime.TotalSeconds * QpcFrequency));
         var expiresAtQpc = checked(Stopwatch.GetTimestamp() + lifetimeTicks);
+        return PublishControlPolicy(new HookControlPolicy(
+            Epoch: 1,
+            ExpiresAtQpc: expiresAtQpc,
+            ActionMask: SkipRedundantCopyResourceAction,
+            ActionBudget: 1));
+    }
+
+    internal HookControlPolicy PublishControlPolicyForLab(HookControlPolicyCase policyCase)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if ((ulong)Stopwatch.Frequency != QpcFrequency)
+        {
+            throw new InvalidDataException(
+                "Managed and native QPC frequencies do not match.");
+        }
+        return PublishControlPolicy(policyCase.CreateLabPolicy(
+            QpcFrequency,
+            Stopwatch.GetTimestamp()));
+    }
+
+    private HookControlPolicy PublishControlPolicy(HookControlPolicy policy)
+    {
         const long publishingSentinel = -1;
         if (CompareExchangeInt64Atomic(
                 ControlPublishedEpochOffset,
@@ -221,27 +242,49 @@ public sealed class HookRingReader : IDisposable
         try
         {
             WriteInt64Atomic(ControlAcknowledgedEpochOffset, 0);
-            WriteInt64Atomic(ControlExpiresAtQpcOffset, expiresAtQpc);
-            WriteInt64Atomic(ControlActionMaskOffset, (long)SkipRedundantCopyResourceAction);
-            WriteInt64Atomic(ControlActionBudgetOffset, 1);
+            WriteInt64Atomic(ControlExpiresAtQpcOffset, policy.ExpiresAtQpc);
+            WriteInt64Atomic(ControlActionMaskOffset, checked((long)policy.ActionMask));
+            WriteInt64Atomic(ControlActionBudgetOffset, checked((long)policy.ActionBudget));
             WriteInt64Atomic(ControlAppliedActionCountOffset, 0);
             WriteInt64Atomic(ControlStatusOffset, (long)HookControlPolicyStatus.None);
             Thread.MemoryBarrier();
-            WriteInt64Atomic(ControlPublishedEpochOffset, epoch);
+            WriteInt64Atomic(ControlPublishedEpochOffset, policy.Epoch);
         }
         catch
         {
             WriteInt64Atomic(ControlPublishedEpochOffset, 0);
             throw;
         }
-        return new HookControlPolicy(
-            epoch,
-            expiresAtQpc,
-            SkipRedundantCopyResourceAction,
-            ActionBudget: 1);
+        return policy;
     }
 
     public async Task<HookControlSnapshot> WaitForControlAcknowledgmentAsync(
+        long epoch,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (epoch <= 0 || timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(epoch),
+                "A positive epoch and timeout are required.");
+        }
+
+        var snapshot = await WaitForControlStatusAsync(
+            epoch,
+            timeout,
+            cancellationToken);
+        if (snapshot.Status is HookControlPolicyStatus.Accepted or
+            HookControlPolicyStatus.Exhausted)
+        {
+            return snapshot;
+        }
+        throw new InvalidDataException(
+            $"Native control policy was {snapshot.Status.ToString().ToLowerInvariant()}.");
+    }
+
+    internal async Task<HookControlSnapshot> WaitForControlStatusAsync(
         long epoch,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
@@ -261,19 +304,13 @@ public sealed class HookRingReader : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = ControlSnapshot;
-            if (snapshot.AcknowledgedEpoch == epoch)
+            if (snapshot.AcknowledgedEpoch == epoch &&
+                snapshot.Status is not HookControlPolicyStatus.None)
             {
-                if (snapshot.Status is HookControlPolicyStatus.Accepted or
-                    HookControlPolicyStatus.Exhausted)
-                {
-                    return snapshot;
-                }
-                throw new InvalidDataException(
-                    $"Native control policy was {snapshot.Status.ToString().ToLowerInvariant()}.");
+                return snapshot;
             }
             await Task.Delay(5, cancellationToken);
         }
-
         throw new TimeoutException("Native control policy acknowledgment timed out.");
     }
 

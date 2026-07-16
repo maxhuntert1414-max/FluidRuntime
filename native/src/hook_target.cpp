@@ -56,6 +56,88 @@ constexpr std::uint64_t kExpectedResourceDestroyCount = kAutomaticLifetimeCycles
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
+enum class ControlPolicyCase {
+    none,
+    valid,
+    no_opt_in,
+    wrong_epoch,
+    unknown_action,
+    wrong_budget,
+    too_long_expiry,
+    already_expired,
+    accepted_then_expired,
+};
+
+std::optional<ControlPolicyCase> parse_control_policy_case(std::wstring_view value) {
+    if (value == L"valid") return ControlPolicyCase::valid;
+    if (value == L"no-opt-in") return ControlPolicyCase::no_opt_in;
+    if (value == L"wrong-epoch") return ControlPolicyCase::wrong_epoch;
+    if (value == L"unknown-action") return ControlPolicyCase::unknown_action;
+    if (value == L"wrong-budget") return ControlPolicyCase::wrong_budget;
+    if (value == L"too-long-expiry") return ControlPolicyCase::too_long_expiry;
+    if (value == L"already-expired") return ControlPolicyCase::already_expired;
+    if (value == L"accepted-then-expired") {
+        return ControlPolicyCase::accepted_then_expired;
+    }
+    return std::nullopt;
+}
+
+const char* control_policy_case_name(ControlPolicyCase value) {
+    switch (value) {
+    case ControlPolicyCase::valid: return "valid";
+    case ControlPolicyCase::no_opt_in: return "no-opt-in";
+    case ControlPolicyCase::wrong_epoch: return "wrong-epoch";
+    case ControlPolicyCase::unknown_action: return "unknown-action";
+    case ControlPolicyCase::wrong_budget: return "wrong-budget";
+    case ControlPolicyCase::too_long_expiry: return "too-long-expiry";
+    case ControlPolicyCase::already_expired: return "already-expired";
+    case ControlPolicyCase::accepted_then_expired: return "accepted-then-expired";
+    default: return "none";
+    }
+}
+
+bool control_policy_opt_in(ControlPolicyCase value) {
+    return value != ControlPolicyCase::none && value != ControlPolicyCase::no_opt_in;
+}
+
+bool control_policy_accepted(ControlPolicyCase value) {
+    return value == ControlPolicyCase::valid ||
+        value == ControlPolicyCase::accepted_then_expired;
+}
+
+bool control_policy_applies_action(ControlPolicyCase value) {
+    return value == ControlPolicyCase::valid;
+}
+
+bool control_policy_rejected(ControlPolicyCase value) {
+    return value == ControlPolicyCase::wrong_epoch ||
+        value == ControlPolicyCase::unknown_action ||
+        value == ControlPolicyCase::wrong_budget ||
+        value == ControlPolicyCase::too_long_expiry ||
+        value == ControlPolicyCase::already_expired;
+}
+
+HRESULT expected_control_wait_result(ControlPolicyCase value) {
+    if (control_policy_accepted(value)) return S_OK;
+    if (value == ControlPolicyCase::no_opt_in) return E_ACCESSDENIED;
+    if (control_policy_rejected(value)) return E_INVALIDARG;
+    return S_FALSE;
+}
+
+std::uint64_t expected_control_acknowledged_epoch(ControlPolicyCase value) {
+    if (value == ControlPolicyCase::none || value == ControlPolicyCase::no_opt_in) return 0;
+    return value == ControlPolicyCase::wrong_epoch ? 2 : 1;
+}
+
+FluidHookControlStatusV1 expected_control_status(ControlPolicyCase value) {
+    if (value == ControlPolicyCase::valid) return FluidHookControlStatusV1::exhausted;
+    if (value == ControlPolicyCase::accepted_then_expired) {
+        return FluidHookControlStatusV1::expired;
+    }
+    if (control_policy_rejected(value)) return FluidHookControlStatusV1::rejected;
+    return FluidHookControlStatusV1::none;
+}
+
 struct Options {
     std::wstring hook_path;
     std::wstring output_path;
@@ -66,6 +148,8 @@ struct Options {
     bool use_hardware{};
     bool skip_first_redundant_copy{};
     bool managed_control{};
+    ControlPolicyCase control_policy_case{ControlPolicyCase::none};
+    bool control_policy_matrix_case{};
     bool automatic_lifetime_tracking{true};
     bool concurrent_lifetime_stress{};
 };
@@ -144,6 +228,11 @@ std::optional<unsigned long> parse_positive(const wchar_t* value) {
     return parsed;
 }
 
+bool wait_for_control_gate(std::string_view expected) {
+    std::string value;
+    return std::getline(std::cin, value) && value == expected;
+}
+
 std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
     Options options;
     for (int index = 1; index < argc; ++index) {
@@ -182,6 +271,15 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
             options.skip_first_redundant_copy = true;
         } else if (argument == L"--managed-control") {
             options.managed_control = true;
+            options.control_policy_case = ControlPolicyCase::valid;
+        } else if (argument == L"--control-policy-case" && index + 1 < argc) {
+            const auto policy_case = parse_control_policy_case(argv[++index]);
+            if (!policy_case.has_value()) {
+                return std::nullopt;
+            }
+            options.managed_control = true;
+            options.control_policy_case = *policy_case;
+            options.control_policy_matrix_case = true;
         } else if (argument == L"--cooperative-lifetime") {
             options.automatic_lifetime_tracking = false;
         } else if (argument == L"--concurrent-lifetime-stress") {
@@ -1057,7 +1155,10 @@ bool snapshot_matches_workload(
     const FluidHookSnapshotV1& snapshot,
     const Options& options) {
     const auto optimization_enabled =
-        options.skip_first_redundant_copy || options.managed_control;
+        options.skip_first_redundant_copy ||
+        control_policy_applies_action(options.control_policy_case);
+    const auto policy_accepted = control_policy_accepted(options.control_policy_case);
+    const auto policy_rejected = control_policy_rejected(options.control_policy_case);
     const auto expected_skipped_count = optimization_enabled
         ? kExpectedSkippedCopyCount
         : 0;
@@ -1098,17 +1199,16 @@ bool snapshot_matches_workload(
         snapshot.clear_render_target_view_count == 1 &&
         snapshot.clear_unordered_access_view_float_count == 1 &&
         snapshot.gpu_view_write_bytes_estimated == kExpectedGpuViewWriteBytes &&
-        snapshot.control_policy_enabled == (options.managed_control ? 1ULL : 0ULL) &&
-        snapshot.control_policy_epoch == (options.managed_control ? 1ULL : 0ULL) &&
+        snapshot.control_policy_enabled ==
+            (control_policy_opt_in(options.control_policy_case) ? 1ULL : 0ULL) &&
+        snapshot.control_policy_epoch == (policy_accepted ? 1ULL : 0ULL) &&
         snapshot.control_policy_acknowledged_epoch ==
-            (options.managed_control ? 1ULL : 0ULL) &&
+            expected_control_acknowledged_epoch(options.control_policy_case) &&
         snapshot.control_policy_applied_action_count ==
-            (options.managed_control ? 1ULL : 0ULL) &&
-        snapshot.control_policy_rejected_count == 0 &&
+            (control_policy_applies_action(options.control_policy_case) ? 1ULL : 0ULL) &&
+        snapshot.control_policy_rejected_count == (policy_rejected ? 1ULL : 0ULL) &&
         snapshot.control_policy_status == static_cast<std::uint64_t>(
-            options.managed_control
-                ? FluidHookControlStatusV1::exhausted
-                : FluidHookControlStatusV1::none) &&
+            expected_control_status(options.control_policy_case)) &&
         snapshot.forwarded_copy_count == kExpectedCopyCount - expected_skipped_count &&
         snapshot.forwarded_copy_bytes_estimated ==
             kExpectedCopyBytes - expected_skipped_bytes &&
@@ -1130,7 +1230,7 @@ bool snapshot_matches_workload(
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >=
             snapshot.present_count + 161 + snapshot.resource_reuse_count +
-                (options.managed_control ? 1 : 0) &&
+                (policy_accepted ? 1 : 0) &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -1139,6 +1239,7 @@ std::string build_report(
     const FluidHookSnapshotV1& snapshot,
     HRESULT attach_result,
     HRESULT control_policy_wait_result,
+    HRESULT control_policy_expiry_wait_result,
     HRESULT refresh_result,
     HRESULT snapshot_result,
     HRESULT detach_result,
@@ -1154,6 +1255,9 @@ std::string build_report(
     const TimingMetrics& timing,
     const AdapterIdentity& adapter) {
     const auto optimization_enabled =
+        options.skip_first_redundant_copy ||
+        control_policy_applies_action(options.control_policy_case);
+    const auto optimization_requested =
         options.skip_first_redundant_copy || options.managed_control;
     const auto optimization_kind = options.managed_control
         ? "managed-policy-skip-redundant-copy-resource"
@@ -1162,7 +1266,7 @@ std::string build_report(
             : "none");
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.8.0\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.8.1\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -1172,7 +1276,7 @@ std::string build_report(
            << "  \"would_skip_copies\": "
            << (optimization_enabled ? "true" : "false") << ",\n"
            << "  \"optimization_requested\": "
-           << (optimization_enabled ? "true" : "false") << ",\n"
+           << (optimization_requested ? "true" : "false") << ",\n"
            << "  \"optimization_kind\": \"" << optimization_kind << "\",\n"
            << "  \"module_pinned_until_process_exit\": "
            << (SUCCEEDED(attach_result) ? "true" : "false") << ",\n"
@@ -1187,6 +1291,8 @@ std::string build_report(
            << ",\n"
            << "  \"control_policy_requested\": "
            << (options.managed_control ? "true" : "false") << ",\n"
+           << "  \"control_policy_case\": \""
+           << control_policy_case_name(options.control_policy_case) << "\",\n"
            << "  \"control_policy_timeout_ms\": "
            << options.control_timeout_ms << ",\n"
            << "  \"automatic_lifetime_tracking\": "
@@ -1342,6 +1448,8 @@ std::string build_report(
            << "  \"attach_hresult\": \"" << hresult_hex(attach_result) << "\",\n"
            << "  \"control_policy_wait_hresult\": \""
            << hresult_hex(control_policy_wait_result) << "\",\n"
+           << "  \"control_policy_expiry_wait_hresult\": \""
+           << hresult_hex(control_policy_expiry_wait_result) << "\",\n"
            << "  \"refresh_hresult\": \"" << hresult_hex(refresh_result) << "\",\n"
            << "  \"snapshot_hresult\": \"" << hresult_hex(snapshot_result) << "\",\n"
            << "  \"detach_hresult\": \"" << hresult_hex(detach_result) << "\"\n"
@@ -1360,6 +1468,7 @@ int wmain(int argc, wchar_t* argv[]) {
                       L"[--control-timeout-ms <milliseconds>] "
                       L"[--out <report.json>] [--hardware] "
                       L"[--skip-first-redundant-copy] [--managed-control] "
+                      L"[--control-policy-case <case>] "
                       L"[--cooperative-lifetime] "
                       L"[--concurrent-lifetime-stress]\n";
         return 2;
@@ -1504,7 +1613,7 @@ int wmain(int argc, wchar_t* argv[]) {
         attach_options.flags |= fluid_hook_attach_flag_skip_first_redundant_copy;
         attach_options.max_skipped_copy_count = 1;
     }
-    if (options->managed_control) {
+    if (control_policy_opt_in(options->control_policy_case)) {
         attach_options.flags |= fluid_hook_attach_flag_allow_control_policy;
     }
     const auto attach_result =
@@ -1513,10 +1622,18 @@ int wmain(int argc, wchar_t* argv[]) {
             !options->managed_control
         ? attach(swap_chain.Get())
         : attach_ex(swap_chain.Get(), &attach_options);
+    const auto published_gate_opened =
+        !options->control_policy_matrix_case || wait_for_control_gate("published");
     const auto control_policy_wait_result = options->managed_control
-        ? (SUCCEEDED(attach_result)
+        ? (SUCCEEDED(attach_result) && published_gate_opened
             ? wait_for_control_policy(options->control_timeout_ms)
-            : attach_result)
+            : (FAILED(attach_result) ? attach_result : E_ABORT))
+        : S_FALSE;
+    const auto control_policy_expiry_wait_result =
+        options->control_policy_case == ControlPolicyCase::accepted_then_expired
+        ? (SUCCEEDED(control_policy_wait_result)
+            ? (wait_for_control_gate("expired") ? S_OK : E_ABORT)
+            : control_policy_wait_result)
         : S_FALSE;
     if (options->concurrent_lifetime_stress) {
         unsigned long completed_cycles = 0;
@@ -1618,9 +1735,16 @@ int wmain(int argc, wchar_t* argv[]) {
         context->End(gpu_timing_queries.start.Get());
     }
     QueryPerformanceCounter(&workload_start);
+    const auto control_policy_wait_matched =
+        control_policy_wait_result ==
+            expected_control_wait_result(options->control_policy_case);
+    const auto control_policy_expiry_wait_matched =
+        options->control_policy_case != ControlPolicyCase::accepted_then_expired ||
+        control_policy_expiry_wait_result == S_OK;
     auto resource_workload_succeeded =
         SUCCEEDED(attach_result) &&
-        (!options->managed_control || SUCCEEDED(control_policy_wait_result)) &&
+        control_policy_wait_matched &&
+        control_policy_expiry_wait_matched &&
         is_attached() != FALSE &&
         run_resource_workload(
             device.Get(),
@@ -1694,6 +1818,7 @@ int wmain(int argc, wchar_t* argv[]) {
         snapshot,
         attach_result,
         control_policy_wait_result,
+        control_policy_expiry_wait_result,
         refresh_result,
         snapshot_result,
         detach_result,
@@ -1726,7 +1851,8 @@ int wmain(int argc, wchar_t* argv[]) {
     const auto passed = render_succeeded &&
         resource_workload_succeeded &&
         resource_metrics_matched &&
-        (!options->managed_control || SUCCEEDED(control_policy_wait_result)) &&
+        control_policy_wait_matched &&
+        control_policy_expiry_wait_matched &&
         original_pointer_restored &&
         context_vtable_pointer_stable &&
         context_copy_entry_stable &&
