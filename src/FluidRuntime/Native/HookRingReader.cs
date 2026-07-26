@@ -18,6 +18,7 @@ public sealed class HookRingReader : IDisposable
         HeaderSize + (int)ExpectedCapacity * ExpectedEventSize;
     public const string MappingNamePrefix = "Local\\FluidRuntimeHook-";
     public const ulong SkipRedundantCopyResourceAction = 1;
+    public const ulong MaxControlActionBudget = 128;
 
     private const int ControlPublishedEpochOffset = 72;
     private const int ControlAcknowledgedEpochOffset = 80;
@@ -191,7 +192,9 @@ public sealed class HookRingReader : IDisposable
         return events;
     }
 
-    public HookControlPolicy PublishCopyElisionPolicy(TimeSpan lifetime)
+    public HookControlPolicy PublishCopyElisionPolicy(
+        TimeSpan lifetime,
+        ulong actionBudget = 1)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromSeconds(4))
@@ -199,6 +202,12 @@ public sealed class HookRingReader : IDisposable
             throw new ArgumentOutOfRangeException(
                 nameof(lifetime),
                 "Control policy lifetime must be greater than zero and at most four seconds.");
+        }
+        if (actionBudget is 0 or > MaxControlActionBudget)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(actionBudget),
+                $"Control action budget must be between 1 and {MaxControlActionBudget}.");
         }
         if ((ulong)Stopwatch.Frequency != QpcFrequency)
         {
@@ -211,7 +220,7 @@ public sealed class HookRingReader : IDisposable
             Epoch: 1,
             ExpiresAtQpc: expiresAtQpc,
             ActionMask: SkipRedundantCopyResourceAction,
-            ActionBudget: 1));
+            ActionBudget: actionBudget));
     }
 
     internal HookControlPolicy PublishControlPolicyForLab(HookControlPolicyCase policyCase)

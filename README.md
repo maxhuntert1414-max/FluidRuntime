@@ -9,18 +9,19 @@ The long-term objective is to reduce redundant CPU/GPU/RAM/VRAM movement,
 late synchronization, buffer churn, and frame-pipeline stalls from normal PC
 software. It is not a DLSS, FSR, or frame-generation clone.
 
-Documentation: [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md) |
+Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.md) | [architecture](docs/architecture.md) | [roadmap](docs/roadmap.md) |
 [v0.6 evidence](docs/evidence/v0.6-copy-elision.md) |
 [v0.7 lifecycle evidence](docs/evidence/v0.7-resource-lifecycle.md) |
 [v0.7.1 destruction evidence](docs/evidence/v0.7.1-automatic-destruction.md) |
 [v0.7.2 subresource evidence](docs/evidence/v0.7.2-subresource-provenance.md) |
 [v0.7.3 GPU-view write evidence](docs/evidence/v0.7.3-gpu-view-writes.md) |
 [v0.8 managed control evidence](docs/evidence/v0.8.0-managed-control-plane.md) |
+[v0.9 sustained copy-elision evidence](docs/evidence/v0.9.0-sustained-copy-elision.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.8.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.9.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -30,19 +31,26 @@ Version 0.8.0 keeps normal inspection and external-process behavior advisory-onl
 - never changes process priority, affinity, RAM/VRAM residency, GPU queues,
   drivers, games, or OS state.
 
-It also contains the first deliberately narrow actuation experiment. The
+It also contains deliberately narrow actuation experiments. The original
 `copy-elision-lab` command runs repeated baseline/optimized pairs of the owned
 deterministic target, then allows each optimized run to skip at most one proven
 redundant `CopyResource`. The command fails unless readback hashes, event
 accounting, and hook rollback agree across all runs. This is not enabled for
 external software.
 
+Version 0.9.0 adds `sustained-copy-lab`. A managed policy may spend a bounded
+budget of up to 128 actions on unchanged repeats inside a 4 MiB owned buffer
+workload. With the default budget, each optimized run removes 128 redundant
+`CopyResource` calls, or 512 MiB of logical GPU copy traffic. Separate target
+processes, exact readback hashes, event/snapshot agreement, adapter identity,
+GPU timestamp validity, and rollback are mandatory before the report can pass.
+
 Any allowed positive performance claim is scoped in the JSON as
 `owned-d3d11-copy-elision-gpu-workload-only`; it is not a game-wide FPS claim. Valid
 timing alone is insufficient: GPU p95 must improve and at least 80% of measured
 pairs must favor the optimized run.
 
-Version 0.8.0 adds the first managed control plane. In `manager-lab`, the .NET
+Version 0.8.0 added the first managed control plane. In `manager-lab`, the .NET
 runtime opens the target's shared mapping and publishes one short-lived policy
 epoch with a one-action budget. The native hook validates and acknowledges the
 policy, then may consume it only for the same proven redundant `CopyResource`
@@ -214,6 +222,21 @@ dotnet run --project src/FluidRuntime -c Release -- manager-lab `
   --out artifacts/manager-control-comparison.json
 ```
 
+Run the bounded sustained intervention and paired GPU measurement:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- sustained-copy-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --copy-count 128 `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
+  --hold-ms 50 `
+  --gpu-timeout-ms 5000 `
+  --hardware true `
+  --out artifacts/sustained-copy-hardware.json
+```
+
 Each pair contains a baseline and optimized process, and pair order alternates
 to reduce first/second-run bias. Warmups remain in the trace but are excluded
 from statistics. Baselines forward all six copies; optimized runs observe the
@@ -223,6 +246,12 @@ same six, forward five, and skip the first redundant 4,096-byte buffer copy.
 After hook detach, the target reads buffer and texture contents back through
 staging resources, compares logical bytes exactly, and computes stable FNV-1a
 hashes for the report, including the addressed mip.
+
+`sustained-copy-lab` uses the managed policy path with a bounded action budget.
+Its baseline forwards all 135 whole-resource copies; the default optimized run
+forwards seven and skips 128 sustained repeats. This is evidence for the owned
+GPU workload only. It is not evidence of lower end-to-end frame time, lower CPU
+cost, higher FPS, or a benefit in an external game.
 
 Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
 guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,
@@ -239,6 +268,6 @@ for the same returned Buffer/Texture2D interface in the owned lab; interface
 aliases, shader draw/dispatch writes, other clear operations, fences, deferred
 contexts, and general resource-view aliasing are not covered yet. Regional-copy
 candidates remain diagnostic-only. The manager currently supports one epoch,
-one action type, and one action per owned target process. It is the control-plane
-foundation for broader scheduling and memory work, not yet a general game
-manager.
+one action type, and a bounded budget of at most 128 actions per owned target
+process. It is the control-plane foundation for broader scheduling and memory
+work, not yet a general game manager.

@@ -339,8 +339,8 @@ public static class CopyElisionLabCommand
 
         return new CopyElisionLabReport(
             Mode: managedControl
-                ? "fluidruntime-manager-control-trace-v0.8.0"
-                : "fluidruntime-copy-elision-trace-v0.8.0",
+                ? "fluidruntime-manager-control-trace-v0.9.0"
+                : "fluidruntime-copy-elision-trace-v0.9.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,

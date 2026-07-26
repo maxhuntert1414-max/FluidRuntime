@@ -255,6 +255,12 @@ public sealed class HookRingReaderTests
             reader.PublishCopyElisionPolicy(TimeSpan.Zero));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             reader.PublishCopyElisionPolicy(TimeSpan.FromSeconds(5)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            reader.PublishCopyElisionPolicy(TimeSpan.FromSeconds(1), actionBudget: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            reader.PublishCopyElisionPolicy(
+                TimeSpan.FromSeconds(1),
+                HookRingReader.MaxControlActionBudget + 1));
 
         var policy = reader.PublishCopyElisionPolicy(TimeSpan.FromSeconds(1));
         writer.Write(120, (long)HookControlPolicyStatus.Rejected);
@@ -314,6 +320,36 @@ public sealed class HookRingReaderTests
         Assert.Single(results, result => result is null);
         Assert.Single(results, result => result is InvalidOperationException);
         Assert.Equal(1, writer.ReadInt64(72));
+    }
+
+    [Fact]
+    public void Control_policy_publishes_the_maximum_bounded_action_budget()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var mappingName = $"Local\\FluidRuntimeHook-Test-{Guid.NewGuid():N}";
+        using var mapping = MemoryMappedFile.CreateNew(
+            mappingName,
+            HookRingReader.ExpectedMappingSize,
+            MemoryMappedFileAccess.ReadWrite);
+        using var writer = mapping.CreateViewAccessor(
+            0,
+            HookRingReader.ExpectedMappingSize,
+            MemoryMappedFileAccess.ReadWrite);
+        WriteHeader(writer, (int)HookRingReader.ExpectedCapacity);
+        using var reader = HookRingReader.Open(mappingName);
+
+        var policy = reader.PublishCopyElisionPolicy(
+            TimeSpan.FromSeconds(1),
+            HookRingReader.MaxControlActionBudget);
+
+        Assert.Equal(HookRingReader.MaxControlActionBudget, policy.ActionBudget);
+        Assert.Equal(
+            (long)HookRingReader.MaxControlActionBudget,
+            writer.ReadInt64(104));
     }
 
     private static void WriteHeader(MemoryMappedViewAccessor writer, int capacity)

@@ -47,21 +47,48 @@ jobs:
           --frames 120 --hold-ms 500 --gpu-timeout-ms 1000
           --trial-pairs 2 --warmup-pairs 0 --hardware false
           --out artifacts/manager-control-ci.json
-      - name: Validate v0.8 evidence contracts
+      - name: Test native control policy matrix
+        run: >-
+          dotnet run --project src/FluidRuntime -c Release --no-build --
+          control-policy-matrix
+          --release-target native/build/Release/fluidruntime-hook-target.exe
+          --release-hook native/build/Release/fluidruntime-present-hook.dll
+          --debug-target native/build/Debug/fluidruntime-hook-target.exe
+          --debug-hook native/build/Debug/fluidruntime-present-hook.dll
+          --out artifacts/control-policy-matrix-ci.json
+      - name: Test sustained managed copy elision
+        run: >-
+          dotnet run --project src/FluidRuntime -c Release --no-build --
+          sustained-copy-lab
+          --target native/build/Release/fluidruntime-hook-target.exe
+          --hook native/build/Release/fluidruntime-present-hook.dll
+          --copy-count 128 --trial-pairs 2 --warmup-pairs 0
+          --hold-ms 50 --gpu-timeout-ms 5000 --hardware false
+          --out artifacts/sustained-copy-ci.json
+      - name: Validate v0.9 evidence contracts
         shell: pwsh
         run: |
+          $hook = Get-Content artifacts/hook-ipc-ci.json -Raw | ConvertFrom-Json
           $copy = Get-Content artifacts/copy-elision-ci.json -Raw | ConvertFrom-Json
           $manager = Get-Content artifacts/manager-control-ci.json -Raw | ConvertFrom-Json
-          if ($copy.mode -ne 'fluidruntime-copy-elision-trace-v0.8.0' -or
+          $matrix = Get-Content artifacts/control-policy-matrix-ci.json -Raw | ConvertFrom-Json
+          $sustained = Get-Content artifacts/sustained-copy-ci.json -Raw | ConvertFrom-Json
+          if ($hook.mode -ne 'fluidruntime-hook-ipc-lab-v0.9.0' -or
+              $hook.lost_sequence_count -ne 0 -or
+              $hook.native_overrun_count -ne 0 -or
+              -not $hook.rollback_restored) {
+            throw 'Hook IPC CI report violated the v0.9 evidence contract.'
+          }
+          if ($copy.mode -ne 'fluidruntime-copy-elision-trace-v0.9.0' -or
               $copy.claim_scope -ne 'owned-d3d11-copy-elision-gpu-workload-only' -or
               $copy.control_plane -ne 'immutable-attach-options' -or
               $copy.included_trial_pairs -ne 2 -or
               $copy.applied_policy_actions_per_optimized_run -ne 0 -or
               $copy.performance_claim_allowed -ne $false -or
               $copy.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
-            throw 'Copy-elision CI report violated the v0.8 evidence contract.'
+            throw 'Copy-elision CI report violated the v0.9 evidence contract.'
           }
-          if ($manager.mode -ne 'fluidruntime-manager-control-trace-v0.8.0' -or
+          if ($manager.mode -ne 'fluidruntime-manager-control-trace-v0.9.0' -or
               $manager.claim_scope -ne 'owned-d3d11-managed-policy-copy-elision-only' -or
               $manager.control_plane -ne 'managed-shared-memory-policy-v1' -or
               $manager.included_trial_pairs -ne 2 -or
@@ -72,7 +99,55 @@ jobs:
               $manager.avoided_copy_bytes_per_optimized_run -ne 4096 -or
               $manager.performance_claim_allowed -ne $false -or
               $manager.performance_claim_blockers -notcontains 'insufficient-trial-pairs') {
-            throw 'Manager CI report violated the v0.8 control contract.'
+            throw 'Manager CI report violated the v0.9 control contract.'
+          }
+          if ($matrix.mode -ne 'fluidruntime-control-policy-matrix-trace-v0.9.0' -or
+              $matrix.expected_run_count -ne 320 -or
+              $matrix.completed_run_count -ne 320 -or
+              -not $matrix.deterministic_across_repetitions -or
+              -not $matrix.deterministic_across_configurations -or
+              -not $matrix.passed -or
+              $matrix.cases.Count -ne 16 -or
+              @($matrix.cases | Where-Object {
+                -not $_.passed -or $_.completed_run_count -ne 20
+              }).Count -ne 0) {
+            throw 'Control-policy matrix violated the v0.9 fail-closed contract.'
+          }
+          if ($sustained.mode -ne 'fluidruntime-sustained-copy-elision-trace-v0.9.0' -or
+              $sustained.sustained_buffer_bytes -ne 4194304 -or
+              $sustained.redundant_copy_count_per_optimized_run -ne 128 -or
+              $sustained.avoided_copy_bytes_per_optimized_run -ne 536870912 -or
+              $sustained.included_trial_pairs -ne 2 -or
+              -not $sustained.content_equivalent -or
+              -not $sustained.rollback_restored_in_all_runs -or
+              $sustained.performance_claim_allowed -ne $false -or
+              $sustained.performance_claim_blockers -notcontains 'insufficient-trial-pairs' -or
+              $sustained.performance_claim_blockers -notcontains 'software-adapter-not-hardware') {
+            throw 'Sustained-copy CI report violated the v0.9 evidence contract.'
+          }
+          $sustainedBaselines = $sustained.trials | ForEach-Object { $_.baseline }
+          $sustainedOptimized = $sustained.trials | ForEach-Object { $_.optimized }
+          if ($sustainedBaselines | Where-Object {
+              $_.observed_copy_count -ne 135 -or
+              $_.forwarded_copy_count -ne 135 -or
+              $_.skipped_copy_count -ne 0 -or
+              -not $_.content_equivalent -or
+              -not $_.rollback_restored
+            }) {
+            throw 'Sustained-copy baselines were not fully forwarded and equivalent.'
+          }
+          if ($sustainedOptimized | Where-Object {
+              $_.observed_copy_count -ne 135 -or
+              $_.forwarded_copy_count -ne 7 -or
+              $_.skipped_copy_count -ne 128 -or
+              $_.skipped_copy_bytes -ne 536870912 -or
+              $_.applied_policy_actions -ne 128 -or
+              $_.policy_status -ne 'exhausted' -or
+              $_.sustained_source_hash -ne $_.sustained_destination_hash -or
+              -not $_.content_equivalent -or
+              -not $_.rollback_restored
+            }) {
+            throw 'Sustained-copy optimized runs violated the bounded policy contract.'
           }
           $copyLane = $manager.control_lanes | Where-Object lane -eq 'copy-path'
           $memoryLane = $manager.control_lanes | Where-Object lane -eq 'ram-vram-residency'
@@ -88,7 +163,7 @@ jobs:
             $manager.trials | ForEach-Object { $_.baseline; $_.optimized }
           )
           if ($runs | Where-Object {
-              $_.mode -ne 'fluidruntime-hook-ipc-lab-v0.8.0' -or
+              $_.mode -ne 'fluidruntime-hook-ipc-lab-v0.9.0' -or
               $_.ring_abi_version -ne 6 -or
               -not $_.module_pinned_until_process_exit -or
               -not $_.automatic_lifetime_tracking -or
@@ -116,7 +191,7 @@ jobs:
               $_.source_subresource_hash -ne $_.destination_subresource_hash -or
               -not $_.rollback_restored
             }) {
-            throw 'CI runs violated the v0.8 lifecycle contract.'
+            throw 'CI runs violated the v0.9 lifecycle contract.'
           }
           $managedBaselines = $manager.trials | ForEach-Object { $_.baseline }
           if ($managedBaselines | Where-Object {

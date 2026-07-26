@@ -42,6 +42,7 @@ constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
 constexpr std::uint32_t fluid_hook_attach_flag_allow_control_policy = 4;
 constexpr std::uint64_t fluid_hook_control_action_skip_redundant_copy_resource = 1;
+constexpr std::uint64_t fluid_hook_control_max_action_budget = 128;
 
 enum class FluidHookControlStatusV1 : std::uint64_t {
     none = 0,

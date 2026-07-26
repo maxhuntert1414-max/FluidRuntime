@@ -35,7 +35,7 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.8.0 publishes 80-byte ABI-v6 events into a 1,024-slot named
+Version 0.9.0 publishes 80-byte ABI-v6 events into a 1,024-slot named
 shared-memory ring after a 64-byte ring header and a 64-byte ABI-v1 control
 block.
 The mapping is local to the Windows session and named for the target PID. The
@@ -66,22 +66,23 @@ Events contain opaque resource IDs, never raw resource pointer addresses.
 
 ## Managed Control Plane
 
-The v0.8 control block is intentionally smaller than a general scheduler. The
+The ABI-v1 control block is intentionally smaller than a general scheduler. The
 managed runtime writes all policy fields, executes a full memory barrier, and
 publishes epoch 1 atomically. The target waits only when its owned attach options
 explicitly allow managed policy. It copies a valid policy into native atomics,
 publishes status `accepted`, emits an evidence event, and acknowledges the epoch.
 
-The only accepted action mask is `skip_redundant_copy_resource`, the only
-accepted budget is one, and expiration must be in the future but no more than
-four seconds away. A second epoch, unknown bit, different budget, or invalid
-expiration is rejected. `CopyResource` consults cached native state only after
-the provenance model has identified an unchanged source/destination repeat.
-An atomic compare-and-swap reserves the one-action budget, so concurrent calls
-cannot both consume it. While managed policy is enabled, hook entries are
-serialized around provenance proof, original API forwarding, and state commit,
-so another tracked write cannot invalidate a proof before the decision. The
-final status is `exhausted`; expired policy fails without authorizing a skip.
+The only accepted action mask is `skip_redundant_copy_resource`. Version 0.9.0
+accepts a bounded budget from 1 through 128; expiration must be in the future
+but no more than four seconds away. A second epoch, unknown bit, out-of-range
+budget, or invalid expiration is rejected. `CopyResource` consults cached native
+state only after the provenance model has identified an unchanged
+source/destination repeat. An atomic compare-and-swap reserves each action, so
+concurrent calls cannot overspend the budget. While managed policy is enabled,
+hook entries are serialized around provenance proof, original API forwarding,
+and state commit, so another tracked write cannot invalidate a proof before the
+decision. The final status is `exhausted`; expired policy fails without
+authorizing a skip.
 
 The managed comparison still uses separate baseline and optimized processes.
 It rejects any missing acknowledgment, policy rejection, wrong event order,
@@ -117,6 +118,12 @@ Version 0.8 keeps the immutable attach-option experiment and adds a distinct
 managed-policy path. Both are disabled unless the owned target opts in. The
 control mapping is not an authorization boundary for hostile same-user
 processes, and this release does not expose external attach or remote injection.
+
+Version 0.9.0 keeps that ABI layout and widens only the accepted budget. The
+owned sustained workload creates two 4 MiB buffers, performs one required copy,
+then repeats the unchanged copy up to 128 times. The managed comparison proves
+baseline forwarding, exact bounded skips, event/snapshot agreement, post-detach
+content hashes, adapter identity, and timing validity in separate processes.
 
 The v0.6 evidence layer wraps the owned resource workload in a D3D11
 `TIMESTAMP_DISJOINT` query and start/end timestamp queries. Query polling has a
@@ -173,8 +180,8 @@ observe-only, and all regional copies remain forwarded.
   part of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
-- The control plane supports one process-local epoch, one action bit, and one
-  applied action in the owned workload only.
+- The control plane supports one process-local epoch, one action bit, and a
+  bounded budget of at most 128 applied actions in the owned workload only.
 - The lab permits one successful hook attachment per process lifetime. Reattach
   needs an explicit generation contract and is rejected in this ABI.
 - CPU scheduling and RAM/VRAM residency actions are still advisory; presentation

@@ -42,23 +42,25 @@ coordinate the interfaces the operating system and graphics APIs expose.
   `manager-lab`, pinned-module observation-neutral stale-entry forwarding,
   fail-closed reattach rejection, and WARP/AMD traces with an honestly blocked
   performance claim.
+- **v0.9.0:** deterministic 320-process negative policy matrix across WARP
+  Release/Debug, bounded managed action budgets from 1 through 128, a 4 MiB
+  sustained copy workload, exact content hashes and rollback gates, paired WARP
+  and RX 580 traces, and a positive claim limited to the owned GPU copy workload.
 
 ## Next Milestones
 
-### v0.8.x: Harden State and Managed Control
+### v0.10: Harden Provenance and Control
 
 - Cover destruction through interface aliases and non-primary resource views.
 - Cover draw/dispatch shader writes, remaining UAV/render-target/depth clears,
   fences, queries, and command-list synchronization.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.
-- Add longer stress, race, rejected/expired-policy, and fault-injection tests.
+- Add longer stress, race, and fault-injection tests.
 - Derive bounded policies from live FluidGateway evidence instead of a fixed
   lab action, with explicit regression rollback.
-- Measure sustained workloads where process startup and manager handshake do
-  not dominate one removed operation.
 
-### v0.9: Controlled External Observation
+### v0.11+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

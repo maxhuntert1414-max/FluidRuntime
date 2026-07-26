@@ -50,7 +50,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
-        Assert.Equal("fluidruntime-copy-elision-trace-v0.8.0", report.Mode);
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.9.0", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
@@ -73,7 +73,7 @@ public sealed class CopyElisionLabCommandTests
             warmupPairs: 0,
             managedControl: true);
 
-        Assert.Equal("fluidruntime-manager-control-trace-v0.8.0", report.Mode);
+        Assert.Equal("fluidruntime-manager-control-trace-v0.9.0", report.Mode);
         Assert.Equal("managed-shared-memory-policy-v1", report.ControlPlane);
         Assert.Equal(1, report.PublishedPolicyEpochPerOptimizedRun);
         Assert.Equal(1, report.AcknowledgedPolicyEpochPerOptimizedRun);
@@ -175,7 +175,7 @@ public sealed class CopyElisionLabCommandTests
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.8.0",
+            Mode: "fluidruntime-hook-ipc-lab-v0.9.0",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,

@@ -603,7 +603,8 @@ HRESULT process_published_control_policy() {
         processed_epoch == 0 &&
         action_mask == static_cast<LONG64>(
             fluid_hook_control_action_skip_redundant_copy_resource) &&
-        action_budget == 1 &&
+        action_budget >= 1 &&
+        action_budget <= static_cast<LONG64>(fluid_hook_control_max_action_budget) &&
         expires_at_qpc > now.QuadPart &&
         expires_at_qpc - now.QuadPart <= maximum_lifetime;
 

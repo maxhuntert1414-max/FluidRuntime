@@ -64,7 +64,8 @@ public static class HookControlPolicyCases
         {
             HookControlPolicyCase.WrongEpoch => new(2, normalExpiry, 1, 1),
             HookControlPolicyCase.UnknownAction => new(1, normalExpiry, 2, 1),
-            HookControlPolicyCase.WrongBudget => new(1, normalExpiry, 1, 2),
+            HookControlPolicyCase.WrongBudget =>
+                new(1, normalExpiry, 1, HookRingReader.MaxControlActionBudget + 1),
             HookControlPolicyCase.TooLongExpiry =>
                 new(1, checked(now + (long)qpcFrequency * 5), 1, 1),
             HookControlPolicyCase.AlreadyExpired => new(1, now - 1, 1, 1),

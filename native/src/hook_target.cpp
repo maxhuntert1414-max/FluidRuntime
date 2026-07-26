@@ -29,6 +29,9 @@ using DelayedCreateBufferFunction = HRESULT(STDMETHODCALLTYPE*)(
 using DelayedReleaseFunction = ULONG(STDMETHODCALLTYPE*)(IUnknown*);
 
 constexpr UINT kBufferBytes = 4096;
+constexpr UINT kSustainedBufferBytes = 4 * 1024 * 1024;
+constexpr unsigned long kMaximumSustainedCopyCount =
+    static_cast<unsigned long>(fluid_hook_control_max_action_budget);
 constexpr UINT kCooperativeBufferBytes = 256;
 constexpr UINT kAutomaticBufferBytes = 512;
 constexpr int kAutomaticLifetimeCycles = 64;
@@ -145,6 +148,7 @@ struct Options {
     unsigned long hold_ms{};
     unsigned long gpu_timeout_ms{1000};
     unsigned long control_timeout_ms{5000};
+    unsigned long sustained_copy_count{};
     bool use_hardware{};
     bool skip_first_redundant_copy{};
     bool managed_control{};
@@ -155,6 +159,8 @@ struct Options {
 };
 
 struct WorkloadResources {
+    ComPtr<ID3D11Buffer> sustained_source_buffer;
+    ComPtr<ID3D11Buffer> sustained_destination_buffer;
     ComPtr<ID3D11Buffer> source_buffer;
     ComPtr<ID3D11Buffer> destination_buffer;
     ComPtr<ID3D11Buffer> dynamic_buffer;
@@ -168,11 +174,14 @@ struct WorkloadResources {
 
 struct ContentVerification {
     bool readback_succeeded{};
+    bool sustained_buffer_contents_equal{true};
     bool buffer_contents_equal{};
     bool texture_contents_equal{};
     bool subresource_contents_equal{};
     std::uint64_t source_buffer_hash{};
     std::uint64_t destination_buffer_hash{};
+    std::uint64_t sustained_source_buffer_hash{};
+    std::uint64_t sustained_destination_buffer_hash{};
     std::uint64_t source_texture_hash{};
     std::uint64_t destination_texture_hash{};
     std::uint64_t source_subresource_hash{};
@@ -265,6 +274,13 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
                 return std::nullopt;
             }
             options.control_timeout_ms = *control_timeout_ms;
+        } else if (argument == L"--sustained-copy-count" && index + 1 < argc) {
+            const auto sustained_copy_count = parse_positive(argv[++index]);
+            if (!sustained_copy_count.has_value() ||
+                *sustained_copy_count > kMaximumSustainedCopyCount) {
+                return std::nullopt;
+            }
+            options.sustained_copy_count = *sustained_copy_count;
         } else if (argument == L"--hardware") {
             options.use_hardware = true;
         } else if (argument == L"--skip-first-redundant-copy") {
@@ -290,6 +306,7 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
     }
 
     if (options.hook_path.empty() ||
+        (options.sustained_copy_count != 0 && options.skip_first_redundant_copy) ||
         (options.managed_control &&
             (options.skip_first_redundant_copy ||
              !options.automatic_lifetime_tracking ||
@@ -509,6 +526,21 @@ ContentVerification verify_workload_content(
     ID3D11DeviceContext* context,
     const WorkloadResources& resources) {
     ContentVerification result;
+    const auto has_sustained_buffers =
+        resources.sustained_source_buffer.Get() != nullptr ||
+        resources.sustained_destination_buffer.Get() != nullptr;
+    std::optional<std::vector<unsigned char>> sustained_source_buffer;
+    std::optional<std::vector<unsigned char>> sustained_destination_buffer;
+    if (has_sustained_buffers) {
+        sustained_source_buffer = readback_buffer(
+            device,
+            context,
+            resources.sustained_source_buffer.Get());
+        sustained_destination_buffer = readback_buffer(
+            device,
+            context,
+            resources.sustained_destination_buffer.Get());
+    }
     const auto source_buffer = readback_buffer(
         device,
         context,
@@ -535,7 +567,11 @@ ContentVerification verify_workload_content(
         context,
         resources.destination_subresource_texture.Get(),
         1);
-    result.readback_succeeded = source_buffer.has_value() &&
+    result.readback_succeeded =
+        (!has_sustained_buffers ||
+            (sustained_source_buffer.has_value() &&
+             sustained_destination_buffer.has_value())) &&
+        source_buffer.has_value() &&
         destination_buffer.has_value() &&
         source_texture.has_value() &&
         destination_texture.has_value() &&
@@ -543,6 +579,19 @@ ContentVerification verify_workload_content(
         destination_subresource.has_value();
     if (!result.readback_succeeded) {
         return result;
+    }
+
+    if (has_sustained_buffers) {
+        result.sustained_source_buffer_hash = hash_bytes(
+            kFnvOffsetBasis,
+            sustained_source_buffer->data(),
+            sustained_source_buffer->size());
+        result.sustained_destination_buffer_hash = hash_bytes(
+            kFnvOffsetBasis,
+            sustained_destination_buffer->data(),
+            sustained_destination_buffer->size());
+        result.sustained_buffer_contents_equal =
+            *sustained_source_buffer == *sustained_destination_buffer;
     }
 
     result.source_buffer_hash = hash_bytes(
@@ -685,10 +734,50 @@ bool run_resource_workload(
     ID3D11Device* device,
     ID3D11DeviceContext* context,
     WorkloadResources& resources,
+    unsigned long sustained_copy_count,
     bool& context_vtable_pointer_stable,
     bool& context_copy_entry_stable,
     bool& context_subresource_copy_entry_stable,
     bool& context_gpu_view_write_entries_stable) {
+    HRESULT result = S_OK;
+    if (sustained_copy_count != 0) {
+        std::vector<std::uint32_t> sustained_data(
+            kSustainedBufferBytes / sizeof(std::uint32_t));
+        for (size_t index = 0; index < sustained_data.size(); ++index) {
+            sustained_data[index] =
+                0xC0010000U ^ static_cast<std::uint32_t>(index);
+        }
+
+        D3D11_BUFFER_DESC sustained_description{};
+        sustained_description.ByteWidth = kSustainedBufferBytes;
+        sustained_description.Usage = D3D11_USAGE_DEFAULT;
+        D3D11_SUBRESOURCE_DATA sustained_initial_data{};
+        sustained_initial_data.pSysMem = sustained_data.data();
+        result = device->CreateBuffer(
+            &sustained_description,
+            &sustained_initial_data,
+            &resources.sustained_source_buffer);
+        if (FAILED(result)) {
+            return false;
+        }
+        result = device->CreateBuffer(
+            &sustained_description,
+            nullptr,
+            &resources.sustained_destination_buffer);
+        if (FAILED(result)) {
+            return false;
+        }
+
+        context->CopyResource(
+            resources.sustained_destination_buffer.Get(),
+            resources.sustained_source_buffer.Get());
+        for (unsigned long copy = 0; copy < sustained_copy_count; ++copy) {
+            context->CopyResource(
+                resources.sustained_destination_buffer.Get(),
+                resources.sustained_source_buffer.Get());
+        }
+    }
+
     std::array<std::uint32_t, kBufferBytes / sizeof(std::uint32_t)> buffer_data{};
     for (size_t index = 0; index < buffer_data.size(); ++index) {
         buffer_data[index] = static_cast<std::uint32_t>(index);
@@ -699,7 +788,7 @@ bool run_resource_workload(
     default_buffer_description.Usage = D3D11_USAGE_DEFAULT;
     D3D11_SUBRESOURCE_DATA buffer_initial_data{};
     buffer_initial_data.pSysMem = buffer_data.data();
-    auto result = device->CreateBuffer(
+    result = device->CreateBuffer(
         &default_buffer_description,
         &buffer_initial_data,
         &resources.source_buffer);
@@ -1154,17 +1243,33 @@ bool run_concurrent_lifetime_detach_stress(
 bool snapshot_matches_workload(
     const FluidHookSnapshotV1& snapshot,
     const Options& options) {
-    const auto optimization_enabled =
-        options.skip_first_redundant_copy ||
-        control_policy_applies_action(options.control_policy_case);
+    const auto sustained_copy_count =
+        static_cast<std::uint64_t>(options.sustained_copy_count);
+    const auto has_sustained_workload = sustained_copy_count != 0;
+    const auto sustained_copy_call_count = has_sustained_workload
+        ? sustained_copy_count + 1
+        : 0;
     const auto policy_accepted = control_policy_accepted(options.control_policy_case);
     const auto policy_rejected = control_policy_rejected(options.control_policy_case);
-    const auto expected_skipped_count = optimization_enabled
+    const auto expected_control_applied_action_count =
+        control_policy_applies_action(options.control_policy_case)
+        ? (has_sustained_workload ? sustained_copy_count : 1ULL)
+        : 0ULL;
+    const auto expected_skipped_count = options.skip_first_redundant_copy
         ? kExpectedSkippedCopyCount
-        : 0;
-    const auto expected_skipped_bytes = optimization_enabled
+        : expected_control_applied_action_count;
+    const auto expected_skipped_bytes = options.skip_first_redundant_copy
         ? kExpectedSkippedCopyBytes
-        : 0;
+        : (has_sustained_workload
+            ? expected_control_applied_action_count * kSustainedBufferBytes
+            : expected_control_applied_action_count * kExpectedSkippedCopyBytes);
+    const auto expected_copy_count = kExpectedCopyCount + sustained_copy_call_count;
+    const auto expected_copy_bytes =
+        kExpectedCopyBytes + sustained_copy_call_count * kSustainedBufferBytes;
+    const auto expected_redundant_copy_count =
+        kExpectedRedundantCopyCount + sustained_copy_count;
+    const auto expected_redundant_copy_bytes =
+        kExpectedRedundantCopyBytes + sustained_copy_count * kSustainedBufferBytes;
     const auto expected_retire_count = options.automatic_lifetime_tracking
         ? kExpectedResourceRetireCount
         : kExpectedResourceRetireCount + kExpectedResourceDestroyCount;
@@ -1172,10 +1277,12 @@ bool snapshot_matches_workload(
         ? kExpectedResourceDestroyCount
         : 0;
     return snapshot.abi_version == fluid_hook_snapshot_abi_version &&
-        snapshot.create_buffer_count == 4 + kAutomaticLifetimeCycles &&
+        snapshot.create_buffer_count ==
+            4 + kAutomaticLifetimeCycles + (has_sustained_workload ? 2 : 0) &&
         snapshot.buffer_bytes_requested ==
             3 * kBufferBytes + kCooperativeBufferBytes +
-                kAutomaticLifetimeCycles * kAutomaticBufferBytes &&
+                kAutomaticLifetimeCycles * kAutomaticBufferBytes +
+                (has_sustained_workload ? 2ULL * kSustainedBufferBytes : 0ULL) &&
         snapshot.create_texture2d_count == 4 &&
         snapshot.texture_bytes_estimated ==
             2 * kTextureWidth * kTextureHeight * 4 +
@@ -1185,10 +1292,10 @@ bool snapshot_matches_workload(
         snapshot.map_write_count == 1 &&
         snapshot.unmap_write_count == 1 &&
         snapshot.update_subresource_count == 3 &&
-        snapshot.copy_resource_count == kExpectedCopyCount &&
-        snapshot.copy_resource_bytes_estimated == kExpectedCopyBytes &&
-        snapshot.redundant_copy_candidate_count == kExpectedRedundantCopyCount &&
-        snapshot.redundant_copy_bytes_estimated == kExpectedRedundantCopyBytes &&
+        snapshot.copy_resource_count == expected_copy_count &&
+        snapshot.copy_resource_bytes_estimated == expected_copy_bytes &&
+        snapshot.redundant_copy_candidate_count == expected_redundant_copy_count &&
+        snapshot.redundant_copy_bytes_estimated == expected_redundant_copy_bytes &&
         snapshot.copy_subresource_region_count == kExpectedCopySubresourceCount &&
         snapshot.copy_subresource_region_bytes_estimated ==
             kExpectedCopySubresourceBytes &&
@@ -1205,16 +1312,16 @@ bool snapshot_matches_workload(
         snapshot.control_policy_acknowledged_epoch ==
             expected_control_acknowledged_epoch(options.control_policy_case) &&
         snapshot.control_policy_applied_action_count ==
-            (control_policy_applies_action(options.control_policy_case) ? 1ULL : 0ULL) &&
+            expected_control_applied_action_count &&
         snapshot.control_policy_rejected_count == (policy_rejected ? 1ULL : 0ULL) &&
         snapshot.control_policy_status == static_cast<std::uint64_t>(
             expected_control_status(options.control_policy_case)) &&
-        snapshot.forwarded_copy_count == kExpectedCopyCount - expected_skipped_count &&
+        snapshot.forwarded_copy_count == expected_copy_count - expected_skipped_count &&
         snapshot.forwarded_copy_bytes_estimated ==
-            kExpectedCopyBytes - expected_skipped_bytes &&
+            expected_copy_bytes - expected_skipped_bytes &&
         snapshot.skipped_copy_count == expected_skipped_count &&
         snapshot.skipped_copy_bytes_estimated == expected_skipped_bytes &&
-        snapshot.tracked_resource_count == 7 &&
+        snapshot.tracked_resource_count == (has_sustained_workload ? 9ULL : 7ULL) &&
         snapshot.resource_retire_count == expected_retire_count &&
         snapshot.resource_destroy_count == expected_destroy_count &&
         snapshot.resource_reuse_count <= kAutomaticLifetimeCycles &&
@@ -1230,7 +1337,8 @@ bool snapshot_matches_workload(
         snapshot.hook_refresh_failure_count == 0 &&
         snapshot.ipc_event_count >=
             snapshot.present_count + 161 + snapshot.resource_reuse_count +
-                (policy_accepted ? 1 : 0) &&
+                (policy_accepted ? 1 : 0) +
+                (has_sustained_workload ? sustained_copy_count + 3 : 0) &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -1254,9 +1362,18 @@ std::string build_report(
     const ContentVerification& content,
     const TimingMetrics& timing,
     const AdapterIdentity& adapter) {
+    const auto managed_action_budget =
+        control_policy_applies_action(options.control_policy_case)
+        ? (options.sustained_copy_count != 0
+            ? static_cast<std::uint64_t>(options.sustained_copy_count)
+            : 1ULL)
+        : 0ULL;
     const auto optimization_enabled =
         options.skip_first_redundant_copy ||
-        control_policy_applies_action(options.control_policy_case);
+        managed_action_budget != 0;
+    const auto expected_skipped_copy_count = options.skip_first_redundant_copy
+        ? 1ULL
+        : managed_action_budget;
     const auto optimization_requested =
         options.skip_first_redundant_copy || options.managed_control;
     const auto optimization_kind = options.managed_control
@@ -1266,7 +1383,7 @@ std::string build_report(
             : "none");
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.8.1\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.9.0\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -1281,7 +1398,7 @@ std::string build_report(
            << "  \"module_pinned_until_process_exit\": "
            << (SUCCEEDED(attach_result) ? "true" : "false") << ",\n"
            << "  \"max_skipped_copy_count\": "
-           << (optimization_enabled ? 1 : 0) << ",\n"
+           << expected_skipped_copy_count << ",\n"
            << "  \"control_plane\": "
            << (options.managed_control
                ? "\"managed-shared-memory-policy-v1\""
@@ -1323,6 +1440,17 @@ std::string build_report(
            << "    \"luid\": \"" << uint64_hex(adapter.luid) << "\"\n"
            << "  },\n"
            << "  \"requested_presents\": " << options.frames << ",\n"
+           << "  \"sustained_copy_count\": "
+           << options.sustained_copy_count << ",\n"
+           << "  \"sustained_buffer_bytes\": "
+           << (options.sustained_copy_count != 0 ? kSustainedBufferBytes : 0)
+           << ",\n"
+           << "  \"sustained_logical_copy_bytes\": "
+           << (options.sustained_copy_count != 0
+                ? (static_cast<std::uint64_t>(options.sustained_copy_count) + 1) *
+                    kSustainedBufferBytes
+                : 0ULL)
+           << ",\n"
            << "  \"hold_ms\": " << options.hold_ms << ",\n"
            << "  \"observed_presents\": " << snapshot.present_count << ",\n"
            << "  \"render_succeeded\": "
@@ -1343,6 +1471,9 @@ std::string build_report(
            << (original_pointer_restored ? "true" : "false") << ",\n"
            << "  \"content_readback_succeeded\": "
            << (content.readback_succeeded ? "true" : "false") << ",\n"
+           << "  \"sustained_buffer_contents_equal\": "
+           << (content.sustained_buffer_contents_equal ? "true" : "false")
+           << ",\n"
            << "  \"buffer_contents_equal\": "
            << (content.buffer_contents_equal ? "true" : "false") << ",\n"
            << "  \"texture_contents_equal\": "
@@ -1350,6 +1481,10 @@ std::string build_report(
            << "  \"subresource_contents_equal\": "
            << (content.subresource_contents_equal ? "true" : "false") << ",\n"
            << "  \"hash_algorithm\": \"fnv1a64\",\n"
+           << "  \"sustained_source_buffer_hash\": \""
+           << uint64_hex(content.sustained_source_buffer_hash) << "\",\n"
+           << "  \"sustained_destination_buffer_hash\": \""
+           << uint64_hex(content.sustained_destination_buffer_hash) << "\",\n"
            << "  \"source_buffer_hash\": \""
            << uint64_hex(content.source_buffer_hash) << "\",\n"
            << "  \"destination_buffer_hash\": \""
@@ -1466,6 +1601,7 @@ int wmain(int argc, wchar_t* argv[]) {
                       L"[--frames <count>] [--hold-ms <milliseconds>] "
                       L"[--gpu-timeout-ms <milliseconds>] "
                       L"[--control-timeout-ms <milliseconds>] "
+                      L"[--sustained-copy-count <count>] "
                       L"[--out <report.json>] [--hardware] "
                       L"[--skip-first-redundant-copy] [--managed-control] "
                       L"[--control-policy-case <case>] "
@@ -1669,7 +1805,7 @@ int wmain(int argc, wchar_t* argv[]) {
         std::ostringstream stress_output;
         stress_output << "{\n"
                       << "  \"mode\": "
-                         "\"fluidruntime-concurrent-lifetime-detach-v0.8.0\",\n"
+                         "\"fluidruntime-concurrent-lifetime-detach-v0.9.0\",\n"
                       << "  \"target_owned\": true,\n"
                       << "  \"automatic_lifetime_tracking\": true,\n"
                       << "  \"module_pinned_until_process_exit\": true,\n"
@@ -1750,6 +1886,7 @@ int wmain(int argc, wchar_t* argv[]) {
             device.Get(),
             context.Get(),
             workload_resources,
+            options->sustained_copy_count,
             context_vtable_pointer_stable,
             context_copy_entry_stable,
             context_subresource_copy_entry_stable,
@@ -1859,6 +1996,7 @@ int wmain(int argc, wchar_t* argv[]) {
         context_subresource_copy_entry_stable &&
         context_gpu_view_write_entries_stable &&
         content.readback_succeeded &&
+        content.sustained_buffer_contents_equal &&
         content.buffer_contents_equal &&
         content.texture_contents_equal &&
         content.subresource_contents_equal &&
