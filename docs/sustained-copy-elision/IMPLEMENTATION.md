@@ -51,8 +51,8 @@ GPU timings were valid, GPU p50/p95 improved, and 10/10 pairs favored optimized.
 - [x] Capture WARP and RX 580 traces.
 - [x] Review code and evidence.
 - [x] Update Runtime and Gateway docs.
-- [ ] Push the branch and verify remote CI.
-- [ ] Fast-forward `main`, tag `v0.9.0`, and verify the published release.
+- [x] Push the branch and verify remote CI.
+- [x] Fast-forward `main`, tag `v0.9.0`, and verify the published release.
 
 ## Boundary
 

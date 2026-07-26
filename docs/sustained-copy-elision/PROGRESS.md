@@ -1,6 +1,6 @@
 # Sustained Copy Elision Progress
 
-## Status: Release Candidate Verified Locally
+## Status: Complete
 
 ## Quick Reference
 
@@ -41,14 +41,16 @@
 
 ### Phase 4: Release
 
-**Status:** Ready for publication
+**Status:** Complete
 
 - Managed tests: 63/63 passed.
 - Native tests: 6/6 Release and 6/6 Debug passed.
 - WARP and RX 580 correctness gates passed with no event loss or overrun.
 - Full policy matrix passed 320/320.
 - Runtime and Gateway documentation updated.
-- Branch push, remote CI, `main`, and tag publication remain.
+- Release branch CI passed in
+  [run 30214300519](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30214300519).
+- `main` and tag `v0.9.0` published from the verified release branch.
 
 ## Result
 

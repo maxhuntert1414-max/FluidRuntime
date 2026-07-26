@@ -110,6 +110,14 @@ O gate positivo passou somente para:
 A regressao pequena de CPU fica registrada. Nao extrapolar para FPS, frame time,
 jogo externo, potencia, RAM/VRAM ou eficiencia geral.
 
+### Estado da release
+
+- `main` e tag `v0.9.0` apontam para a release verificada;
+- o CI completo da branch passou no
+  [run 30214300519](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30214300519);
+- o workflow cobre managed tests, native Release/Debug, hook IPC, labs antigo e
+  managed, matriz 320/320, sustained WARP e validacao estrutural dos JSONs.
+
 ## 5. ABIs e invariantes
 
 - Snapshot ABI: 9

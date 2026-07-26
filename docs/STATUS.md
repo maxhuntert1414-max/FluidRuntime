@@ -1,11 +1,13 @@
 # Project Status
 
-Verified locally on 2026-07-26.
+Verified locally and remotely on 2026-07-26.
 
-## Release Candidate
+## Public Release
 
-- FluidRuntime `v0.9.0` candidate on
-  `wip/v0.8.1-policy-matrix-checkpoint`
+- FluidRuntime `main` / tag `v0.9.0`
+- Release branch: `wip/v0.8.1-policy-matrix-checkpoint`
+- Remote release validation:
+  [GitHub Actions run 30214300519](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30214300519)
 - Managed tests: 63/63 passed
 - Native tests: 6/6 Release and 6/6 Debug passed
 - Negative control-policy matrix: 320/320 owned WARP processes passed
@@ -13,7 +15,7 @@ Verified locally on 2026-07-26.
   expected because WARP is a software adapter
 - Sustained RX 580 trace: 22/22 processes passed; scoped GPU-workload evidence
   gate passed
-- Publication remains the last release step
+- The v0.9.0 evidence contracts passed locally and on GitHub Actions
 
 ## New in v0.9.0
 
