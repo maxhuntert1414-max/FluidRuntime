@@ -51,4 +51,9 @@ public sealed record HookIpcEvent(
     public bool IsReadbackTransfer =>
         Type is HookEventType.CopyResource or HookEventType.MapRead &&
         (Flags & 16) != 0;
+
+    public bool IsUploadTransfer =>
+        (Type is HookEventType.CopyResource or HookEventType.MapWrite or
+            HookEventType.UnmapWrite) &&
+        (Flags & 32) != 0;
 }

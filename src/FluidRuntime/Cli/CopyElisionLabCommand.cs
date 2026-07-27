@@ -339,8 +339,8 @@ public static class CopyElisionLabCommand
 
         return new CopyElisionLabReport(
             Mode: managedControl
-                ? "fluidruntime-manager-control-trace-v0.10.0"
-                : "fluidruntime-copy-elision-trace-v0.10.0",
+                ? "fluidruntime-manager-control-trace-v0.11.0"
+                : "fluidruntime-copy-elision-trace-v0.11.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -400,11 +400,19 @@ public static class CopyElisionLabCommand
             SafetyBoundary:
                 "owned D3D11 default-to-readable-staging copies; bounded action 2 only"),
         new(
+            Lane: "ram-gpu-upload",
+            State: "active-owned-lab",
+            NativeBackendAvailable: true,
+            ActuationEnabled: true,
+            SafetyBoundary:
+                "owned D3D11 writable-staging-to-default copies; bounded action 4 only"),
+        new(
             Lane: "ram-vram-residency",
             State: "blocked-no-native-backend",
             NativeBackendAvailable: false,
             ActuationEnabled: false,
-            SafetyBoundary: "observe-only until residency ownership and rollback are proven"),
+            SafetyBoundary:
+                "physical placement remains blocked until residency ownership is proven"),
         new(
             Lane: "presentation",
             State: "observe-only",
@@ -475,7 +483,7 @@ public static class CopyElisionLabCommand
             : null;
 
     private static bool HasSafeLifecycle(HookLabReport report) =>
-        report.RingAbiVersion == 7 &&
+        report.RingAbiVersion == 8 &&
         report.ModulePinnedUntilProcessExit &&
         report.AutomaticLifetimeTracking &&
         report.ReleaseObservationScope == "owned-returned-buffer-texture-interface" &&

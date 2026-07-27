@@ -51,16 +51,21 @@ coordinate the interfaces the operating system and graphics APIs expose.
   2,048-event zero-loss ring, a 65-copy/65-map owned workload, exact per-map
   hashes, WARP/RX 580 traces, and a positive claim limited to the owned readback
   workload.
+- **v0.11.0:** API-visible `STAGING + CPU_WRITE -> DEFAULT` classification,
+  dedicated upload action bit 4, ring ABI 8 and snapshot ABI 11, a 65-copy
+  owned upload workload, exact post-detach hashes, lock-free bounded action
+  reservation, WARP/RX 580 traces, and a positive GPU-interval claim with a
+  bounded CPU submission-overhead envelope.
 
 ## Next Milestones
 
-### v0.11: Upload Path and Synchronization Hardening
+### v0.12: Upload Provenance and Synchronization Hardening
 
-- Prototype the opposite API-visible direction: CPU-written staging/dynamic
-  data into GPU-default resources, with exact upload provenance and no physical
-  residency claims.
-- Measure update, map/unmap, copy, fence/query, and synchronization costs before
-  deciding whether reuse, batching, or elision is safe.
+- Extend upload evidence from one unchanged staging generation to measured
+  `UpdateSubresource`, dynamic-buffer, partial-region, reuse, and batching
+  patterns without hashing write-only application memory in the hot path.
+- Measure map/unmap, copy, fence/query, and synchronization costs before
+  authorizing any new action.
 - Cover destruction through interface aliases and non-primary resource views.
 - Cover draw/dispatch shader writes, remaining UAV/render-target/depth clears,
   fences, queries, and command-list synchronization.
@@ -70,7 +75,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Derive bounded policies from live FluidGateway evidence instead of a fixed
   lab action, with explicit regression rollback.
 
-### v0.12+: Controlled External Observation
+### v0.13+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

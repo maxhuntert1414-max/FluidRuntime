@@ -35,10 +35,11 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.10.0 publishes 80-byte ABI-v7 events into a 2,048-slot named
+Version 0.11.0 publishes 80-byte ABI-v8 events into a 2,048-slot named
 shared-memory ring after a 64-byte ring header and a 64-byte ABI-v1 control
-block. ABI 7 adds `MapRead`, a readback-direction flag, and enough capacity for
-the 65-copy/65-map workload without weakening the zero-overrun gate.
+block. ABI 8 retains `MapRead`, adds an upload-direction flag to write-map,
+unmap, and copy events, and keeps enough capacity for both 65-copy workloads
+without weakening the zero-overrun gate.
 The mapping is local to the Windows session and named for the target PID. The
 header, control, and event layouts are versioned independently from the report
 schema. The mapping and retained forwarding metadata stay alive until the owned
@@ -75,24 +76,25 @@ publishes status `accepted`, emits an evidence event, and acknowledges the epoch
 
 The accepted action mask must be exactly one known action:
 `skip_redundant_copy_resource` (bit 1) or
-`skip_redundant_readback_copy` (bit 2). Version 0.10.0 accepts a bounded budget
+`skip_redundant_readback_copy` (bit 2) or
+`skip_redundant_upload_copy` (bit 4). Version 0.11.0 accepts a bounded budget
 from 1 through 128; expiration must be in the future but no more than four
 seconds away. A combined mask, second epoch, unknown bit, out-of-range
 budget, or invalid expiration is rejected. `CopyResource` consults cached native
 state only after the provenance model has identified an unchanged
 source/destination repeat. An atomic compare-and-swap reserves each action, so
-concurrent calls cannot overspend the budget. While managed policy is enabled,
-hook entries are serialized around provenance proof, original API forwarding,
-and state commit, so another tracked write cannot invalidate a proof before the
-decision. The final status is `exhausted`; expired policy fails without
-authorizing a skip.
+concurrent calls cannot overspend the budget. The resource mutex linearizes
+provenance proof and skip reservation; forwarded API calls commit their new
+destination generation afterward. A skipped copy changes no bytes and therefore
+does not advance content generation. The final status is `exhausted`; a policy
+that is expired when reservation begins cannot authorize a skip.
 
 The managed comparison still uses separate baseline and optimized processes.
 It rejects any missing acknowledgment, policy rejection, wrong event order,
 budget mismatch, lost event, content drift, lifecycle error, or rollback error.
 CPU scheduling, physical RAM/VRAM residency, and presentation actuation have no
-policy action or writable backend in this ABI. API-visible D3D11 readback
-elision is a separate active owned-lab lane, not residency control.
+policy action or writable backend in this ABI. API-visible D3D11 readback and
+upload elision are separate active owned-lab lanes, not residency control.
 
 ## Safety Boundary
 
@@ -137,6 +139,15 @@ compares all 4 MiB, so optimization removes 64 copy calls without removing or
 fabricating read access. Snapshot ABI 10 exposes read-map, readback-copy, and
 skipped-readback counters. It still does not reveal or control physical memory
 placement.
+
+Version 0.11.0 adds the opposite API-visible classification. Action bit 4 can
+be reserved only for a trusted whole-resource repeat from
+`STAGING + CPU_WRITE` to `DEFAULT`; actions 1 and 2 cannot authorize that lane.
+The owned target maps, writes, and unmaps a 4 MiB staging source once, forwards
+one required upload, and issues 64 unchanged repeats. A later write `Unmap`
+advances source generation and forces the next copy to be forwarded. Snapshot
+ABI 11 exposes upload and skipped-upload counters. D3D11 still delegates
+physical placement to the runtime, driver, and memory manager.
 
 The v0.6 evidence layer wraps the owned resource workload in a D3D11
 `TIMESTAMP_DISJOINT` query and start/end timestamp queries. Query polling has a
@@ -198,4 +209,5 @@ observe-only, and all regional copies remain forwarded.
 - The lab permits one successful hook attachment per process lifetime. Reattach
   needs an explicit generation contract and is rejected in this ABI.
 - CPU scheduling and physical RAM/VRAM residency actions are still advisory;
-  presentation actuation is disabled.
+  API-visible upload elision is not residency control, and presentation
+  actuation is disabled.

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.10.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.11.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -74,4 +74,11 @@ add_test(
         --hook $<TARGET_FILE:fluidruntime-present-hook>
         --frames 1
         --readback-copy-count 64
+)
+add_test(
+    NAME fluidruntime-upload-elision-baseline
+    COMMAND fluidruntime-hook-target
+        --hook $<TARGET_FILE:fluidruntime-present-hook>
+        --frames 1
+        --upload-copy-count 64
 )

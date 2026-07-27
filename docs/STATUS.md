@@ -1,68 +1,78 @@
 # Project Status
 
-FluidRuntime v0.10.0 was verified locally and remotely on 2026-07-26.
+FluidRuntime v0.11.0 is locally verified as a release candidate on 2026-07-26.
+GitHub publication and remote CI verification are pending.
 
-## Public Release
+## Local Verification
 
-- Branch/tag: `main` / `v0.10.0`
-- Remote validation:
-  [GitHub Actions run 30230066738](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30230066738)
-- Managed tests: 68/68 passed
-- Native tests: 7/7 Release and 7/7 Debug passed
-- Negative control-policy matrix: 320/320 WARP processes passed
-- WARP readback trace: 4/4 raw runs passed with the performance claim blocked
-- RX 580 readback trace: 22/22 raw runs passed; scoped performance gate passed
-- Release evidence and raw traces are committed with the tagged source.
+- Branch: `feature/v0.11-upload-elision`
+- Managed tests: 73/73 passed.
+- Native tests: 8/8 Release and 8/8 Debug passed.
+- Negative control-policy matrix: 320/320 WARP processes passed.
+- WARP upload trace: 4/4 raw runs passed with the performance claim blocked.
+- RX 580 upload trace: 22/22 raw runs passed; scoped performance gate passed.
+- Legacy generic, sustained, and readback optimized smokes passed after the
+  shared hot-path change.
 
-## New In v0.10.0
+## New In v0.11.0
 
-- Snapshot ABI 10 and ring ABI 7 add `MapRead`, readback classification, and
-  readback-specific counters.
-- The event ring now holds 2,048 entries. The original 1,024-entry ring produced
-  18 overruns under the new workload, and the zero-loss gate caught it.
-- Control action 2 is dedicated to trusted D3D11
-  `DEFAULT -> STAGING + CPU_READ` whole-resource repeats.
-- `readback-elision-lab` performs one required and 64 unchanged 4 MiB
-  copy/map cycles in separate baseline and optimized processes.
-- Baselines forward all 65 readback copies. Optimized runs forward one, skip 64,
-  and still execute and verify all 65 maps.
-- Every optimized run avoids 268,435,456 logical copy bytes while preserving
-  exact hashes, event/snapshot agreement, adapter identity, and rollback.
-- The manager now exposes an active owned `vram-ram-readback` lane while keeping
-  physical RAM/VRAM residency control blocked.
+- Snapshot ABI 11 and ring ABI 8 add upload classification, directional
+  map/unmap flags, and upload-specific counters.
+- Control action bit 4 is dedicated to trusted D3D11
+  `STAGING + CPU_WRITE -> DEFAULT` whole-resource repeats.
+- `upload-elision-lab` writes a 4 MiB staging source once, forwards one required
+  upload, and issues 64 unchanged repeats in separate baseline and optimized
+  processes.
+- Baselines forward all 65 uploads. Optimized runs forward one and skip exactly
+  64, avoiding 268,435,456 logical copy bytes.
+- Expected, staging-source, and default-destination hashes agree after detach.
+- Skip reservation is lock-free and budgeted; provenance proof and reservation
+  are linearized under the resource lock. Skips do not advance content
+  generation because no bytes changed.
+- The manager exposes `ram-gpu-upload` as active only in the owned lab while
+  physical `ram-vram-residency` remains blocked.
 
 ## Evidence Claim
 
 The positive evidence scope is exactly:
 
-`owned-d3d11-default-to-staging-readback-workload-only`
+`owned-d3d11-writable-staging-to-default-upload-copy-workload-only`
 
-On the AMD Radeon RX 580 2048SP, all 10 measured pairs favored the optimized
-run for CPU QPC duration and the guarded GPU timestamp interval:
+Claim basis:
+
+`gpu-interval-improvement-with-bounded-cpu-submission-overhead`
+
+AMD Radeon RX 580 2048SP:
 
 | Metric | Baseline p50 | Optimized p50 | Baseline p95 | Optimized p95 |
 | --- | ---: | ---: | ---: | ---: |
-| CPU workload | 544,800.350 us | 421,077.150 us | 575,244.930 us | 442,802.645 us |
-| GPU timestamp interval | 528,879.480 us | 406,132.160 us | 558,646.270 us | 427,418.994 us |
+| CPU submission QPC | 11,989.250 us | 11,987.300 us | 13,397.080 us | 12,391.395 us |
+| GPU timestamp interval | 31,883.320 us | 1,669.600 us | 32,520.304 us | 1,734.448 us |
 
-The GPU value is a timestamp interval around the workload, not a GPU-busy
-hardware counter. This evidence does not prove physical VRAM placement, PCIe
-bytes, FPS, power, external-game support, or general readback caching.
+GPU won 10/10 pairs; paired p50/p95 deltas were -94.814% and -94.445%.
+CPU won 6/10 pairs; all 10 stayed inside the predeclared +1,000 us / +10%
+submission-overhead envelope. CPU paired delta p95 was +377.070 us (+3.198%),
+so this release does not claim CPU acceleration.
+
+The GPU value is a guarded timestamp interval around the owned workload, not a
+GPU-busy hardware counter. This evidence does not prove physical RAM/VRAM
+placement, PCIe bytes, FPS, power, external-game support, or general upload
+caching.
 
 ## Operating Level
 
 FluidRuntime can inspect process/GPU/memory telemetry, observe an owned D3D11
 resource pipeline, publish a bounded managed policy, and interfere reversibly
-with two proven owned-lab copy patterns: generic unchanged `CopyResource` and
-the new default-to-readable-staging readback path.
+with three proven owned-lab copy patterns: generic unchanged `CopyResource`,
+default-to-readable-staging readback, and writable-staging-to-default upload.
 
 It still does not inject into external games, schedule OS threads, control
 physical RAM/VRAM residency, actuate presentation, or support D3D12/Vulkan.
 
 ## Read Next
 
-- [v0.10.0 evidence](evidence/v0.10.0-readback-elision.md)
+- [v0.11.0 evidence](evidence/v0.11.0-upload-elision.md)
 - [Architecture](architecture.md)
 - [Roadmap](roadmap.md)
 - [Full handoff](BRIEFING-CLAUDE-CODE.md)
-- [v0.9.0 evidence](evidence/v0.9.0-sustained-copy-elision.md)
+- [v0.10.0 evidence](evidence/v0.10.0-readback-elision.md)

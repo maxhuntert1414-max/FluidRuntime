@@ -4,21 +4,21 @@ using FluidRuntime.Runtime;
 
 namespace FluidRuntime.Tests;
 
-public sealed class ReadbackElisionLabTests
+public sealed class UploadElisionLabTests
 {
     [Fact]
-    public void Options_use_the_fixed_bounded_readback_contract()
+    public void Options_use_the_fixed_bounded_upload_contract()
     {
-        var options = ReadbackElisionLabOptions.Parse(
+        var options = UploadElisionLabOptions.Parse(
         [
-            "readback-elision-lab",
+            "upload-elision-lab",
             "--target", "target.exe",
             "--hook", "hook.dll",
             "--out", "report.json"
         ]);
 
-        Assert.Equal(64, ReadbackElisionLabOptions.RedundantCopyCount);
-        Assert.Equal(4 * 1024 * 1024, ReadbackElisionLabOptions.ReadbackBufferBytes);
+        Assert.Equal(64, UploadElisionLabOptions.RedundantCopyCount);
+        Assert.Equal(4 * 1024 * 1024, UploadElisionLabOptions.UploadBufferBytes);
         Assert.Equal(10, options.TrialPairs);
         Assert.Equal(1, options.WarmupPairs);
         Assert.Equal(50, options.HoldMs);
@@ -29,17 +29,17 @@ public sealed class ReadbackElisionLabTests
     [Fact]
     public void Options_reject_unknown_or_unpaired_values()
     {
-        Assert.Throws<ArgumentException>(() => ReadbackElisionLabOptions.Parse(
+        Assert.Throws<ArgumentException>(() => UploadElisionLabOptions.Parse(
         [
-            "readback-elision-lab",
+            "upload-elision-lab",
             "--target", "target.exe",
             "--hook", "hook.dll",
             "--out", "report.json",
             "--copy-count", "65"
         ]));
-        Assert.Throws<ArgumentException>(() => ReadbackElisionLabOptions.Parse(
+        Assert.Throws<ArgumentException>(() => UploadElisionLabOptions.Parse(
         [
-            "readback-elision-lab",
+            "upload-elision-lab",
             "--target", "target.exe",
             "--hook", "hook.dll",
             "--out"
@@ -47,47 +47,53 @@ public sealed class ReadbackElisionLabTests
     }
 
     [Fact]
-    public void Report_requires_consistent_cpu_and_gpu_hardware_improvement()
+    public void Report_allows_gpu_improvement_with_bounded_cpu_submission_overhead()
     {
         var options = Options(useHardware: true);
         var trials = Trials(
             baselineCpu: 1000,
-            optimizedCpu: 100,
+            optimizedCpu: 1050,
             baselineGpu: 1000,
             optimizedGpu: 100,
             driver: "hardware");
 
-        var report = ReadbackElisionLabRunner.BuildReport(trials, options);
+        var report = UploadElisionLabRunner.BuildReport(trials, options);
 
         Assert.True(report.PerformanceClaimAllowed);
         Assert.Empty(report.PerformanceClaimBlockers);
-        Assert.Equal(268_435_456UL, report.AvoidedReadbackBytesPerOptimizedRun);
-        Assert.Equal(10, report.CpuImprovedPairCount);
+        Assert.Equal(268_435_456UL, report.AvoidedUploadBytesPerOptimizedRun);
+        Assert.Equal(0, report.CpuImprovedPairCount);
         Assert.Equal(10, report.GpuWorkload!.OptimizedLowerCount);
+        Assert.Equal(10, report.CpuWithinBudgetPairCount);
         Assert.Equal(
-            "owned-d3d11-default-to-staging-readback-workload-only",
+            "gpu-interval-improvement-with-bounded-cpu-submission-overhead",
+            report.PerformanceClaimBasis);
+        Assert.Equal(
+            "owned-d3d11-writable-staging-to-default-upload-copy-workload-only",
             report.ClaimScope);
     }
 
     [Fact]
-    public void Report_blocks_cpu_regression_and_software_measurement()
+    public void Report_blocks_excessive_cpu_overhead_and_software_measurement()
     {
         var options = Options(useHardware: false);
         var trials = Trials(
             baselineCpu: 100,
-            optimizedCpu: 110,
+            optimizedCpu: 120,
             baselineGpu: 1000,
             optimizedGpu: 100,
             driver: "warp");
 
-        var report = ReadbackElisionLabRunner.BuildReport(trials, options);
+        var report = UploadElisionLabRunner.BuildReport(trials, options);
 
         Assert.False(report.PerformanceClaimAllowed);
-        Assert.Contains("cpu-improvement-not-consistent", report.PerformanceClaimBlockers);
+        Assert.Contains(
+            "cpu-submission-overhead-budget-exceeded",
+            report.PerformanceClaimBlockers);
         Assert.Contains("software-adapter-not-hardware", report.PerformanceClaimBlockers);
     }
 
-    private static ReadbackElisionLabOptions Options(bool useHardware) => new(
+    private static UploadElisionLabOptions Options(bool useHardware) => new(
         "target.exe",
         "hook.dll",
         "report.json",
@@ -97,7 +103,7 @@ public sealed class ReadbackElisionLabTests
         GpuTimeoutMs: 5000,
         UseHardware: useHardware);
 
-    private static IReadOnlyList<ReadbackElisionTrialReport> Trials(
+    private static IReadOnlyList<UploadElisionTrialReport> Trials(
         double baselineCpu,
         double optimizedCpu,
         double baselineGpu,
@@ -107,7 +113,7 @@ public sealed class ReadbackElisionLabTests
         {
             var baseline = Run(false, baselineCpu, baselineGpu, driver);
             var optimized = Run(true, optimizedCpu, optimizedGpu, driver);
-            return new ReadbackElisionTrialReport(
+            return new UploadElisionTrialReport(
                 index,
                 "measured",
                 true,
@@ -125,14 +131,14 @@ public sealed class ReadbackElisionLabTests
                 optimized);
         }).ToArray();
 
-    private static ReadbackElisionRunReport Run(
+    private static UploadElisionRunReport Run(
         bool optimized,
         double cpu,
         double gpu,
         string driver)
     {
         using var document = JsonDocument.Parse("{}");
-        return new ReadbackElisionRunReport(
+        return new UploadElisionRunReport(
             Optimized: optimized,
             ProcessId: 42,
             RingAbiVersion: 8,
@@ -142,17 +148,17 @@ public sealed class ReadbackElisionLabTests
             AdapterVendorId: 0x1002,
             AdapterDeviceId: 0x6FDF,
             AdapterLuid: "0000000000000001",
-            EventCount: 1043,
+            EventCount: 329,
             LostSequenceCount: 0,
             NativeOverrunCount: 0,
-            ReadbackCopyCount: 65,
-            ReadbackCopyBytes: 272_629_760,
-            ReadMapCount: 65,
-            ReadMapBytes: 272_629_760,
+            UploadCopyCount: 65,
+            UploadCopyBytes: 272_629_760,
+            UploadWriteMapCount: 1,
+            UploadWriteMapBytes: 4_194_304,
             ForwardedCopyCount: optimized ? 7 : 71,
             ForwardedCopyBytes: optimized ? 4_243_456UL : 272_678_912UL,
-            SkippedReadbackCopyCount: optimized ? 64 : 0,
-            SkippedReadbackCopyBytes: optimized ? 268_435_456UL : 0,
+            SkippedUploadCopyCount: optimized ? 64 : 0,
+            SkippedUploadCopyBytes: optimized ? 268_435_456UL : 0,
             PublishedPolicyEpoch: optimized ? 1 : 0,
             AcknowledgedPolicyEpoch: optimized ? 1 : 0,
             AppliedPolicyActions: optimized ? 64 : 0,
@@ -160,8 +166,6 @@ public sealed class ReadbackElisionLabTests
             ContentEquivalent: true,
             RollbackRestored: true,
             ExpectedHash: "0123456789abcdef",
-            FirstMapHash: "0123456789abcdef",
-            FinalMapHash: "0123456789abcdef",
             PostDetachSourceHash: "0123456789abcdef",
             PostDetachDestinationHash: "0123456789abcdef",
             CpuWorkloadMicroseconds: cpu,

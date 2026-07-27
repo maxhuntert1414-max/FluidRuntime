@@ -14,6 +14,15 @@ public static class RuntimeApplication
         if (args.Length > 0 &&
             string.Equals(
                 args[0],
+                "upload-elision-lab",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return await UploadElisionLabCommand.RunAsync(args);
+        }
+
+        if (args.Length > 0 &&
+            string.Equals(
+                args[0],
                 "readback-elision-lab",
                 StringComparison.OrdinalIgnoreCase))
         {
@@ -62,6 +71,7 @@ public static class RuntimeApplication
             Console.WriteLine(ControlPolicyMatrixOptions.Usage);
             Console.WriteLine(SustainedCopyLabOptions.Usage);
             Console.WriteLine(ReadbackElisionLabOptions.Usage);
+            Console.WriteLine(UploadElisionLabOptions.Usage);
             return 0;
         }
 

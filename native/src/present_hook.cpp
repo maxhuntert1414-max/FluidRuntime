@@ -86,6 +86,20 @@ constexpr size_t kHookSlotCount = 10;
 constexpr size_t kRetiredResourceIdentityCapacity = 4096;
 constexpr UINT kWholeResourceSubresource = 0xFFFFFFFFU;
 
+constexpr std::uint64_t control_action_for_copy(
+    bool readback_transfer,
+    bool upload_transfer) {
+    return readback_transfer
+        ? fluid_hook_control_action_skip_redundant_readback_copy
+        : (upload_transfer
+            ? fluid_hook_control_action_skip_redundant_upload_copy
+            : fluid_hook_control_action_skip_redundant_copy_resource);
+}
+
+static_assert(control_action_for_copy(false, false) == 1);
+static_assert(control_action_for_copy(true, false) == 2);
+static_assert(control_action_for_copy(false, true) == 4);
+
 struct HookSlot {
     void** slot{};
     void* original{};
@@ -201,7 +215,6 @@ struct ViewWriteTarget {
 std::mutex g_hook_mutex;
 std::mutex g_patch_mutex;
 std::mutex g_resource_mutex;
-std::recursive_mutex g_control_operation_mutex;
 std::array<HookSlot, kHookSlotCount> g_hook_slots{};
 std::vector<HookSlot> g_release_hook_slots;
 std::atomic<size_t> g_installed_hook_count{0};
@@ -250,6 +263,10 @@ std::atomic<std::uint64_t> g_readback_copy_count{0};
 std::atomic<std::uint64_t> g_readback_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_skipped_readback_copy_count{0};
 std::atomic<std::uint64_t> g_skipped_readback_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_upload_copy_count{0};
+std::atomic<std::uint64_t> g_upload_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_skipped_upload_copy_count{0};
+std::atomic<std::uint64_t> g_skipped_upload_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_hook_refresh_count{0};
 std::atomic<std::uint64_t> g_hook_refresh_failure_count{0};
 std::atomic<std::uint64_t> g_resource_retire_count{0};
@@ -288,21 +305,13 @@ ULONG STDMETHODCALLTYPE hooked_release(IUnknown* object);
 
 class ActiveHookCall {
 public:
-    ActiveHookCall()
-        : control_lock_(g_control_operation_mutex, std::defer_lock) {
+    ActiveHookCall() {
         g_active_hook_calls.fetch_add(1, std::memory_order_acquire);
-        if (g_allow_control_policy.load(std::memory_order_acquire) ||
-            g_max_skipped_copy_count.load(std::memory_order_acquire) != 0) {
-            control_lock_.lock();
-        }
         observation_active_ =
             !g_detaching.load(std::memory_order_acquire) &&
             g_installed_hook_count.load(std::memory_order_acquire) != 0;
     }
     ~ActiveHookCall() {
-        if (control_lock_.owns_lock()) {
-            control_lock_.unlock();
-        }
         g_active_hook_calls.fetch_sub(1, std::memory_order_release);
     }
 
@@ -314,7 +323,6 @@ public:
     }
 
 private:
-    std::unique_lock<std::recursive_mutex> control_lock_;
     bool observation_active_{};
 };
 
@@ -610,7 +618,9 @@ HRESULT process_published_control_policy() {
         action_mask == static_cast<LONG64>(
             fluid_hook_control_action_skip_redundant_copy_resource) ||
         action_mask == static_cast<LONG64>(
-            fluid_hook_control_action_skip_redundant_readback_copy);
+            fluid_hook_control_action_skip_redundant_readback_copy) ||
+        action_mask == static_cast<LONG64>(
+            fluid_hook_control_action_skip_redundant_upload_copy);
     const auto valid =
         published_epoch == 1 &&
         processed_epoch == 0 &&
@@ -698,18 +708,6 @@ bool reserve_control_policy_action(std::uint64_t required_action) {
     }
 
     const auto new_count = applied + 1;
-    QueryPerformanceCounter(&now);
-    if (static_cast<std::uint64_t>(now.QuadPart) >=
-        g_control_policy_expires_at_qpc.load(std::memory_order_acquire)) {
-        g_control_policy_applied_action_count.store(
-            applied,
-            std::memory_order_release);
-        InterlockedExchange64(
-            &control->applied_action_count,
-            static_cast<LONG64>(applied));
-        publish_control_status(FluidHookControlStatusV1::expired);
-        return false;
-    }
     InterlockedExchange64(
         &control->applied_action_count,
         static_cast<LONG64>(new_count));
@@ -1432,6 +1430,10 @@ void reset_metrics_and_resources() {
     g_readback_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_skipped_readback_copy_count.store(0, std::memory_order_relaxed);
     g_skipped_readback_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_upload_copy_count.store(0, std::memory_order_relaxed);
+    g_upload_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_skipped_upload_copy_count.store(0, std::memory_order_relaxed);
+    g_skipped_upload_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_hook_refresh_count.store(0, std::memory_order_relaxed);
     g_hook_refresh_failure_count.store(0, std::memory_order_relaxed);
     g_resource_retire_count.store(0, std::memory_order_relaxed);
@@ -1662,6 +1664,7 @@ HRESULT STDMETHODCALLTYPE hooked_map(
         std::uint64_t resource_id = 0;
         std::uint64_t size_bytes = 0;
         std::uint64_t generation = 0;
+        bool upload_source = false;
         {
             const std::lock_guard resource_lock(g_resource_mutex);
             g_pending_write_maps.insert(SubresourceKey{resource, subresource});
@@ -1673,6 +1676,13 @@ HRESULT STDMETHODCALLTYPE hooked_map(
                 generation);
             resource_id = state->resource_id;
             size_bytes = query_subresource_size(resource, subresource);
+            upload_source = state->provenance_trusted &&
+                state->usage == D3D11_USAGE_STAGING &&
+                (state->cpu_access_flags & D3D11_CPU_ACCESS_WRITE) != 0;
+        }
+        auto event_flags = static_cast<std::uint32_t>(map_type);
+        if (upload_source) {
+            event_flags |= fluid_hook_event_flag_upload_transfer;
         }
         emit_hook_event(
             FluidHookEventTypeV1::map_write,
@@ -1680,7 +1690,7 @@ HRESULT STDMETHODCALLTYPE hooked_map(
             0,
             size_bytes,
             generation,
-            static_cast<std::uint32_t>(map_type),
+            event_flags,
             subresource);
     }
     return result;
@@ -1710,6 +1720,7 @@ void STDMETHODCALLTYPE hooked_unmap(
     std::uint64_t size_bytes = 0;
     std::uint64_t generation = 0;
     bool wrote_resource = false;
+    bool upload_source = false;
     {
         const std::lock_guard resource_lock(g_resource_mutex);
         wrote_resource = g_pending_write_maps.erase(
@@ -1719,6 +1730,9 @@ void STDMETHODCALLTYPE hooked_unmap(
             const auto& state = ensure_resource_locked(resource);
             resource_id = state.resource_id;
             size_bytes = query_subresource_size(resource, subresource);
+            upload_source = state.provenance_trusted &&
+                state.usage == D3D11_USAGE_STAGING &&
+                (state.cpu_access_flags & D3D11_CPU_ACCESS_WRITE) != 0;
         }
     }
     if (wrote_resource) {
@@ -1729,7 +1743,7 @@ void STDMETHODCALLTYPE hooked_unmap(
             0,
             size_bytes,
             generation,
-            0,
+            upload_source ? fluid_hook_event_flag_upload_transfer : 0,
             subresource);
     }
 }
@@ -2041,10 +2055,13 @@ void STDMETHODCALLTYPE hooked_copy_resource(
 
     bool redundant_candidate = false;
     bool readback_transfer = false;
+    bool upload_transfer = false;
     std::uint64_t copy_bytes = 0;
     std::uint64_t source_id = 0;
     std::uint64_t destination_id = 0;
     std::uint64_t source_generation = 0;
+    std::uint64_t destination_generation = 0;
+    bool skipped_copy = false;
     {
         const std::lock_guard resource_lock(g_resource_mutex);
         auto& source_state = ensure_resource_locked(source);
@@ -2052,6 +2069,7 @@ void STDMETHODCALLTYPE hooked_copy_resource(
         source_id = source_state.resource_id;
         destination_id = destination_state.resource_id;
         source_generation = source_state.generation;
+        destination_generation = destination_state.generation;
         copy_bytes = source_state.size_bytes != 0 && destination_state.size_bytes != 0
             ? std::min(source_state.size_bytes, destination_state.size_bytes)
             : std::max(source_state.size_bytes, destination_state.size_bytes);
@@ -2060,6 +2078,11 @@ void STDMETHODCALLTYPE hooked_copy_resource(
             source_state.usage == D3D11_USAGE_DEFAULT &&
             destination_state.usage == D3D11_USAGE_STAGING &&
             (destination_state.cpu_access_flags & D3D11_CPU_ACCESS_READ) != 0;
+        upload_transfer = source_state.provenance_trusted &&
+            destination_state.provenance_trusted &&
+            source_state.usage == D3D11_USAGE_STAGING &&
+            (source_state.cpu_access_flags & D3D11_CPU_ACCESS_WRITE) != 0 &&
+            destination_state.usage == D3D11_USAGE_DEFAULT;
 
         const auto previous_copy = g_last_copies.find(destination);
         redundant_candidate = source_state.provenance_trusted &&
@@ -2068,28 +2091,29 @@ void STDMETHODCALLTYPE hooked_copy_resource(
             previous_copy->second.source_resource_id == source_id &&
             previous_copy->second.source_generation == source_generation &&
             previous_copy->second.destination_generation == destination_state.generation;
-    }
 
-    bool skipped_copy = false;
-    const auto skip_limit = g_max_skipped_copy_count.load(std::memory_order_acquire);
-    if (redundant_candidate && copy_bytes != 0 && skip_limit != 0) {
-        auto skipped_count = g_skipped_copy_count.load(std::memory_order_relaxed);
-        while (skipped_count < skip_limit &&
-               !g_skipped_copy_count.compare_exchange_weak(
-                   skipped_count,
-                   skipped_count + 1,
-                   std::memory_order_acq_rel,
-                   std::memory_order_relaxed)) {
+        const auto skip_limit = g_max_skipped_copy_count.load(
+            std::memory_order_acquire);
+        if (redundant_candidate && copy_bytes != 0 && skip_limit != 0) {
+            auto skipped_count = g_skipped_copy_count.load(
+                std::memory_order_relaxed);
+            while (skipped_count < skip_limit &&
+                   !g_skipped_copy_count.compare_exchange_weak(
+                       skipped_count,
+                       skipped_count + 1,
+                       std::memory_order_acq_rel,
+                       std::memory_order_relaxed)) {
+            }
+            skipped_copy = skipped_count < skip_limit;
+        } else if (redundant_candidate &&
+                   copy_bytes != 0 &&
+                   reserve_control_policy_action(
+                       control_action_for_copy(
+                           readback_transfer,
+                           upload_transfer))) {
+            g_skipped_copy_count.fetch_add(1, std::memory_order_relaxed);
+            skipped_copy = true;
         }
-        skipped_copy = skipped_count < skip_limit;
-    } else if (redundant_candidate &&
-               copy_bytes != 0 &&
-               reserve_control_policy_action(
-                   readback_transfer
-                       ? fluid_hook_control_action_skip_redundant_readback_copy
-                       : fluid_hook_control_action_skip_redundant_copy_resource)) {
-        g_skipped_copy_count.fetch_add(1, std::memory_order_relaxed);
-        skipped_copy = true;
     }
 
     if (skipped_copy) {
@@ -2099,6 +2123,15 @@ void STDMETHODCALLTYPE hooked_copy_resource(
         refresh_context_hook_slots();
         g_forwarded_copy_count.fetch_add(1, std::memory_order_relaxed);
         g_forwarded_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
+        const std::lock_guard resource_lock(g_resource_mutex);
+        mark_resource_written_locked(destination);
+        auto& destination_state = ensure_resource_locked(destination);
+        destination_generation = destination_state.generation;
+        g_last_copies[destination] = LastCopy{
+            .source_resource_id = source_id,
+            .source_generation = source_generation,
+            .destination_generation = destination_generation,
+        };
     }
     g_copy_resource_count.fetch_add(1, std::memory_order_relaxed);
     g_copy_resource_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
@@ -2112,23 +2145,21 @@ void STDMETHODCALLTYPE hooked_copy_resource(
                 std::memory_order_relaxed);
         }
     }
+    if (upload_transfer) {
+        g_upload_copy_count.fetch_add(1, std::memory_order_relaxed);
+        g_upload_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
+        if (skipped_copy) {
+            g_skipped_upload_copy_count.fetch_add(1, std::memory_order_relaxed);
+            g_skipped_upload_copy_bytes_estimated.fetch_add(
+                copy_bytes,
+                std::memory_order_relaxed);
+        }
+    }
     if (redundant_candidate) {
         g_redundant_copy_candidate_count.fetch_add(1, std::memory_order_relaxed);
         g_redundant_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
     }
 
-    std::uint64_t destination_generation = 0;
-    {
-        const std::lock_guard resource_lock(g_resource_mutex);
-        mark_resource_written_locked(destination);
-        auto& destination_state = ensure_resource_locked(destination);
-        destination_generation = destination_state.generation;
-        g_last_copies[destination] = LastCopy{
-            .source_resource_id = source_id,
-            .source_generation = source_generation,
-            .destination_generation = destination_generation,
-        };
-    }
     std::uint32_t event_flags = 0;
     if (redundant_candidate) {
         event_flags |= fluid_hook_event_flag_redundant_candidate;
@@ -2138,6 +2169,9 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     }
     if (readback_transfer) {
         event_flags |= fluid_hook_event_flag_readback_transfer;
+    }
+    if (upload_transfer) {
+        event_flags |= fluid_hook_event_flag_upload_transfer;
     }
     emit_hook_event(
         FluidHookEventTypeV1::copy_resource,
@@ -2631,6 +2665,14 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_skipped_readback_copy_count.load(std::memory_order_relaxed);
     result.skipped_readback_copy_bytes_estimated =
         g_skipped_readback_copy_bytes_estimated.load(std::memory_order_relaxed);
+    result.upload_copy_count =
+        g_upload_copy_count.load(std::memory_order_relaxed);
+    result.upload_copy_bytes_estimated =
+        g_upload_copy_bytes_estimated.load(std::memory_order_relaxed);
+    result.skipped_upload_copy_count =
+        g_skipped_upload_copy_count.load(std::memory_order_relaxed);
+    result.skipped_upload_copy_bytes_estimated =
+        g_skipped_upload_copy_bytes_estimated.load(std::memory_order_relaxed);
     {
         const std::lock_guard patch_lock(g_patch_mutex);
         result.release_hook_slot_count = g_release_hook_slots.size();

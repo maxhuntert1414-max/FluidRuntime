@@ -7,10 +7,10 @@
 
 struct ID3D11Resource;
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 10;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 11;
 constexpr std::uint32_t fluid_hook_attach_options_abi_version = 2;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 7;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 8;
 constexpr std::uint32_t fluid_hook_control_magic = 0x4C544346;
 constexpr std::uint32_t fluid_hook_control_abi_version = 1;
 constexpr std::uint32_t fluid_hook_ring_capacity = 2048;
@@ -40,11 +40,13 @@ constexpr std::uint32_t fluid_hook_event_flag_copy_skipped = 2;
 constexpr std::uint32_t fluid_hook_event_flag_reuse_without_retire = 4;
 constexpr std::uint32_t fluid_hook_event_flag_precise_subresource_write = 8;
 constexpr std::uint32_t fluid_hook_event_flag_readback_transfer = 16;
+constexpr std::uint32_t fluid_hook_event_flag_upload_transfer = 32;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
 constexpr std::uint32_t fluid_hook_attach_flag_allow_control_policy = 4;
 constexpr std::uint64_t fluid_hook_control_action_skip_redundant_copy_resource = 1;
 constexpr std::uint64_t fluid_hook_control_action_skip_redundant_readback_copy = 2;
+constexpr std::uint64_t fluid_hook_control_action_skip_redundant_upload_copy = 4;
 constexpr std::uint64_t fluid_hook_control_max_action_budget = 128;
 
 enum class FluidHookControlStatusV1 : std::uint64_t {
@@ -162,6 +164,10 @@ struct FluidHookSnapshotV1 {
     std::uint64_t readback_copy_bytes_estimated;
     std::uint64_t skipped_readback_copy_count;
     std::uint64_t skipped_readback_copy_bytes_estimated;
+    std::uint64_t upload_copy_count;
+    std::uint64_t upload_copy_bytes_estimated;
+    std::uint64_t skipped_upload_copy_count;
+    std::uint64_t skipped_upload_copy_bytes_estimated;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS

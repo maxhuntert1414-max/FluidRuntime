@@ -18,11 +18,12 @@ Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.m
 [v0.8 managed control evidence](docs/evidence/v0.8.0-managed-control-plane.md) |
 [v0.9 sustained copy-elision evidence](docs/evidence/v0.9.0-sustained-copy-elision.md) |
 [v0.10 readback-elision evidence](docs/evidence/v0.10.0-readback-elision.md) |
+[v0.11 upload-elision evidence](docs/evidence/v0.11.0-upload-elision.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.10.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.11.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -49,6 +50,16 @@ preserved content, event accounting, adapter identity, and rollback; all ten
 measured pairs favored the optimized path in CPU and guarded GPU timestamp
 intervals.
 
+Version 0.11.0 proves the opposite API-visible direction with
+`upload-elision-lab`. The owned target writes a 4 MiB
+`STAGING + CPU_WRITE` buffer once, forwards one required copy into a `DEFAULT`
+buffer, then issues 64 unchanged repeats. Dedicated action bit 4 lets optimized
+runs skip all 64 repeats while preserving source/destination hashes, one write
+map/unmap, exact event/snapshot totals, and rollback. The RX 580 trace passed
+22/22 raw runs; all ten measured pairs reduced the guarded GPU timestamp
+interval while every CPU submission pair stayed inside the declared +1 ms / +10%
+overhead envelope.
+
 Version 0.9.0 adds `sustained-copy-lab`. A managed policy may spend a bounded
 budget of up to 128 actions on unchanged repeats inside a 4 MiB owned buffer
 workload. With the default budget, each optimized run removes 128 redundant
@@ -61,14 +72,19 @@ readback gate requires CPU and GPU p50/p95 improvement plus at least 80% paired
 wins in both directions. It is not a game-wide FPS, PCIe, residency, or power
 claim.
 
+The v0.11 upload gate reflects asynchronous D3D11 submission: GPU p50/p95 and
+at least 80% paired GPU wins are mandatory, while CPU submission must remain
+inside a predeclared overhead envelope. It does not claim CPU acceleration,
+physical RAM-to-VRAM traffic reduction, or residency control.
+
 Version 0.8.0 added the first managed control plane. In `manager-lab`, the .NET
 runtime opens the target's shared mapping and publishes one short-lived policy
 epoch with a one-action budget. The native hook validates and acknowledges the
 policy, then may consume it only for the same proven redundant `CopyResource`
 used by the owned experiment. The hook uses cached atomics on the API path; it
-does not call managed code per copy. The report exposes generic copy and
-readback control as active only in owned labs, while CPU scheduling and physical
-RAM/VRAM residency stay blocked and presentation stays observe-only.
+does not call managed code per copy. The report exposes generic copy, readback,
+and upload control as active only in owned labs, while CPU scheduling and
+physical RAM/VRAM residency stay blocked and presentation stays observe-only.
 
 Detach is a reversible dispatch boundary, not an unsafe unload shortcut. The
 module, event mapping, original function pointers, and Release-slot metadata
@@ -262,6 +278,20 @@ dotnet run --project src/FluidRuntime -c Release -- readback-elision-lab `
   --out artifacts/readback-elision-hardware.json
 ```
 
+Run the bounded `STAGING + CPU_WRITE -> DEFAULT` intervention:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- upload-elision-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
+  --hold-ms 50 `
+  --gpu-timeout-ms 5000 `
+  --hardware true `
+  --out artifacts/upload-elision-hardware.json
+```
+
 Each pair contains a baseline and optimized process, and pair order alternates
 to reduce first/second-run bias. Warmups remain in the trace but are excluded
 from statistics. Baselines forward all six copies; optimized runs observe the
@@ -283,6 +313,12 @@ Baseline runs forward 65 readback copies; optimized runs forward one and skip
 64, avoiding 268,435,456 logical copy bytes while retaining and verifying all
 65 maps. This does not prove physical VRAM placement or PCIe byte reduction.
 
+`upload-elision-lab` uses action bit 4 and a fixed budget of 64. Baseline runs
+forward 65 uploads; optimized runs forward one and skip 64 after the staging
+source has been written and unmapped. A later CPU write advances source
+generation and forces the next upload to be forwarded. Skipped copies do not
+advance content generation because no resource bytes changed.
+
 Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
 guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,
 execution order, every raw run, and explicit performance-claim blockers.
@@ -298,6 +334,6 @@ for the same returned Buffer/Texture2D interface in the owned lab; interface
 aliases, shader draw/dispatch writes, other clear operations, fences, deferred
 contexts, and general resource-view aliasing are not covered yet. Regional-copy
 candidates remain diagnostic-only. The manager currently supports one epoch,
-one selected action from two exact action bits, and a bounded budget of at most
+one selected action from three exact action bits, and a bounded budget of at most
 128 actions per owned target process. It is the control-plane foundation for
 broader scheduling and memory work, not yet a general game manager.
