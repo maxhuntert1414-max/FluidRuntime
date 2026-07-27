@@ -77,7 +77,7 @@ allowed only for the owned default-to-readable-staging readback workload.
 - [x] Capture WARP and RX 580 traces.
 - [x] Review raw evidence and claim blockers.
 - [x] Update Runtime and Gateway documentation.
-- [ ] Push branch, verify CI, promote `main`, tag, release, and verify remote refs.
+- [x] Push branch, verify CI, promote `main`, tag, release, and verify remote refs.
 
 ## Boundary
 

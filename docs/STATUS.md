@@ -1,17 +1,18 @@
 # Project Status
 
-Local v0.10.0 release candidate verified on 2026-07-26. Remote branch/CI
-verification is pending publication.
+FluidRuntime v0.10.0 was verified locally and remotely on 2026-07-26.
 
-## Current Candidate
+## Public Release
 
-- Branch: `feature/v0.10-readback-elision`
+- Branch/tag: `main` / `v0.10.0`
+- Remote validation:
+  [GitHub Actions run 30230066738](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30230066738)
 - Managed tests: 68/68 passed
 - Native tests: 7/7 Release and 7/7 Debug passed
 - Negative control-policy matrix: 320/320 WARP processes passed
 - WARP readback trace: 4/4 raw runs passed with the performance claim blocked
 - RX 580 readback trace: 22/22 raw runs passed; scoped performance gate passed
-- Current public release until promotion: `v0.9.0`
+- Release evidence and raw traces are committed with the tagged source.
 
 ## New In v0.10.0
 

@@ -1,6 +1,6 @@
 # VRAM-to-RAM Readback Elision Progress
 
-## Status: Phase 4 - In Progress
+## Status: Complete
 
 ## Quick Reference
 
@@ -60,7 +60,7 @@
 
 ### Phase 4: Evidence and Release
 
-**Status:** In Progress
+**Status:** Complete
 
 #### Tasks Completed
 
@@ -70,6 +70,8 @@
 - Captured WARP and RX 580 traces; all 26 raw readback runs passed.
 - Passed the scoped RX 580 performance gate with 10/10 CPU and GPU wins.
 - Updated Runtime and Gateway public documentation with the exact non-claims.
+- Passed branch and `main` GitHub Actions, then promoted the verified commit to
+  the v0.10.0 release.
 
 ## Session Log
 
@@ -83,6 +85,7 @@
 - Expanded the ring after a real zero-loss gate caught the original capacity.
 - Proved 64 bounded readback-copy skips with 65 unchanged successful maps.
 - Captured 22/22 valid RX 580 runs and 4/4 valid WARP runs.
+- GitHub Actions `30230066738` passed the complete Windows evidence contract.
 
 ## Architectural Decisions
 
