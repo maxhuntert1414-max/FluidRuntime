@@ -2,8 +2,7 @@
 
 ## Status
 
-Implementation and local evidence complete on `feature/v0.11-upload-elision`.
-Documentation, publication, and remote CI verification remain.
+Complete on `main`; v0.11.0 is locally and remotely verified.
 
 ## Completed
 
@@ -19,7 +18,7 @@ Documentation, publication, and remote CI verification remain.
 
 ## In Progress
 
-- [ ] Publish the synchronized FluidRuntime and FluidGateway documentation.
+- None.
 
 ## Pending
 
@@ -27,7 +26,7 @@ Documentation, publication, and remote CI verification remain.
 - [x] Managed paired runner and report.
 - [x] Unit, native, negative-matrix, and CI coverage.
 - [x] WARP and RX 580 evidence.
-- [ ] FluidRuntime and FluidGateway documentation publication.
+- [x] FluidRuntime and FluidGateway documentation publication.
 
 ## Final Local Verification
 

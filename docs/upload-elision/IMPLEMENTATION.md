@@ -67,8 +67,8 @@ Expected optimized run:
 - [x] Capture WARP functional evidence.
 - [x] Capture RX 580 paired hardware evidence.
 - [x] Publish a positive claim only after every scoped gate passes.
-- [ ] Update architecture, status, roadmap, briefing, README, and FluidGateway.
-- [ ] Merge, tag `v0.11.0`, create the GitHub release, and verify remote CI.
+- [x] Update architecture, status, roadmap, briefing, README, and FluidGateway.
+- [x] Merge, tag `v0.11.0`, create the GitHub release, and verify remote CI.
 
 ## Rollback
 

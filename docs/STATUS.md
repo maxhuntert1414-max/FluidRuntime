@@ -1,11 +1,16 @@
 # Project Status
 
-FluidRuntime v0.11.0 is locally verified as a release candidate on 2026-07-26.
-GitHub publication and remote CI verification are pending.
+FluidRuntime v0.11.0 was verified locally and remotely on 2026-07-26.
 
-## Local Verification
+## Public Release
 
-- Branch: `feature/v0.11-upload-elision`
+- Branch/tag: `main` / `v0.11.0`
+- Runtime main validation:
+  [GitHub Actions run 30232835526](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30232835526)
+- Feature validation:
+  [GitHub Actions run 30232683504](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30232683504)
+- FluidGateway documentation: commit `5725f4f`,
+  [GitHub Actions run 30233019441](https://github.com/maxhuntert1414-max/FluidGateway/actions/runs/30233019441)
 - Managed tests: 73/73 passed.
 - Native tests: 8/8 Release and 8/8 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
@@ -13,6 +18,7 @@ GitHub publication and remote CI verification are pending.
 - RX 580 upload trace: 22/22 raw runs passed; scoped performance gate passed.
 - Legacy generic, sustained, and readback optimized smokes passed after the
   shared hot-path change.
+- Release evidence and raw traces are committed with the tagged source.
 
 ## New In v0.11.0
 
