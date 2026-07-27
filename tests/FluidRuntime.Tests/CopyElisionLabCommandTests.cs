@@ -50,7 +50,7 @@ public sealed class CopyElisionLabCommandTests
 
         var report = CopyElisionLabCommand.BuildReport([warmup, measured], 1, 1);
 
-        Assert.Equal("fluidruntime-copy-elision-trace-v0.9.0", report.Mode);
+        Assert.Equal("fluidruntime-copy-elision-trace-v0.10.0", report.Mode);
         Assert.Equal(1, report.CpuWorkload.Baseline.Count);
         Assert.Equal(1, report.GpuValidPairCount);
         Assert.False(report.PerformanceClaimAllowed);
@@ -73,13 +73,17 @@ public sealed class CopyElisionLabCommandTests
             warmupPairs: 0,
             managedControl: true);
 
-        Assert.Equal("fluidruntime-manager-control-trace-v0.9.0", report.Mode);
+        Assert.Equal("fluidruntime-manager-control-trace-v0.10.0", report.Mode);
         Assert.Equal("managed-shared-memory-policy-v1", report.ControlPlane);
         Assert.Equal(1, report.PublishedPolicyEpochPerOptimizedRun);
         Assert.Equal(1, report.AcknowledgedPolicyEpochPerOptimizedRun);
         Assert.Equal(1, report.AppliedPolicyActionsPerOptimizedRun);
         Assert.Contains(report.ControlLanes, lane =>
             lane.Lane == "copy-path" && lane.ActuationEnabled);
+        Assert.Contains(report.ControlLanes, lane =>
+            lane.Lane == "vram-ram-readback" &&
+            lane.NativeBackendAvailable &&
+            lane.ActuationEnabled);
         Assert.Contains(report.ControlLanes, lane =>
             lane.Lane == "ram-vram-residency" && !lane.NativeBackendAvailable);
 
@@ -175,7 +179,7 @@ public sealed class CopyElisionLabCommandTests
     {
         using var document = JsonDocument.Parse("{}");
         return new HookLabReport(
-            Mode: "fluidruntime-hook-ipc-lab-v0.9.0",
+            Mode: "fluidruntime-hook-ipc-lab-v0.10.0",
             ReadOnly: !copyElisionEnabled,
             WouldModifySystem: false,
             CopyElisionEnabled: copyElisionEnabled,
@@ -191,7 +195,7 @@ public sealed class CopyElisionLabCommandTests
             AdapterLuid: "0000000000000042",
             TargetProcessId: 42,
             RingName: "test",
-            RingAbiVersion: 6,
+            RingAbiVersion: 7,
             QpcFrequency: 10_000_000,
             EventCount: 20,
             LostSequenceCount: 0,

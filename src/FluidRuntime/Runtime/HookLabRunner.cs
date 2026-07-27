@@ -162,7 +162,7 @@ public sealed class HookLabRunner
         var gpuWorkloadTicks = timing.GetProperty("gpu_workload_ticks").GetUInt64();
 
         return new HookLabReport(
-            "fluidruntime-hook-ipc-lab-v0.9.0",
+            "fluidruntime-hook-ipc-lab-v0.10.0",
             ReadOnly: !options.SkipFirstRedundantCopy && !options.UseManagedControlPolicy,
             WouldModifySystem: false,
             CopyElisionEnabled:
@@ -338,7 +338,7 @@ public sealed class HookLabRunner
         var gpuQueryTimedOut = timing.GetProperty("gpu_query_timed_out").GetBoolean();
         var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
         if (report.GetProperty("mode").GetString() !=
-                "fluidruntime-resource-hook-lab-v0.9.0" ||
+                "fluidruntime-resource-hook-lab-v0.10.0" ||
             !report.GetProperty("automatic_lifetime_tracking").GetBoolean() ||
             report.GetProperty("release_observation_scope").GetString() !=
                 "owned-returned-buffer-texture-interface" ||

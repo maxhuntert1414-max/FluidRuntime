@@ -16,7 +16,8 @@ public enum HookEventType : uint
     CopySubresourceRegion = 12,
     ClearRenderTargetView = 13,
     ClearUnorderedAccessViewFloat = 14,
-    ControlPolicyAccepted = 15
+    ControlPolicyAccepted = 15,
+    MapRead = 16
 }
 
 public sealed record HookIpcEvent(
@@ -46,4 +47,8 @@ public sealed record HookIpcEvent(
         (Type is HookEventType.ClearRenderTargetView or
             HookEventType.ClearUnorderedAccessViewFloat) &&
         (Flags & 8) != 0;
+
+    public bool IsReadbackTransfer =>
+        Type is HookEventType.CopyResource or HookEventType.MapRead &&
+        (Flags & 16) != 0;
 }

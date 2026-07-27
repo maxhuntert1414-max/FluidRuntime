@@ -5,20 +5,23 @@ using FluidRuntime.Native;
 
 namespace FluidRuntime.Runtime;
 
-public sealed class SustainedCopyLabRunner
+public sealed class ReadbackElisionLabRunner
 {
     private const int MinimumPairsForPerformanceClaim = 10;
+    private const long TotalReadbackCopies =
+        ReadbackElisionLabOptions.RedundantCopyCount + 1L;
     private const ulong LegacyCopyBytes = 49_152;
-    private const ulong LegacyRedundantCopyBytes = 24_576;
+    private const long LegacyCopyCount = 6;
+    private const long LegacyRedundantCopyCount = 3;
 
-    public async Task<SustainedCopyLabReport> RunAsync(
-        SustainedCopyLabOptions options,
+    public async Task<ReadbackElisionLabReport> RunAsync(
+        ReadbackElisionLabOptions options,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         var targetPath = RequireFile(options.TargetPath, "Hook target executable");
         var hookPath = RequireFile(options.HookPath, "Hook DLL");
-        var trials = new List<SustainedCopyTrialReport>();
+        var trials = new List<ReadbackElisionTrialReport>();
         for (var pair = 0; pair < options.WarmupPairs; ++pair)
         {
             trials.Add(await RunPairAsync(
@@ -26,7 +29,7 @@ public sealed class SustainedCopyLabRunner
                 targetPath,
                 hookPath,
                 pair,
-                phase: "warmup",
+                "warmup",
                 includedInStatistics: false,
                 cancellationToken));
         }
@@ -37,15 +40,15 @@ public sealed class SustainedCopyLabRunner
                 targetPath,
                 hookPath,
                 pair,
-                phase: "measured",
+                "measured",
                 includedInStatistics: true,
                 cancellationToken));
         }
         return BuildReport(trials, options);
     }
 
-    private static async Task<SustainedCopyTrialReport> RunPairAsync(
-        SustainedCopyLabOptions options,
+    private static async Task<ReadbackElisionTrialReport> RunPairAsync(
+        ReadbackElisionLabOptions options,
         string targetPath,
         string hookPath,
         int pairIndex,
@@ -53,8 +56,8 @@ public sealed class SustainedCopyLabRunner
         bool includedInStatistics,
         CancellationToken cancellationToken)
     {
-        SustainedCopyRunReport baseline;
-        SustainedCopyRunReport optimized;
+        ReadbackElisionRunReport baseline;
+        ReadbackElisionRunReport optimized;
         var baselineFirst = pairIndex % 2 == 0;
         if (baselineFirst)
         {
@@ -87,8 +90,7 @@ public sealed class SustainedCopyLabRunner
                 cancellationToken);
         }
 
-        var adapterMatched = SameAdapter(baseline, optimized);
-        return new SustainedCopyTrialReport(
+        return new ReadbackElisionTrialReport(
             pairIndex,
             phase,
             includedInStatistics,
@@ -96,7 +98,7 @@ public sealed class SustainedCopyLabRunner
             ContentEquivalent: baseline.ContentEquivalent && optimized.ContentEquivalent,
             RollbackRestoredInBothRuns:
                 baseline.RollbackRestored && optimized.RollbackRestored,
-            AdapterIdentityMatched: adapterMatched,
+            AdapterIdentityMatched: SameAdapter(baseline, optimized),
             baseline.CpuWorkloadMicroseconds,
             optimized.CpuWorkloadMicroseconds,
             baseline.GpuWorkloadMicroseconds,
@@ -105,8 +107,8 @@ public sealed class SustainedCopyLabRunner
             optimized);
     }
 
-    private static async Task<SustainedCopyRunReport> RunOneAsync(
-        SustainedCopyLabOptions options,
+    private static async Task<ReadbackElisionRunReport> RunOneAsync(
+        ReadbackElisionLabOptions options,
         string targetPath,
         string hookPath,
         bool optimized,
@@ -128,8 +130,9 @@ public sealed class SustainedCopyLabRunner
         startInfo.ArgumentList.Add(options.HoldMs.ToString());
         startInfo.ArgumentList.Add("--gpu-timeout-ms");
         startInfo.ArgumentList.Add(options.GpuTimeoutMs.ToString());
-        startInfo.ArgumentList.Add("--sustained-copy-count");
-        startInfo.ArgumentList.Add(options.CopyCount.ToString());
+        startInfo.ArgumentList.Add("--readback-copy-count");
+        startInfo.ArgumentList.Add(
+            ReadbackElisionLabOptions.RedundantCopyCount.ToString());
         if (options.UseHardware)
         {
             startInfo.ArgumentList.Add("--hardware");
@@ -142,7 +145,7 @@ public sealed class SustainedCopyLabRunner
         }
 
         using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Unable to start sustained-copy target.");
+            ?? throw new InvalidOperationException("Unable to start readback target.");
         try
         {
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -151,9 +154,9 @@ public sealed class SustainedCopyLabRunner
             HookControlPolicy? policy = null;
             if (optimized)
             {
-                policy = reader.PublishCopyElisionPolicy(
-                    TimeSpan.FromSeconds(3),
-                    (ulong)options.CopyCount);
+                policy = reader.PublishReadbackElisionPolicy(
+                    TimeSpan.FromSeconds(4),
+                    ReadbackElisionLabOptions.RedundantCopyCount);
                 await reader.WaitForControlAcknowledgmentAsync(
                     policy.Epoch,
                     TimeSpan.FromSeconds(5),
@@ -173,12 +176,11 @@ public sealed class SustainedCopyLabRunner
             if (process.ExitCode != 0)
             {
                 throw new InvalidOperationException(
-                    $"Sustained-copy target exited with code {process.ExitCode}: " +
+                    $"Readback target exited with code {process.ExitCode}: " +
                     $"{stderr.Trim()} {stdout.Trim()}");
             }
 
             using var document = JsonDocument.Parse(stdout);
-            var targetReport = document.RootElement.Clone();
             return BuildRunReport(
                 options,
                 optimized,
@@ -187,7 +189,7 @@ public sealed class SustainedCopyLabRunner
                 reader.ControlSnapshot,
                 reader,
                 events,
-                targetReport);
+                document.RootElement.Clone());
         }
         finally
         {
@@ -199,8 +201,8 @@ public sealed class SustainedCopyLabRunner
         }
     }
 
-    private static SustainedCopyRunReport BuildRunReport(
-        SustainedCopyLabOptions options,
+    private static ReadbackElisionRunReport BuildRunReport(
+        ReadbackElisionLabOptions options,
         bool optimized,
         int processId,
         HookControlPolicy? policy,
@@ -212,58 +214,71 @@ public sealed class SustainedCopyLabRunner
         var resources = report.GetProperty("resources");
         var timing = report.GetProperty("timing");
         var adapter = report.GetProperty("adapter");
-        var copyEvents = events.Where(item => item.Type == HookEventType.CopyResource).ToArray();
-        var redundantEvents = copyEvents
+        var copyEvents = events
+            .Where(item => item.Type == HookEventType.CopyResource)
+            .ToArray();
+        var readbackCopyEvents = copyEvents
+            .Where(item => item.IsReadbackTransfer)
+            .ToArray();
+        var redundantReadbackEvents = readbackCopyEvents
             .Where(item => item.IsRedundantCopyCandidate)
             .ToArray();
-        var skippedEvents = copyEvents.Where(item => item.WasCopySkipped).ToArray();
+        var mapEvents = events
+            .Where(item => item.Type == HookEventType.MapRead)
+            .ToArray();
+        var skippedEvents = readbackCopyEvents
+            .Where(item => item.WasCopySkipped)
+            .ToArray();
         var acceptedEvents = events
             .Where(item => item.Type == HookEventType.ControlPolicyAccepted)
             .ToArray();
-        var copyCount = options.CopyCount;
-        var expectedObservedCopies = copyCount + 7L;
-        var expectedObservedBytes =
-            LegacyCopyBytes + (ulong)(copyCount + 1) * SustainedCopyLabOptions.SustainedBufferBytes;
-        var expectedRedundantCopies = copyCount + 3L;
-        var expectedRedundantBytes =
-            LegacyRedundantCopyBytes +
-            (ulong)copyCount * SustainedCopyLabOptions.SustainedBufferBytes;
-        var expectedSkippedCopies = optimized ? copyCount : 0L;
-        var expectedSkippedBytes = optimized
-            ? (ulong)copyCount * SustainedCopyLabOptions.SustainedBufferBytes
-            : 0UL;
-        var expectedForwardedCopies = expectedObservedCopies - expectedSkippedCopies;
-        var expectedForwardedBytes = expectedObservedBytes - expectedSkippedBytes;
-        var sequencesMatch = events
-            .Select((item, index) => item.Sequence == index)
-            .All(value => value);
-        var contentEquivalent =
-            report.GetProperty("content_readback_succeeded").GetBoolean() &&
-            report.GetProperty("sustained_buffer_contents_equal").GetBoolean() &&
-            report.GetProperty("buffer_contents_equal").GetBoolean() &&
-            report.GetProperty("texture_contents_equal").GetBoolean() &&
-            report.GetProperty("subresource_contents_equal").GetBoolean();
-        var sustainedSourceHash =
-            report.GetProperty("sustained_source_buffer_hash").GetString() ?? "";
-        var sustainedDestinationHash =
-            report.GetProperty("sustained_destination_buffer_hash").GetString() ?? "";
-        var rollbackRestored = report.GetProperty("original_pointer_restored").GetBoolean();
+        var expectedSkippedCopies = optimized
+            ? ReadbackElisionLabOptions.RedundantCopyCount
+            : 0L;
+        var expectedSkippedBytes = (ulong)expectedSkippedCopies *
+            ReadbackElisionLabOptions.ReadbackBufferBytes;
+        var totalReadbackBytes = (ulong)TotalReadbackCopies *
+            ReadbackElisionLabOptions.ReadbackBufferBytes;
+        var totalCopyCount = LegacyCopyCount + TotalReadbackCopies;
+        var totalCopyBytes = LegacyCopyBytes + totalReadbackBytes;
+        var expectedForwardedCopies = totalCopyCount - expectedSkippedCopies;
+        var expectedForwardedBytes = totalCopyBytes - expectedSkippedBytes;
         var expectedStatus = optimized
             ? HookControlPolicyStatus.Exhausted
             : HookControlPolicyStatus.None;
+        var expectedPolicyEpoch = optimized ? 1L : 0L;
+        var sequencesMatch = events
+            .Select((item, index) => item.Sequence == index)
+            .All(value => value);
+        var expectedHash = report.GetProperty("readback_expected_hash").GetString() ?? "";
+        var firstMapHash = report.GetProperty("readback_first_map_hash").GetString() ?? "";
+        var finalMapHash = report.GetProperty("readback_final_map_hash").GetString() ?? "";
+        var sourceHash = report.GetProperty("readback_source_buffer_hash").GetString() ?? "";
+        var destinationHash =
+            report.GetProperty("readback_destination_buffer_hash").GetString() ?? "";
+        var contentEquivalent =
+            report.GetProperty("content_readback_succeeded").GetBoolean() &&
+            report.GetProperty("readback_all_maps_succeeded").GetBoolean() &&
+            report.GetProperty("readback_all_maps_equal").GetBoolean() &&
+            report.GetProperty("readback_successful_map_count").GetInt64() ==
+                TotalReadbackCopies &&
+            report.GetProperty("readback_buffer_contents_equal").GetBoolean() &&
+            report.GetProperty("buffer_contents_equal").GetBoolean() &&
+            report.GetProperty("texture_contents_equal").GetBoolean() &&
+            report.GetProperty("subresource_contents_equal").GetBoolean() &&
+            expectedHash != "0000000000000000" &&
+            expectedHash == firstMapHash &&
+            expectedHash == finalMapHash &&
+            expectedHash == sourceHash &&
+            expectedHash == destinationHash;
         var acceptedEventMatches = acceptedEvents.Length == (optimized ? 1 : 0) &&
             (!optimized ||
                 (acceptedEvents[0].Sequence == 0 &&
                  acceptedEvents[0].ResourceA == 1 &&
                  acceptedEvents[0].ResourceB ==
-                    HookRingReader.SkipRedundantCopyResourceAction &&
-                 acceptedEvents[0].SizeBytes == (ulong)copyCount));
-        var eventCopyBytes = copyEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes);
-        var eventRedundantBytes =
-            redundantEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes);
-        var eventSkippedBytes =
-            skippedEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes);
-        var expectedPolicyEpoch = optimized ? 1L : 0L;
+                    HookRingReader.SkipRedundantReadbackCopyAction &&
+                 acceptedEvents[0].SizeBytes ==
+                    ReadbackElisionLabOptions.RedundantCopyCount));
         var valid =
             report.GetProperty("mode").GetString() ==
                 "fluidruntime-resource-hook-lab-v0.10.0" &&
@@ -271,35 +286,50 @@ public sealed class SustainedCopyLabRunner
             !report.GetProperty("remote_injection").GetBoolean() &&
             report.GetProperty("render_driver").GetString() ==
                 (options.UseHardware ? "hardware" : "warp") &&
-            report.GetProperty("sustained_copy_count").GetInt32() == copyCount &&
-            report.GetProperty("sustained_buffer_bytes").GetInt32() ==
-                SustainedCopyLabOptions.SustainedBufferBytes &&
-            report.GetProperty("sustained_logical_copy_bytes").GetUInt64() ==
-                (ulong)(copyCount + 1) * SustainedCopyLabOptions.SustainedBufferBytes &&
-            report.GetProperty("max_skipped_copy_count").GetInt64() ==
-                expectedSkippedCopies &&
+            report.GetProperty("readback_scope").GetString() ==
+                "owned-d3d11-default-to-readable-staging-buffer" &&
+            report.GetProperty("readback_copy_count").GetInt32() ==
+                ReadbackElisionLabOptions.RedundantCopyCount &&
+            report.GetProperty("readback_buffer_bytes").GetInt32() ==
+                ReadbackElisionLabOptions.ReadbackBufferBytes &&
+            report.GetProperty("readback_logical_copy_bytes").GetUInt64() ==
+                totalReadbackBytes &&
             report.GetProperty("optimization_requested").GetBoolean() == optimized &&
             report.GetProperty("would_skip_copies").GetBoolean() == optimized &&
+            report.GetProperty("optimization_kind").GetString() ==
+                (optimized
+                    ? "managed-policy-skip-redundant-readback-copy"
+                    : "none") &&
             report.GetProperty("control_policy_requested").GetBoolean() == optimized &&
             report.GetProperty("control_policy_wait_hresult").GetString() ==
                 (optimized ? "0x00000000" : "0x00000001") &&
             report.GetProperty("resource_metrics_matched").GetBoolean() &&
-            resources.GetProperty("copy_resource_count").GetInt64() ==
-                expectedObservedCopies &&
+            report.GetProperty("original_pointer_restored").GetBoolean() &&
+            resources.GetProperty("map_read_count").GetInt64() == TotalReadbackCopies &&
+            resources.GetProperty("map_read_bytes_estimated").GetUInt64() ==
+                totalReadbackBytes &&
+            resources.GetProperty("copy_resource_count").GetInt64() == totalCopyCount &&
             resources.GetProperty("copy_resource_bytes_estimated").GetUInt64() ==
-                expectedObservedBytes &&
+                totalCopyBytes &&
             resources.GetProperty("redundant_copy_candidate_count").GetInt64() ==
-                expectedRedundantCopies &&
-            resources.GetProperty("redundant_copy_bytes_estimated").GetUInt64() ==
-                expectedRedundantBytes &&
-            resources.GetProperty("forwarded_copy_count").GetInt64() ==
-                expectedForwardedCopies &&
-            resources.GetProperty("forwarded_copy_bytes_estimated").GetUInt64() ==
-                expectedForwardedBytes &&
+                LegacyRedundantCopyCount +
+                    ReadbackElisionLabOptions.RedundantCopyCount &&
+            resources.GetProperty("readback_copy_count").GetInt64() ==
+                TotalReadbackCopies &&
+            resources.GetProperty("readback_copy_bytes_estimated").GetUInt64() ==
+                totalReadbackBytes &&
+            resources.GetProperty("skipped_readback_copy_count").GetInt64() ==
+                expectedSkippedCopies &&
+            resources.GetProperty("skipped_readback_copy_bytes_estimated").GetUInt64() ==
+                expectedSkippedBytes &&
             resources.GetProperty("skipped_copy_count").GetInt64() ==
                 expectedSkippedCopies &&
             resources.GetProperty("skipped_copy_bytes_estimated").GetUInt64() ==
                 expectedSkippedBytes &&
+            resources.GetProperty("forwarded_copy_count").GetInt64() ==
+                expectedForwardedCopies &&
+            resources.GetProperty("forwarded_copy_bytes_estimated").GetUInt64() ==
+                expectedForwardedBytes &&
             resources.GetProperty("control_policy_enabled").GetInt64() ==
                 (optimized ? 1 : 0) &&
             resources.GetProperty("control_policy_epoch").GetInt64() ==
@@ -314,39 +344,51 @@ public sealed class SustainedCopyLabRunner
             resources.GetProperty("provenance_failure_count").GetInt64() == 0 &&
             resources.GetProperty("release_hook_failure_count").GetInt64() == 0 &&
             resources.GetProperty("ipc_overrun_count").GetInt64() == 0 &&
-            copyEvents.LongLength == expectedObservedCopies &&
-            eventCopyBytes == expectedObservedBytes &&
-            redundantEvents.LongLength == expectedRedundantCopies &&
-            eventRedundantBytes == expectedRedundantBytes &&
+            copyEvents.LongLength == totalCopyCount &&
+            copyEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes) ==
+                totalCopyBytes &&
+            readbackCopyEvents.LongLength == TotalReadbackCopies &&
+            readbackCopyEvents.All(item =>
+                item.SizeBytes == ReadbackElisionLabOptions.ReadbackBufferBytes) &&
+            redundantReadbackEvents.LongLength ==
+                ReadbackElisionLabOptions.RedundantCopyCount &&
+            mapEvents.LongLength == TotalReadbackCopies &&
+            mapEvents.All(item =>
+                item.IsReadbackTransfer &&
+                item.SizeBytes == ReadbackElisionLabOptions.ReadbackBufferBytes) &&
             skippedEvents.LongLength == expectedSkippedCopies &&
-            eventSkippedBytes == expectedSkippedBytes &&
-            acceptedEventMatches && sequencesMatch &&
+            skippedEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes) ==
+                expectedSkippedBytes &&
+            acceptedEventMatches &&
+            sequencesMatch &&
             events.Count == resources.GetProperty("ipc_event_count").GetInt64() &&
-            reader.LostSequenceCount == 0 && reader.NativeOverrunCount == 0 &&
+            reader.LostSequenceCount == 0 &&
+            reader.NativeOverrunCount == 0 &&
             control.PublishedEpoch == expectedPolicyEpoch &&
             control.AcknowledgedEpoch == expectedPolicyEpoch &&
             control.AppliedActionCount == expectedSkippedCopies &&
             control.Status == expectedStatus &&
             (!optimized ||
-                (policy is not null && policy.ActionBudget == (ulong)copyCount)) &&
-            contentEquivalent && rollbackRestored &&
-            sustainedSourceHash == sustainedDestinationHash &&
-            sustainedSourceHash != "0000000000000000";
+                (policy is not null &&
+                 policy.ActionMask == HookRingReader.SkipRedundantReadbackCopyAction &&
+                 policy.ActionBudget ==
+                    ReadbackElisionLabOptions.RedundantCopyCount)) &&
+            contentEquivalent;
         if (!valid)
         {
             throw new InvalidDataException(
-                $"Sustained-copy {(optimized ? "optimized" : "baseline")} run " +
+                $"Readback {(optimized ? "optimized" : "baseline")} run " +
                 "violated the native/managed evidence contract.");
         }
 
         var qpcFrequency = timing.GetProperty("qpc_frequency").GetUInt64();
-        var workloadTicks = timing.GetProperty("workload_qpc_ticks").GetUInt64();
         if (qpcFrequency == 0)
         {
             throw new InvalidDataException("Target reported a zero QPC frequency.");
         }
         var cpuMicroseconds = Math.Round(
-            workloadTicks * 1_000_000d / qpcFrequency,
+            timing.GetProperty("workload_qpc_ticks").GetUInt64() *
+                1_000_000d / qpcFrequency,
             3);
         double? gpuMicroseconds = null;
         if (timing.GetProperty("gpu_timing_valid").GetBoolean())
@@ -362,9 +404,11 @@ public sealed class SustainedCopyLabRunner
                 3);
         }
 
-        return new SustainedCopyRunReport(
+        return new ReadbackElisionRunReport(
             optimized,
             processId,
+            reader.AbiVersion,
+            reader.Capacity,
             report.GetProperty("render_driver").GetString() ?? "",
             adapter.GetProperty("description").GetString() ?? "",
             adapter.GetProperty("vendor_id").GetUInt32(),
@@ -373,10 +417,10 @@ public sealed class SustainedCopyLabRunner
             events.Count,
             reader.LostSequenceCount,
             reader.NativeOverrunCount,
-            expectedObservedCopies,
-            expectedObservedBytes,
-            expectedRedundantCopies,
-            expectedRedundantBytes,
+            TotalReadbackCopies,
+            totalReadbackBytes,
+            TotalReadbackCopies,
+            totalReadbackBytes,
             expectedForwardedCopies,
             expectedForwardedBytes,
             expectedSkippedCopies,
@@ -386,17 +430,20 @@ public sealed class SustainedCopyLabRunner
             control.AppliedActionCount,
             control.Status.ToString().ToLowerInvariant(),
             contentEquivalent,
-            rollbackRestored,
-            sustainedSourceHash,
-            sustainedDestinationHash,
+            RollbackRestored: true,
+            expectedHash,
+            firstMapHash,
+            finalMapHash,
+            sourceHash,
+            destinationHash,
             cpuMicroseconds,
             gpuMicroseconds,
             report);
     }
 
-    internal static SustainedCopyLabReport BuildReport(
-        IReadOnlyList<SustainedCopyTrialReport> trials,
-        SustainedCopyLabOptions options)
+    internal static ReadbackElisionLabReport BuildReport(
+        IReadOnlyList<ReadbackElisionTrialReport> trials,
+        ReadbackElisionLabOptions options)
     {
         var included = trials.Where(item => item.IncludedInStatistics).ToArray();
         var warmups = trials.Where(item => !item.IncludedInStatistics).ToArray();
@@ -420,27 +467,41 @@ public sealed class SustainedCopyLabRunner
             trials.Any(item =>
                 !item.ContentEquivalent ||
                 !item.RollbackRestoredInBothRuns ||
-                item.Optimized.SkippedCopyCount != options.CopyCount ||
-                item.Baseline.SkippedCopyCount != 0))
+                item.Optimized.SkippedReadbackCopyCount !=
+                    ReadbackElisionLabOptions.RedundantCopyCount ||
+                item.Baseline.SkippedReadbackCopyCount != 0 ||
+                item.Optimized.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
+                item.Baseline.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
+                item.Optimized.RingCapacity != HookRingReader.ExpectedCapacity ||
+                item.Baseline.RingCapacity != HookRingReader.ExpectedCapacity ||
+                item.Optimized.ReadMapCount != TotalReadbackCopies ||
+                item.Baseline.ReadMapCount != TotalReadbackCopies))
         {
-            throw new InvalidDataException("Sustained-copy trial trace is incomplete or unsafe.");
+            throw new InvalidDataException("Readback trial trace is incomplete or unsafe.");
         }
 
-        var gpuPairs = included.Where(item =>
-            item.BaselineGpuMicroseconds.HasValue &&
-            item.OptimizedGpuMicroseconds.HasValue).ToArray();
         var cpuSummary = CopyElisionLabCommand.SummarizePairs(
             included.Select(item => item.BaselineCpuMicroseconds),
             included.Select(item => item.OptimizedCpuMicroseconds));
+        var gpuPairs = included.Where(item =>
+            item.BaselineGpuMicroseconds.HasValue &&
+            item.OptimizedGpuMicroseconds.HasValue).ToArray();
         var gpuSummary = gpuPairs.Length == 0
             ? null
             : CopyElisionLabCommand.SummarizePairs(
                 gpuPairs.Select(item => item.BaselineGpuMicroseconds!.Value),
                 gpuPairs.Select(item => item.OptimizedGpuMicroseconds!.Value));
+        var requiredWins = (int)Math.Ceiling(included.Length * 0.8);
         var blockers = new List<string>();
         if (included.Length < MinimumPairsForPerformanceClaim)
         {
             blockers.Add("insufficient-trial-pairs");
+        }
+        if (cpuSummary.Delta.P50 >= 0 ||
+            cpuSummary.Delta.P95 >= 0 ||
+            cpuSummary.OptimizedLowerCount < requiredWins)
+        {
+            blockers.Add("cpu-improvement-not-consistent");
         }
         if (gpuPairs.Length != included.Length)
         {
@@ -449,14 +510,13 @@ public sealed class SustainedCopyLabRunner
         if (gpuSummary is not null &&
             (gpuSummary.Delta.P50 >= 0 ||
              gpuSummary.Delta.P95 >= 0 ||
-             gpuSummary.OptimizedLowerCount < Math.Ceiling(included.Length * 0.8)))
+             gpuSummary.OptimizedLowerCount < requiredWins))
         {
             blockers.Add("gpu-improvement-not-consistent");
         }
-        var cpuRegressionObserved =
-            cpuSummary.Delta.P50 > 0 || cpuSummary.Delta.P95 > 0;
         if (included.Any(item => !item.AdapterIdentityMatched) ||
-            included.Select(item => item.Baseline.AdapterLuid).Distinct().Count() != 1)
+            included.Select(item => item.Baseline.AdapterLuid).Distinct().Count() != 1 ||
+            string.IsNullOrWhiteSpace(included[0].Baseline.AdapterLuid))
         {
             blockers.Add("missing-or-mismatched-adapter-identity");
         }
@@ -465,14 +525,15 @@ public sealed class SustainedCopyLabRunner
             blockers.Add("software-adapter-not-hardware");
         }
 
-        return new SustainedCopyLabReport(
-            "fluidruntime-sustained-copy-elision-trace-v0.10.0",
+        return new ReadbackElisionLabReport(
+            "fluidruntime-readback-elision-trace-v0.10.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
-            SustainedCopyLabOptions.SustainedBufferBytes,
-            options.CopyCount,
-            (ulong)options.CopyCount * SustainedCopyLabOptions.SustainedBufferBytes,
+            ReadbackElisionLabOptions.ReadbackBufferBytes,
+            ReadbackElisionLabOptions.RedundantCopyCount,
+            (ulong)ReadbackElisionLabOptions.RedundantCopyCount *
+                ReadbackElisionLabOptions.ReadbackBufferBytes,
             options.TrialPairs,
             options.WarmupPairs,
             included.Length,
@@ -483,10 +544,10 @@ public sealed class SustainedCopyLabRunner
             included[0].Baseline.AdapterLuid,
             ContentEquivalent: true,
             RollbackRestoredInAllRuns: true,
-            "owned-d3d11-sustained-copy-elision-gpu-workload-only",
+            "owned-d3d11-default-to-staging-readback-workload-only",
             PerformanceClaimAllowed: blockers.Count == 0,
             blockers,
-            CpuRegressionObserved: cpuRegressionObserved,
+            cpuSummary.OptimizedLowerCount,
             gpuPairs.Length,
             cpuSummary,
             gpuSummary,
@@ -494,8 +555,8 @@ public sealed class SustainedCopyLabRunner
     }
 
     private static bool SameAdapter(
-        SustainedCopyRunReport first,
-        SustainedCopyRunReport second) =>
+        ReadbackElisionRunReport first,
+        ReadbackElisionRunReport second) =>
         !string.IsNullOrWhiteSpace(first.AdapterLuid) &&
         first.AdapterLuid == second.AdapterLuid &&
         first.AdapterVendorId == second.AdapterVendorId &&

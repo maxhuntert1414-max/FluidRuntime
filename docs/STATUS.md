@@ -1,63 +1,67 @@
 # Project Status
 
-Verified locally and remotely on 2026-07-26.
+Local v0.10.0 release candidate verified on 2026-07-26. Remote branch/CI
+verification is pending publication.
 
-## Public Release
+## Current Candidate
 
-- FluidRuntime `main` / tag `v0.9.0`
-- Release branch: `wip/v0.8.1-policy-matrix-checkpoint`
-- Remote release validation:
-  [GitHub Actions run 30214300519](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30214300519)
-- Managed tests: 63/63 passed
-- Native tests: 6/6 Release and 6/6 Debug passed
-- Negative control-policy matrix: 320/320 owned WARP processes passed
-- Sustained WARP trace: 22/22 processes passed; performance claim blocked as
-  expected because WARP is a software adapter
-- Sustained RX 580 trace: 22/22 processes passed; scoped GPU-workload evidence
-  gate passed
-- The v0.9.0 evidence contracts passed locally and on GitHub Actions
+- Branch: `feature/v0.10-readback-elision`
+- Managed tests: 68/68 passed
+- Native tests: 7/7 Release and 7/7 Debug passed
+- Negative control-policy matrix: 320/320 WARP processes passed
+- WARP readback trace: 4/4 raw runs passed with the performance claim blocked
+- RX 580 readback trace: 22/22 raw runs passed; scoped performance gate passed
+- Current public release until promotion: `v0.9.0`
 
-## New in v0.9.0
+## New In v0.10.0
 
-- Managed policy budgets are bounded from 1 through 128 without changing the
-  ABI-v1 control-block layout.
-- `sustained-copy-lab` creates an owned 4 MiB buffer workload and removes 128
-  proven unchanged `CopyResource` repeats per optimized run.
-- Each optimized run avoids 536,870,912 logical copy bytes while preserving
-  exact FNV-1a readback hashes, IPC accounting, adapter identity, and rollback.
-- The full rejected/expired/no-opt-in policy matrix is deterministic across
-  Release and Debug.
+- Snapshot ABI 10 and ring ABI 7 add `MapRead`, readback classification, and
+  readback-specific counters.
+- The event ring now holds 2,048 entries. The original 1,024-entry ring produced
+  18 overruns under the new workload, and the zero-loss gate caught it.
+- Control action 2 is dedicated to trusted D3D11
+  `DEFAULT -> STAGING + CPU_READ` whole-resource repeats.
+- `readback-elision-lab` performs one required and 64 unchanged 4 MiB
+  copy/map cycles in separate baseline and optimized processes.
+- Baselines forward all 65 readback copies. Optimized runs forward one, skip 64,
+  and still execute and verify all 65 maps.
+- Every optimized run avoids 268,435,456 logical copy bytes while preserving
+  exact hashes, event/snapshot agreement, adapter identity, and rollback.
+- The manager now exposes an active owned `vram-ram-readback` lane while keeping
+  physical RAM/VRAM residency control blocked.
 
-## Claim Boundary
+## Evidence Claim
 
 The positive evidence scope is exactly:
 
-`owned-d3d11-sustained-copy-elision-gpu-workload-only`
+`owned-d3d11-default-to-staging-readback-workload-only`
 
-On the RX 580, GPU workload p95 changed from 27,472.856 us to 356.784 us and all
-10 measured pairs favored the optimized run. CPU p50 and p95 regressed slightly,
-so v0.9.0 does not claim better end-to-end frame time, FPS, power, or game-wide
-efficiency.
+On the AMD Radeon RX 580 2048SP, all 10 measured pairs favored the optimized
+run for CPU QPC duration and the guarded GPU timestamp interval:
 
-FluidRuntime still does not inject into external games, schedule OS threads,
-control RAM/VRAM residency, actuate presentation, or support D3D12/Vulkan.
+| Metric | Baseline p50 | Optimized p50 | Baseline p95 | Optimized p95 |
+| --- | ---: | ---: | ---: | ---: |
+| CPU workload | 544,800.350 us | 421,077.150 us | 575,244.930 us | 442,802.645 us |
+| GPU timestamp interval | 528,879.480 us | 406,132.160 us | 558,646.270 us | 427,418.994 us |
 
-## Read This First
+The GPU value is a timestamp interval around the workload, not a GPU-busy
+hardware counter. This evidence does not prove physical VRAM placement, PCIe
+bytes, FPS, power, external-game support, or general readback caching.
 
-- Full handoff: [BRIEFING-CLAUDE-CODE.md](BRIEFING-CLAUDE-CODE.md)
-- Architecture: [architecture.md](architecture.md)
-- Roadmap: [roadmap.md](roadmap.md)
-- v0.9.0 evidence:
-  [evidence/v0.9.0-sustained-copy-elision.md](evidence/v0.9.0-sustained-copy-elision.md)
-- Historical v0.8.1 checkpoint:
-  [subagents/CHECKPOINT-v0.8.1.md](subagents/CHECKPOINT-v0.8.1.md)
-
-## Operating Level Today
+## Operating Level
 
 FluidRuntime can inspect process/GPU/memory telemetry, observe an owned D3D11
-resource pipeline, publish a bounded managed policy, and interfere reversibly by
-eliding copies whose provenance is proven inside the deterministic lab.
+resource pipeline, publish a bounded managed policy, and interfere reversibly
+with two proven owned-lab copy patterns: generic unchanged `CopyResource` and
+the new default-to-readable-staging readback path.
 
-The next safe expansion is to harden provenance for aliases, shader writes,
-fences, deferred contexts, and synchronization before any external attach or
-RAM/VRAM/scheduler backend is promoted.
+It still does not inject into external games, schedule OS threads, control
+physical RAM/VRAM residency, actuate presentation, or support D3D12/Vulkan.
+
+## Read Next
+
+- [v0.10.0 evidence](evidence/v0.10.0-readback-elision.md)
+- [Architecture](architecture.md)
+- [Roadmap](roadmap.md)
+- [Full handoff](BRIEFING-CLAUDE-CODE.md)
+- [v0.9.0 evidence](evidence/v0.9.0-sustained-copy-elision.md)

@@ -97,6 +97,8 @@ struct ResourceState {
     std::uint64_t size_bytes{};
     std::uint64_t generation{};
     std::vector<std::uint64_t> subresource_generations;
+    D3D11_USAGE usage{};
+    UINT cpu_access_flags{};
     bool provenance_trusted{};
 };
 
@@ -224,6 +226,8 @@ std::atomic<std::uint64_t> g_create_buffer_count{0};
 std::atomic<std::uint64_t> g_buffer_bytes_requested{0};
 std::atomic<std::uint64_t> g_create_texture2d_count{0};
 std::atomic<std::uint64_t> g_texture_bytes_estimated{0};
+std::atomic<std::uint64_t> g_map_read_count{0};
+std::atomic<std::uint64_t> g_map_read_bytes_estimated{0};
 std::atomic<std::uint64_t> g_map_write_count{0};
 std::atomic<std::uint64_t> g_unmap_write_count{0};
 std::atomic<std::uint64_t> g_update_subresource_count{0};
@@ -242,6 +246,10 @@ std::atomic<std::uint64_t> g_forwarded_copy_count{0};
 std::atomic<std::uint64_t> g_forwarded_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_skipped_copy_count{0};
 std::atomic<std::uint64_t> g_skipped_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_readback_copy_count{0};
+std::atomic<std::uint64_t> g_readback_copy_bytes_estimated{0};
+std::atomic<std::uint64_t> g_skipped_readback_copy_count{0};
+std::atomic<std::uint64_t> g_skipped_readback_copy_bytes_estimated{0};
 std::atomic<std::uint64_t> g_hook_refresh_count{0};
 std::atomic<std::uint64_t> g_hook_refresh_failure_count{0};
 std::atomic<std::uint64_t> g_resource_retire_count{0};
@@ -598,11 +606,15 @@ HRESULT process_published_control_policy() {
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     const auto maximum_lifetime = static_cast<LONG64>(header->qpc_frequency * 4);
+    const auto known_action =
+        action_mask == static_cast<LONG64>(
+            fluid_hook_control_action_skip_redundant_copy_resource) ||
+        action_mask == static_cast<LONG64>(
+            fluid_hook_control_action_skip_redundant_readback_copy);
     const auto valid =
         published_epoch == 1 &&
         processed_epoch == 0 &&
-        action_mask == static_cast<LONG64>(
-            fluid_hook_control_action_skip_redundant_copy_resource) &&
+        known_action &&
         action_budget >= 1 &&
         action_budget <= static_cast<LONG64>(fluid_hook_control_max_action_budget) &&
         expires_at_qpc > now.QuadPart &&
@@ -645,13 +657,13 @@ HRESULT process_published_control_policy() {
     return S_OK;
 }
 
-bool reserve_control_policy_action() {
+bool reserve_control_policy_action(std::uint64_t required_action) {
     auto* control = g_control_block;
     if (control == nullptr ||
         !g_allow_control_policy.load(std::memory_order_acquire) ||
         g_active_control_policy_epoch.load(std::memory_order_acquire) == 0 ||
-        (g_control_policy_action_mask.load(std::memory_order_acquire) &
-            fluid_hook_control_action_skip_redundant_copy_resource) == 0) {
+        g_control_policy_action_mask.load(std::memory_order_acquire) !=
+            required_action) {
         return false;
     }
 
@@ -1147,6 +1159,8 @@ ResourceRegistration register_resource_locked(
     std::uint64_t size_bytes,
     std::uint64_t generation,
     UINT subresource_count,
+    D3D11_USAGE usage,
+    UINT cpu_access_flags,
     bool provenance_trusted) {
     ResourceRegistration registration;
     const auto active = g_resources.find(resource);
@@ -1173,6 +1187,8 @@ ResourceRegistration register_resource_locked(
         .subresource_generations = std::vector<std::uint64_t>(
             subresource_count,
             generation),
+        .usage = usage,
+        .cpu_access_flags = cpu_access_flags,
         .provenance_trusted = provenance_trusted && !registration.reuse_without_retire,
     };
     registration.resource_id = state.resource_id;
@@ -1382,12 +1398,18 @@ bool map_type_writes(D3D11_MAP map_type) {
         map_type == D3D11_MAP_WRITE_NO_OVERWRITE;
 }
 
+bool map_type_reads(D3D11_MAP map_type) {
+    return map_type == D3D11_MAP_READ || map_type == D3D11_MAP_READ_WRITE;
+}
+
 void reset_metrics_and_resources() {
     g_present_count.store(0, std::memory_order_relaxed);
     g_create_buffer_count.store(0, std::memory_order_relaxed);
     g_buffer_bytes_requested.store(0, std::memory_order_relaxed);
     g_create_texture2d_count.store(0, std::memory_order_relaxed);
     g_texture_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_map_read_count.store(0, std::memory_order_relaxed);
+    g_map_read_bytes_estimated.store(0, std::memory_order_relaxed);
     g_map_write_count.store(0, std::memory_order_relaxed);
     g_unmap_write_count.store(0, std::memory_order_relaxed);
     g_update_subresource_count.store(0, std::memory_order_relaxed);
@@ -1406,6 +1428,10 @@ void reset_metrics_and_resources() {
     g_forwarded_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_skipped_copy_count.store(0, std::memory_order_relaxed);
     g_skipped_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_readback_copy_count.store(0, std::memory_order_relaxed);
+    g_readback_copy_bytes_estimated.store(0, std::memory_order_relaxed);
+    g_skipped_readback_copy_count.store(0, std::memory_order_relaxed);
+    g_skipped_readback_copy_bytes_estimated.store(0, std::memory_order_relaxed);
     g_hook_refresh_count.store(0, std::memory_order_relaxed);
     g_hook_refresh_failure_count.store(0, std::memory_order_relaxed);
     g_resource_retire_count.store(0, std::memory_order_relaxed);
@@ -1488,6 +1514,8 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(
                 description->ByteWidth,
                 generation,
                 1,
+                description->Usage,
+                description->CPUAccessFlags,
                 release_hook_ready);
         }
         emit_hook_event(
@@ -1544,6 +1572,8 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(
                 generation,
                 texture_mip_levels(*description) *
                     std::max(1U, description->ArraySize),
+                description->Usage,
+                description->CPUAccessFlags,
                 release_hook_ready);
         }
         emit_hook_event(
@@ -1597,6 +1627,36 @@ HRESULT STDMETHODCALLTYPE hooked_map(
         map_flags,
         mapped_resource);
     refresh_context_hook_slots();
+    if (SUCCEEDED(result) && resource != nullptr && map_type_reads(map_type)) {
+        g_map_read_count.fetch_add(1, std::memory_order_relaxed);
+        std::uint64_t resource_id = 0;
+        std::uint64_t size_bytes = 0;
+        std::uint64_t generation = 0;
+        bool readback_transfer = false;
+        {
+            const std::lock_guard resource_lock(g_resource_mutex);
+            auto& state = ensure_resource_locked(resource);
+            resource_id = state.resource_id;
+            generation = state.generation;
+            size_bytes = query_subresource_size(resource, subresource);
+            readback_transfer = state.provenance_trusted &&
+                state.usage == D3D11_USAGE_STAGING &&
+                (state.cpu_access_flags & D3D11_CPU_ACCESS_READ) != 0;
+        }
+        g_map_read_bytes_estimated.fetch_add(size_bytes, std::memory_order_relaxed);
+        auto event_flags = static_cast<std::uint32_t>(map_type);
+        if (readback_transfer) {
+            event_flags |= fluid_hook_event_flag_readback_transfer;
+        }
+        emit_hook_event(
+            FluidHookEventTypeV1::map_read,
+            resource_id,
+            0,
+            size_bytes,
+            generation,
+            event_flags,
+            subresource);
+    }
     if (SUCCEEDED(result) && resource != nullptr && map_type_writes(map_type)) {
         g_map_write_count.fetch_add(1, std::memory_order_relaxed);
         std::uint64_t resource_id = 0;
@@ -1980,6 +2040,7 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     }
 
     bool redundant_candidate = false;
+    bool readback_transfer = false;
     std::uint64_t copy_bytes = 0;
     std::uint64_t source_id = 0;
     std::uint64_t destination_id = 0;
@@ -1994,6 +2055,11 @@ void STDMETHODCALLTYPE hooked_copy_resource(
         copy_bytes = source_state.size_bytes != 0 && destination_state.size_bytes != 0
             ? std::min(source_state.size_bytes, destination_state.size_bytes)
             : std::max(source_state.size_bytes, destination_state.size_bytes);
+        readback_transfer = source_state.provenance_trusted &&
+            destination_state.provenance_trusted &&
+            source_state.usage == D3D11_USAGE_DEFAULT &&
+            destination_state.usage == D3D11_USAGE_STAGING &&
+            (destination_state.cpu_access_flags & D3D11_CPU_ACCESS_READ) != 0;
 
         const auto previous_copy = g_last_copies.find(destination);
         redundant_candidate = source_state.provenance_trusted &&
@@ -2018,7 +2084,10 @@ void STDMETHODCALLTYPE hooked_copy_resource(
         skipped_copy = skipped_count < skip_limit;
     } else if (redundant_candidate &&
                copy_bytes != 0 &&
-               reserve_control_policy_action()) {
+               reserve_control_policy_action(
+                   readback_transfer
+                       ? fluid_hook_control_action_skip_redundant_readback_copy
+                       : fluid_hook_control_action_skip_redundant_copy_resource)) {
         g_skipped_copy_count.fetch_add(1, std::memory_order_relaxed);
         skipped_copy = true;
     }
@@ -2033,6 +2102,16 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     }
     g_copy_resource_count.fetch_add(1, std::memory_order_relaxed);
     g_copy_resource_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
+    if (readback_transfer) {
+        g_readback_copy_count.fetch_add(1, std::memory_order_relaxed);
+        g_readback_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
+        if (skipped_copy) {
+            g_skipped_readback_copy_count.fetch_add(1, std::memory_order_relaxed);
+            g_skipped_readback_copy_bytes_estimated.fetch_add(
+                copy_bytes,
+                std::memory_order_relaxed);
+        }
+    }
     if (redundant_candidate) {
         g_redundant_copy_candidate_count.fetch_add(1, std::memory_order_relaxed);
         g_redundant_copy_bytes_estimated.fetch_add(copy_bytes, std::memory_order_relaxed);
@@ -2056,6 +2135,9 @@ void STDMETHODCALLTYPE hooked_copy_resource(
     }
     if (skipped_copy) {
         event_flags |= fluid_hook_event_flag_copy_skipped;
+    }
+    if (readback_transfer) {
+        event_flags |= fluid_hook_event_flag_readback_transfer;
     }
     emit_hook_event(
         FluidHookEventTypeV1::copy_resource,
@@ -2472,6 +2554,9 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
     result.buffer_bytes_requested = g_buffer_bytes_requested.load(std::memory_order_relaxed);
     result.create_texture2d_count = g_create_texture2d_count.load(std::memory_order_relaxed);
     result.texture_bytes_estimated = g_texture_bytes_estimated.load(std::memory_order_relaxed);
+    result.map_read_count = g_map_read_count.load(std::memory_order_relaxed);
+    result.map_read_bytes_estimated =
+        g_map_read_bytes_estimated.load(std::memory_order_relaxed);
     result.map_write_count = g_map_write_count.load(std::memory_order_relaxed);
     result.unmap_write_count = g_unmap_write_count.load(std::memory_order_relaxed);
     result.update_subresource_count = g_update_subresource_count.load(std::memory_order_relaxed);
@@ -2538,6 +2623,14 @@ HRESULT WINAPI FluidHookReadSnapshot(FluidHookSnapshotV1* snapshot) {
         g_control_policy_rejected_count.load(std::memory_order_relaxed);
     result.control_policy_status =
         g_control_policy_status.load(std::memory_order_acquire);
+    result.readback_copy_count =
+        g_readback_copy_count.load(std::memory_order_relaxed);
+    result.readback_copy_bytes_estimated =
+        g_readback_copy_bytes_estimated.load(std::memory_order_relaxed);
+    result.skipped_readback_copy_count =
+        g_skipped_readback_copy_count.load(std::memory_order_relaxed);
+    result.skipped_readback_copy_bytes_estimated =
+        g_skipped_readback_copy_bytes_estimated.load(std::memory_order_relaxed);
     {
         const std::lock_guard patch_lock(g_patch_mutex);
         result.release_hook_slot_count = g_release_hook_slots.size();

@@ -7,13 +7,13 @@
 
 struct ID3D11Resource;
 
-constexpr std::uint32_t fluid_hook_snapshot_abi_version = 9;
+constexpr std::uint32_t fluid_hook_snapshot_abi_version = 10;
 constexpr std::uint32_t fluid_hook_attach_options_abi_version = 2;
 constexpr std::uint32_t fluid_hook_ring_magic = 0x47524C46;
-constexpr std::uint32_t fluid_hook_ring_abi_version = 6;
+constexpr std::uint32_t fluid_hook_ring_abi_version = 7;
 constexpr std::uint32_t fluid_hook_control_magic = 0x4C544346;
 constexpr std::uint32_t fluid_hook_control_abi_version = 1;
-constexpr std::uint32_t fluid_hook_ring_capacity = 1024;
+constexpr std::uint32_t fluid_hook_ring_capacity = 2048;
 constexpr wchar_t fluid_hook_ring_name_prefix[] = L"Local\\FluidRuntimeHook-";
 
 enum class FluidHookEventTypeV1 : std::uint32_t {
@@ -32,16 +32,19 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     clear_render_target_view = 13,
     clear_unordered_access_view_float = 14,
     control_policy_accepted = 15,
+    map_read = 16,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
 constexpr std::uint32_t fluid_hook_event_flag_copy_skipped = 2;
 constexpr std::uint32_t fluid_hook_event_flag_reuse_without_retire = 4;
 constexpr std::uint32_t fluid_hook_event_flag_precise_subresource_write = 8;
+constexpr std::uint32_t fluid_hook_event_flag_readback_transfer = 16;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
 constexpr std::uint32_t fluid_hook_attach_flag_allow_control_policy = 4;
 constexpr std::uint64_t fluid_hook_control_action_skip_redundant_copy_resource = 1;
+constexpr std::uint64_t fluid_hook_control_action_skip_redundant_readback_copy = 2;
 constexpr std::uint64_t fluid_hook_control_max_action_budget = 128;
 
 enum class FluidHookControlStatusV1 : std::uint64_t {
@@ -153,6 +156,12 @@ struct FluidHookSnapshotV1 {
     std::uint64_t control_policy_applied_action_count;
     std::uint64_t control_policy_rejected_count;
     std::uint64_t control_policy_status;
+    std::uint64_t map_read_count;
+    std::uint64_t map_read_bytes_estimated;
+    std::uint64_t readback_copy_count;
+    std::uint64_t readback_copy_bytes_estimated;
+    std::uint64_t skipped_readback_copy_count;
+    std::uint64_t skipped_readback_copy_bytes_estimated;
 };
 
 #ifdef FLUIDRUNTIME_HOOK_EXPORTS

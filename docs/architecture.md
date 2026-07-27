@@ -27,7 +27,7 @@ flowchart LR
 - `fluidruntime-native-probe`: read-only Windows process, memory, WDDM VRAM,
   and GPU-engine counters for one PID.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
-  resource creation, retirement, pointer reuse, CPU writes, updates, and
+  resource creation, retirement, pointer reuse, CPU reads/writes, updates, and
   GPU clears through owned RTV/UAV views, plus whole-resource and
   subresource-region copies.
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
@@ -35,9 +35,10 @@ flowchart LR
 
 ## Hook Event Transport
 
-Version 0.9.0 publishes 80-byte ABI-v6 events into a 1,024-slot named
+Version 0.10.0 publishes 80-byte ABI-v7 events into a 2,048-slot named
 shared-memory ring after a 64-byte ring header and a 64-byte ABI-v1 control
-block.
+block. ABI 7 adds `MapRead`, a readback-direction flag, and enough capacity for
+the 65-copy/65-map workload without weakening the zero-overrun gate.
 The mapping is local to the Windows session and named for the target PID. The
 header, control, and event layouts are versioned independently from the report
 schema. The mapping and retained forwarding metadata stay alive until the owned
@@ -72,9 +73,11 @@ publishes epoch 1 atomically. The target waits only when its owned attach option
 explicitly allow managed policy. It copies a valid policy into native atomics,
 publishes status `accepted`, emits an evidence event, and acknowledges the epoch.
 
-The only accepted action mask is `skip_redundant_copy_resource`. Version 0.9.0
-accepts a bounded budget from 1 through 128; expiration must be in the future
-but no more than four seconds away. A second epoch, unknown bit, out-of-range
+The accepted action mask must be exactly one known action:
+`skip_redundant_copy_resource` (bit 1) or
+`skip_redundant_readback_copy` (bit 2). Version 0.10.0 accepts a bounded budget
+from 1 through 128; expiration must be in the future but no more than four
+seconds away. A combined mask, second epoch, unknown bit, out-of-range
 budget, or invalid expiration is rejected. `CopyResource` consults cached native
 state only after the provenance model has identified an unchanged
 source/destination repeat. An atomic compare-and-swap reserves each action, so
@@ -87,8 +90,9 @@ authorizing a skip.
 The managed comparison still uses separate baseline and optimized processes.
 It rejects any missing acknowledgment, policy rejection, wrong event order,
 budget mismatch, lost event, content drift, lifecycle error, or rollback error.
-CPU scheduling, RAM/VRAM residency, and presentation actuation have no policy
-action or writable backend in this ABI.
+CPU scheduling, physical RAM/VRAM residency, and presentation actuation have no
+policy action or writable backend in this ABI. API-visible D3D11 readback
+elision is a separate active owned-lab lane, not residency control.
 
 ## Safety Boundary
 
@@ -124,6 +128,15 @@ owned sustained workload creates two 4 MiB buffers, performs one required copy,
 then repeats the unchanged copy up to 128 times. The managed comparison proves
 baseline forwarding, exact bounded skips, event/snapshot agreement, post-detach
 content hashes, adapter identity, and timing validity in separate processes.
+
+Version 0.10.0 tracks the `D3D11_USAGE` and CPU-access flags observed at owned
+resource creation. Action 2 can be reserved only for a trusted whole-resource
+repeat from `DEFAULT` to `STAGING + CPU_READ`; action 1 cannot authorize that
+lane. The target maps the staging buffer after every one of 65 copies and
+compares all 4 MiB, so optimization removes 64 copy calls without removing or
+fabricating read access. Snapshot ABI 10 exposes read-map, readback-copy, and
+skipped-readback counters. It still does not reveal or control physical memory
+placement.
 
 The v0.6 evidence layer wraps the owned resource workload in a D3D11
 `TIMESTAMP_DISJOINT` query and start/end timestamp queries. Query polling has a
@@ -180,9 +193,9 @@ observe-only, and all regional copies remain forwarded.
   part of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
-- The control plane supports one process-local epoch, one action bit, and a
-  bounded budget of at most 128 applied actions in the owned workload only.
+- The control plane supports one process-local epoch, one exact selected action
+  bit, and a bounded budget of at most 128 applied actions in owned workloads.
 - The lab permits one successful hook attachment per process lifetime. Reattach
   needs an explicit generation contract and is rejected in this ABI.
-- CPU scheduling and RAM/VRAM residency actions are still advisory; presentation
-  actuation is disabled.
+- CPU scheduling and physical RAM/VRAM residency actions are still advisory;
+  presentation actuation is disabled.

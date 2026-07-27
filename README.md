@@ -17,11 +17,12 @@ Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.m
 [v0.7.3 GPU-view write evidence](docs/evidence/v0.7.3-gpu-view-writes.md) |
 [v0.8 managed control evidence](docs/evidence/v0.8.0-managed-control-plane.md) |
 [v0.9 sustained copy-elision evidence](docs/evidence/v0.9.0-sustained-copy-elision.md) |
+[v0.10 readback-elision evidence](docs/evidence/v0.10.0-readback-elision.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.9.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.10.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -38,6 +39,16 @@ redundant `CopyResource`. The command fails unless readback hashes, event
 accounting, and hook rollback agree across all runs. This is not enabled for
 external software.
 
+Version 0.10.0 adds the first memory-direction-specific intervention:
+`readback-elision-lab`. The owned target performs one required and 64 unchanged
+4 MiB `CopyResource` operations from an API-visible `DEFAULT` resource into a
+CPU-readable `STAGING` resource, mapping and comparing all bytes after every
+copy. A dedicated action-2 policy lets the optimized run forward one readback
+copy and skip 64 while retaining all 65 maps. On the RX 580, 22/22 raw runs
+preserved content, event accounting, adapter identity, and rollback; all ten
+measured pairs favored the optimized path in CPU and guarded GPU timestamp
+intervals.
+
 Version 0.9.0 adds `sustained-copy-lab`. A managed policy may spend a bounded
 budget of up to 128 actions on unchanged repeats inside a 4 MiB owned buffer
 workload. With the default budget, each optimized run removes 128 redundant
@@ -45,19 +56,19 @@ workload. With the default budget, each optimized run removes 128 redundant
 processes, exact readback hashes, event/snapshot agreement, adapter identity,
 GPU timestamp validity, and rollback are mandatory before the report can pass.
 
-Any allowed positive performance claim is scoped in the JSON as
-`owned-d3d11-copy-elision-gpu-workload-only`; it is not a game-wide FPS claim. Valid
-timing alone is insufficient: GPU p95 must improve and at least 80% of measured
-pairs must favor the optimized run.
+Every positive performance claim is explicitly scoped in its JSON. The v0.10
+readback gate requires CPU and GPU p50/p95 improvement plus at least 80% paired
+wins in both directions. It is not a game-wide FPS, PCIe, residency, or power
+claim.
 
 Version 0.8.0 added the first managed control plane. In `manager-lab`, the .NET
 runtime opens the target's shared mapping and publishes one short-lived policy
 epoch with a one-action budget. The native hook validates and acknowledges the
 policy, then may consume it only for the same proven redundant `CopyResource`
 used by the owned experiment. The hook uses cached atomics on the API path; it
-does not call managed code per copy. The report exposes copy-path control as
-active only in the owned lab, while CPU scheduling and RAM/VRAM residency stay
-blocked and presentation stays observe-only.
+does not call managed code per copy. The report exposes generic copy and
+readback control as active only in owned labs, while CPU scheduling and physical
+RAM/VRAM residency stay blocked and presentation stays observe-only.
 
 Detach is a reversible dispatch boundary, not an unsafe unload shortcut. The
 module, event mapping, original function pointers, and Release-slot metadata
@@ -144,7 +155,7 @@ binary built from this repository or another binary you explicitly trust.
 
 The native build also contains a controlled D3D11 hook lab. An owned target
 loads the hook DLL cooperatively. The DLL observes `IDXGISwapChain::Present`,
-buffer and texture creation, write-oriented `Map/Unmap`, `UpdateSubresource`,
+buffer and texture creation, read/write `Map/Unmap`, `UpdateSubresource`,
 `ClearRenderTargetView`, `ClearUnorderedAccessViewFloat`,
 `CopySubresourceRegion`, and `CopyResource`. Detach restores every current
 original vtable entry. Version 0.8 pins the DLL inside the owned target until
@@ -237,6 +248,20 @@ dotnet run --project src/FluidRuntime -c Release -- sustained-copy-lab `
   --out artifacts/sustained-copy-hardware.json
 ```
 
+Run the bounded `DEFAULT -> STAGING + CPU_READ` intervention:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- readback-elision-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
+  --hold-ms 50 `
+  --gpu-timeout-ms 5000 `
+  --hardware true `
+  --out artifacts/readback-elision-hardware.json
+```
+
 Each pair contains a baseline and optimized process, and pair order alternates
 to reduce first/second-run bias. Warmups remain in the trace but are excluded
 from statistics. Baselines forward all six copies; optimized runs observe the
@@ -253,6 +278,11 @@ forwards seven and skips 128 sustained repeats. This is evidence for the owned
 GPU workload only. It is not evidence of lower end-to-end frame time, lower CPU
 cost, higher FPS, or a benefit in an external game.
 
+`readback-elision-lab` uses a separate policy bit and a fixed budget of 64.
+Baseline runs forward 65 readback copies; optimized runs forward one and skip
+64, avoiding 268,435,456 logical copy bytes while retaining and verifying all
+65 maps. This does not prove physical VRAM placement or PCIe byte reduction.
+
 Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
 guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,
 execution order, every raw run, and explicit performance-claim blockers.
@@ -268,6 +298,6 @@ for the same returned Buffer/Texture2D interface in the owned lab; interface
 aliases, shader draw/dispatch writes, other clear operations, fences, deferred
 contexts, and general resource-view aliasing are not covered yet. Regional-copy
 candidates remain diagnostic-only. The manager currently supports one epoch,
-one action type, and a bounded budget of at most 128 actions per owned target
-process. It is the control-plane foundation for broader scheduling and memory
-work, not yet a general game manager.
+one selected action from two exact action bits, and a bounded budget of at most
+128 actions per owned target process. It is the control-plane foundation for
+broader scheduling and memory work, not yet a general game manager.

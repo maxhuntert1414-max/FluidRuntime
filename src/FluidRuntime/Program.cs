@@ -12,6 +12,15 @@ public static class RuntimeApplication
     public static async Task<int> RunAsync(string[] args)
     {
         if (args.Length > 0 &&
+            string.Equals(
+                args[0],
+                "readback-elision-lab",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return await ReadbackElisionLabCommand.RunAsync(args);
+        }
+
+        if (args.Length > 0 &&
             string.Equals(args[0], "sustained-copy-lab", StringComparison.OrdinalIgnoreCase))
         {
             return await SustainedCopyLabCommand.RunAsync(args);
@@ -52,6 +61,7 @@ public static class RuntimeApplication
             Console.WriteLine(HookLabOptions.ManagerUsage);
             Console.WriteLine(ControlPolicyMatrixOptions.Usage);
             Console.WriteLine(SustainedCopyLabOptions.Usage);
+            Console.WriteLine(ReadbackElisionLabOptions.Usage);
             return 0;
         }
 

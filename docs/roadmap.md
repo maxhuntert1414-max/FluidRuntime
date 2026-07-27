@@ -46,11 +46,21 @@ coordinate the interfaces the operating system and graphics APIs expose.
   Release/Debug, bounded managed action budgets from 1 through 128, a 4 MiB
   sustained copy workload, exact content hashes and rollback gates, paired WARP
   and RX 580 traces, and a positive claim limited to the owned GPU copy workload.
+- **v0.10.0:** API-visible `DEFAULT -> STAGING + CPU_READ` classification,
+  dedicated readback policy action, ABI 7 `MapRead` evidence, snapshot ABI 10,
+  2,048-event zero-loss ring, a 65-copy/65-map owned workload, exact per-map
+  hashes, WARP/RX 580 traces, and a positive claim limited to the owned readback
+  workload.
 
 ## Next Milestones
 
-### v0.10: Harden Provenance and Control
+### v0.11: Upload Path and Synchronization Hardening
 
+- Prototype the opposite API-visible direction: CPU-written staging/dynamic
+  data into GPU-default resources, with exact upload provenance and no physical
+  residency claims.
+- Measure update, map/unmap, copy, fence/query, and synchronization costs before
+  deciding whether reuse, batching, or elision is safe.
 - Cover destruction through interface aliases and non-primary resource views.
 - Cover draw/dispatch shader writes, remaining UAV/render-target/depth clears,
   fences, queries, and command-list synchronization.
@@ -60,7 +70,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Derive bounded policies from live FluidGateway evidence instead of a fixed
   lab action, with explicit regression rollback.
 
-### v0.11+: Controlled External Observation
+### v0.12+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

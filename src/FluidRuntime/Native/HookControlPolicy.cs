@@ -63,7 +63,7 @@ public static class HookControlPolicyCases
         return policyCase switch
         {
             HookControlPolicyCase.WrongEpoch => new(2, normalExpiry, 1, 1),
-            HookControlPolicyCase.UnknownAction => new(1, normalExpiry, 2, 1),
+            HookControlPolicyCase.UnknownAction => new(1, normalExpiry, 4, 1),
             HookControlPolicyCase.WrongBudget =>
                 new(1, normalExpiry, 1, HookRingReader.MaxControlActionBudget + 1),
             HookControlPolicyCase.TooLongExpiry =>

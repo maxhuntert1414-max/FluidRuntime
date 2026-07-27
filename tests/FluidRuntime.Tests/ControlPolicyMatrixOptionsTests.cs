@@ -56,7 +56,7 @@ public sealed class ControlPolicyMatrixOptionsTests
 
         Assert.Equal(1, policies[HookControlPolicyCase.Valid].Epoch);
         Assert.Equal(2, policies[HookControlPolicyCase.WrongEpoch].Epoch);
-        Assert.Equal(2UL, policies[HookControlPolicyCase.UnknownAction].ActionMask);
+        Assert.Equal(4UL, policies[HookControlPolicyCase.UnknownAction].ActionMask);
         Assert.Equal(129UL, policies[HookControlPolicyCase.WrongBudget].ActionBudget);
         Assert.Equal(15_000, policies[HookControlPolicyCase.TooLongExpiry].ExpiresAtQpc);
         Assert.Equal(9_999, policies[HookControlPolicyCase.AlreadyExpired].ExpiresAtQpc);

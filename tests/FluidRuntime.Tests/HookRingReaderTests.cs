@@ -230,6 +230,40 @@ public sealed class HookRingReaderTests
     }
 
     [Fact]
+    public void Readback_policy_publishes_the_dedicated_action()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var mappingName = $"Local\\FluidRuntimeHook-Test-{Guid.NewGuid():N}";
+        const int capacity = (int)HookRingReader.ExpectedCapacity;
+        const int mappingSize = HookRingReader.ExpectedMappingSize;
+        using var mapping = MemoryMappedFile.CreateNew(
+            mappingName,
+            mappingSize,
+            MemoryMappedFileAccess.ReadWrite);
+        using var writer = mapping.CreateViewAccessor(
+            0,
+            mappingSize,
+            MemoryMappedFileAccess.ReadWrite);
+        WriteHeader(writer, capacity);
+        using var reader = HookRingReader.Open(mappingName);
+
+        var policy = reader.PublishReadbackElisionPolicy(
+            TimeSpan.FromSeconds(1),
+            actionBudget: 64);
+
+        Assert.Equal(HookRingReader.SkipRedundantReadbackCopyAction, policy.ActionMask);
+        Assert.Equal(64UL, policy.ActionBudget);
+        Assert.Equal(
+            (long)HookRingReader.SkipRedundantReadbackCopyAction,
+            writer.ReadInt64(96));
+        Assert.Equal(64, writer.ReadInt64(104));
+    }
+
+    [Fact]
     public async Task Control_policy_rejects_invalid_lifetime_and_native_rejection()
     {
         if (!OperatingSystem.IsWindows())

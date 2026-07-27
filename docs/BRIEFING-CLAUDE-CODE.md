@@ -1,26 +1,24 @@
 # Briefing FluidRuntime / FluidGateway
 
-Documento de handoff para continuidade em outro agente. Estado verificado em
-2026-07-26.
+Handoff atualizado em 2026-07-26 para o release candidate v0.10.0.
 
 ## 1. Objetivo geral
 
-Construir um runtime open source que reduza desperdicio no caminho entre CPU,
-GPU, RAM, VRAM, buffers, texturas e apresentacao do frame. A tese do projeto e:
+Construir um runtime open source que reduza desperdicio entre CPU, GPU, RAM,
+VRAM, recursos graficos e apresentacao. A tese e:
 
 > O futuro da performance nao e so mais potencia. E menos desperdicio.
 
-Nao e clone de DLSS, FSR ou Lossless Scaling. O destino e um gateway/scheduler
-que tome decisoes cedo, evite transporte redundante e reverta qualquer atuacao
-quando a evidencia piorar. Software nao reproduz memoria fisicamente unificada,
-mas pode reduzir parte da distancia pratica entre os estagios expostos pelo SO e
-pelas APIs graficas.
+Nao e clone de DLSS, FSR ou Lossless Scaling. Software nao transforma hardware
+discreto em memoria fisicamente unificada, mas pode observar as APIs expostas,
+tomar decisoes antes, evitar trabalho redundante e reverter atuacao quando a
+evidencia falha.
 
-## 2. Arquitetura em duas metades
+## 2. Repositorios
 
 | Repo | Papel |
 | --- | --- |
-| [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway) | Diagnostico PresentMon, evidencia, politica, ledger operacional e loop advisory |
+| [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway) | PresentMon, diagnostico, evidencia, policy e ledger operacional |
 | [FluidRuntime](https://github.com/maxhuntert1414-max/FluidRuntime) | Telemetria Windows/GPU, hook D3D11 cooperativo, control plane, atuacao owned e rollback |
 
 Fluxo atual:
@@ -30,124 +28,125 @@ PresentMon CSV
   -> FluidGateway (achados + ledger)
   -> FluidRuntime (.NET manager + telemetria)
   -> shared-memory control block
-  -> native D3D11 hook (somente target owned com opt-in)
+  -> native D3D11 hook (target owned com opt-in)
 ```
 
-## 3. Nivel de operacao atual
+## 3. Nivel de operacao
 
 Ja e real:
 
 - diagnostico PresentMon offline em HTML/JSON;
-- politica e daemon advisory com `would_modify_system=false`;
-- probe read-only de processo, RAM, GPU e VRAM disponivel pelo Windows;
-- observacao cooperativa de Present, recursos, escritas, copias, subresources,
-  RTV/UAV clears e lifecycle D3D11;
-- shared-memory ring ABI-v6 e control block ABI-v1;
-- policy managed de um epoch, uma action mask e budget limitado a 1..128;
-- interferencia reversivel em `CopyResource` redundante dentro do lab owned;
-- comparacao baseline/optimized com eventos, snapshot, readback, hashes, timing e
-  rollback obrigatorios.
+- probe read-only de processo, RAM, GPU e VRAM pelo Windows;
+- observacao cooperativa D3D11 de Present, recursos, lifecycle, maps, updates,
+  copies, subresources e RTV/UAV clears;
+- ring de memoria compartilhada com validacao nativa/managed e perda zero;
+- policy managed de um epoch, uma action exata e budget de 1..128;
+- elisao reversivel de `CopyResource` redundante no lab owned;
+- elisao dedicada de readback `DEFAULT -> STAGING + CPU_READ` no lab owned;
+- baseline/optimized pareado, hashes, adapter identity, timing e rollback.
 
 Ainda nao e real:
 
-- injecao ou attach em jogos/processos externos;
+- injection/attach em jogos ou processos externos;
 - scheduler de threads do Windows;
-- controle de residencia RAM/VRAM;
-- atuacao em presentation path;
+- controle de residencia fisica RAM/VRAM;
+- otimizacao `RAM -> GPU` de uploads;
+- atuacao no presentation path;
 - D3D12 ou Vulkan;
-- claim geral de FPS, frame time, energia ou "salvar maquina velha".
+- claim geral de FPS, energia ou "salvar maquina velha".
 
-## 4. Entrega v0.9.0
+## 4. Entrega v0.10.0
 
-A v0.9.0 fecha duas etapas.
+### Contrato de readback
 
-### Matriz negativa da policy
+O hook registra `D3D11_USAGE` e `CPUAccessFlags` apenas para recursos cuja
+criacao e lifetime foram observados. Uma copia e classificada como readback
+somente quando:
 
-O comando `control-policy-matrix` cobre oito casos:
+- origem: `D3D11_USAGE_DEFAULT`;
+- destino: `D3D11_USAGE_STAGING`;
+- destino: `D3D11_CPU_ACCESS_READ`;
+- proveniencia de ambos continua confiavel;
+- a repeticao usa a mesma origem/geracao e o destino nao mudou.
 
-- valid;
-- no opt-in;
-- epoch errado;
-- action desconhecida;
-- budget acima de 128;
-- expiracao longa demais;
-- policy ja expirada;
-- accepted e depois expirada antes do workload.
+Action 1 continua sendo copia generica. Action 2 e exclusiva para readback.
+Uma mask combinada ou desconhecida e rejeitada.
 
-Foram executados 20 repeticoes por caso em WARP Release e Debug: 320/320
-processos passaram, com evidencia normalizada deterministica entre repeticoes e
-configuracoes.
+### Workload owned
 
-### Interferencia sustentada
+`readback-elision-lab` cria um buffer de origem de 4 MiB e um staging legivel.
+Cada processo executa uma copia/map necessaria e 64 repeticoes inalteradas.
 
-O comando `sustained-copy-lab` cria buffers owned de 4 MiB, executa uma copia
-necessaria e 128 repeticoes sem alteracao. Baseline e optimized rodam em
-processos separados, com ordem alternada.
+- baseline: 65 readback copies encaminhadas, 65 maps;
+- optimized: 1 readback copy encaminhada, 64 puladas, 65 maps;
+- economia logica por run otimizado: 268.435.456 bytes;
+- todos os 4 MiB sao comparados depois de cada map;
+- expected, first-map, final-map, source e destination hashes devem coincidir;
+- snapshot, eventos, policy e rollback devem coincidir sem perda.
 
-No budget padrao de 128:
+### Transporte e observabilidade
 
-- baseline observa/encaminha 135 `CopyResource`;
-- optimized observa 135, encaminha 7 e elimina 128;
-- 536.870.912 bytes logicos deixam de ser copiados por run otimizado;
-- hashes FNV-1a de origem/destino continuam identicos;
-- conteudo legado, subresource, eventos, snapshot e rollback continuam exatos;
-- nenhum evento foi perdido e nenhum overrun ocorreu.
+O novo `MapRead` levou a carga acima do ring antigo. O primeiro baseline
+registrou 18 overruns e falhou corretamente. O ring ABI 7 foi ampliado para
+2.048 eventos e o gate continua exigindo zero overrun e zero sequencia perdida.
 
-### Evidencia de performance
+## 5. Evidencia local
 
-RX 580, 1 warmup + 10 pares medidos:
+Validacao concluida:
 
-- GPU wins: 10/10;
-- GPU p50: 21.487,600 us -> 314,960 us;
-- GPU p95: 27.472,856 us -> 356,784 us;
-- CPU p50: 8.322,450 us -> 8.477,450 us;
-- CPU paired p95 delta: +885,810 us.
+- managed tests: 68/68;
+- CTests Release: 7/7;
+- CTests Debug: 7/7;
+- matriz negativa Release/Debug: 320/320;
+- WARP readback: 4/4 raw runs, claim bloqueado;
+- RX 580 readback: 22/22 raw runs, 1 warmup + 10 pares medidos.
 
-O gate positivo passou somente para:
+AMD Radeon RX 580 2048SP:
 
-`owned-d3d11-sustained-copy-elision-gpu-workload-only`
+| Metrica | Baseline p50 | Optimized p50 | Baseline p95 | Optimized p95 |
+| --- | ---: | ---: | ---: | ---: |
+| CPU workload | 544.800,350 us | 421.077,150 us | 575.244,930 us | 442.802,645 us |
+| GPU timestamp interval | 528.879,480 us | 406.132,160 us | 558.646,270 us | 427.418,994 us |
 
-A regressao pequena de CPU fica registrada. Nao extrapolar para FPS, frame time,
-jogo externo, potencia, RAM/VRAM ou eficiencia geral.
+CPU wins: 10/10. GPU valid pairs/wins: 10/10. O gate passou somente para:
 
-### Estado da release
+`owned-d3d11-default-to-staging-readback-workload-only`
 
-- `main` e tag `v0.9.0` apontam para a release verificada;
-- o CI completo da branch passou no
-  [run 30214300519](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30214300519);
-- o workflow cobre managed tests, native Release/Debug, hook IPC, labs antigo e
-  managed, matriz 320/320, sustained WARP e validacao estrutural dos JSONs.
+O GPU timestamp mede o intervalo entre comandos D3D11, nao GPU busy por hardware
+counter. Nao extrapolar para PCIe, residencia fisica, FPS, energia ou jogo.
 
-## 5. ABIs e invariantes
+## 6. ABIs e invariantes
 
-- Snapshot ABI: 9
+- Snapshot ABI: 10
 - Attach-options ABI: 2
-- Ring ABI: 6
+- Ring ABI: 7
 - Control ABI: 1
 - Event size: 80 bytes
-- Ring capacity: 1024
+- Ring capacity: 2.048
 - Ring header: 64 bytes
 - Control block: 64 bytes
-- Mapping total: 82048 bytes
+- Mapping total: 163.968 bytes
 - `ControlPolicyAccepted = 15`
+- `MapRead = 16`
+- action generic copy: 1
+- action readback copy: 2
 
-Invariantes da policy:
+Invariantes:
 
 - target owned e opt-in obrigatorios;
-- attach-option skip e managed policy sao mutuamente exclusivos;
-- epoch 1 e action mask 1;
-- budget entre 1 e 128;
+- attach-option e managed policy sao mutuamente exclusivos;
+- epoch unico, action exata, budget 1..128;
 - expiracao futura e no maximo 4 segundos;
-- reserva atomica impede ultrapassar o budget;
+- reserva atomica nao ultrapassa budget;
 - policy invalida/expirada falha fechada;
 - detach desativa atuacao e restaura dispatch;
-- o modulo permanece pinado ate o processo terminar.
+- modulo permanece pinado ate o processo terminar;
+- reattach no mesmo processo e rejeitado.
 
-## 6. Como verificar
+## 7. Como verificar
 
 ```powershell
 dotnet test FluidRuntime.slnx -c Release
-dotnet build FluidRuntime.slnx -c Release
 
 cmake -S native -B native/build -A x64
 cmake --build native/build --config Release
@@ -155,40 +154,43 @@ cmake --build native/build --config Debug
 ctest --test-dir native/build -C Release --output-on-failure
 ctest --test-dir native/build -C Debug --output-on-failure
 
-dotnet run --project src/FluidRuntime -c Release -- sustained-copy-lab `
+dotnet run --project src/FluidRuntime -c Release -- readback-elision-lab `
   --target native/build/Release/fluidruntime-hook-target.exe `
   --hook native/build/Release/fluidruntime-present-hook.dll `
-  --copy-count 128 --trial-pairs 10 --warmup-pairs 1 `
+  --trial-pairs 10 --warmup-pairs 1 `
   --hold-ms 50 --gpu-timeout-ms 5000 --hardware true `
-  --out artifacts/sustained-copy-hardware.json
+  --out artifacts/readback-elision-hardware.json
 ```
 
-## 7. Evidencia
+## 8. Arquivos centrais
 
-- [v0.9.0 report](evidence/v0.9.0-sustained-copy-elision.md)
-- [policy matrix trace](evidence/traces/control-policy-matrix-v0.9.0.json)
-- [WARP trace](evidence/traces/sustained-copy-warp-v0.9.0.json)
-- [RX 580 trace](evidence/traces/sustained-copy-rx580-v0.9.0.json)
+- Native API: `native/include/fluidruntime_hook_api.h`
+- Hook: `native/src/present_hook.cpp`
+- Target: `native/src/hook_target.cpp`
+- Managed ring/policy: `src/FluidRuntime/Native/HookRingReader.cs`
+- Readback runner: `src/FluidRuntime/Runtime/ReadbackElisionLabRunner.cs`
+- Claim report: `src/FluidRuntime/Runtime/ReadbackElisionLabReport.cs`
+- CI: `.github/workflows/ci.yml`
+
+## 9. Evidencia
+
+- [v0.10.0 report](evidence/v0.10.0-readback-elision.md)
+- [RX 580 trace](evidence/traces/readback-elision-rx580-v0.10.0.json)
+- [WARP trace](evidence/traces/readback-elision-warp-v0.10.0.json)
+- [policy matrix](evidence/traces/control-policy-matrix-v0.10.0.json)
 - [architecture](architecture.md)
 - [roadmap](roadmap.md)
 
-## 8. Proximo passo recomendado
+## 10. Proximo passo recomendado
 
-Antes de qualquer external attach, ampliar a prova de proveniencia para aliases,
-shader draw/dispatch writes, fences, deferred contexts e sincronizacao. Em
-paralelo, o FluidGateway deve passar a gerar shadow policies a partir do ledger,
-sem autorizar atuacao ate os gates de identidade, regressao e rollback passarem.
+O proximo caminho de memoria e o sentido oposto, `RAM -> GPU`, ainda no target
+owned. Primeiro medir uploads via staging/dynamic/update, sincronizacao e reuse;
+depois escolher entre elisao, batching ou reuse sem prometer residencia fisica.
 
-Depois disso, a progressao segura e:
+Em paralelo, endurecer aliases, shader writes, fences, deferred contexts e
+command lists. External attach continua depois desses contratos, com allowlist,
+consentimento, modo read-only e rollback.
 
-1. observacao externa allowlisted e read-only;
-2. policy shadow em alvo autorizado;
-3. primeira atuacao externa opt-in com rollback;
-4. backend separado para CPU scheduling;
-5. backend separado para RAM/VRAM residency;
-6. D3D12 e Vulkan.
-
-Mensagem curta para o proximo agente: a v0.9.0 prova interferencia sustentada e
-ganho GPU apenas no lab D3D11 owned. Nao alargue o claim. Preserve os ABIs,
-complete proveniencia/sincronizacao e exija evidencia pareada antes de promover
-qualquer novo backend.
+Mensagem curta: v0.10 prova interferencia especifica no readback D3D11 owned,
+com ganho pareado na RX 580 e conteudo identico. Nao alargue o claim e nao chame
+`DEFAULT` de VRAM fisica nem `STAGING` de RAM fisica.

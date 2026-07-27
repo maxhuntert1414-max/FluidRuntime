@@ -6,18 +6,19 @@ namespace FluidRuntime.Native;
 public sealed class HookRingReader : IDisposable
 {
     public const uint ExpectedMagic = 0x47524C46;
-    public const uint ExpectedAbiVersion = 6;
+    public const uint ExpectedAbiVersion = 7;
     public const uint ExpectedControlMagic = 0x4C544346;
     public const uint ExpectedControlAbiVersion = 1;
     public const int RingHeaderSize = 64;
     public const int ControlBlockSize = 64;
     public const int HeaderSize = RingHeaderSize + ControlBlockSize;
     public const int ExpectedEventSize = 80;
-    public const uint ExpectedCapacity = 1024;
+    public const uint ExpectedCapacity = 2048;
     public const int ExpectedMappingSize =
         HeaderSize + (int)ExpectedCapacity * ExpectedEventSize;
     public const string MappingNamePrefix = "Local\\FluidRuntimeHook-";
     public const ulong SkipRedundantCopyResourceAction = 1;
+    public const ulong SkipRedundantReadbackCopyAction = 2;
     public const ulong MaxControlActionBudget = 128;
 
     private const int ControlPublishedEpochOffset = 72;
@@ -194,7 +195,24 @@ public sealed class HookRingReader : IDisposable
 
     public HookControlPolicy PublishCopyElisionPolicy(
         TimeSpan lifetime,
-        ulong actionBudget = 1)
+        ulong actionBudget = 1) =>
+        PublishBoundedControlPolicy(
+            lifetime,
+            actionBudget,
+            SkipRedundantCopyResourceAction);
+
+    public HookControlPolicy PublishReadbackElisionPolicy(
+        TimeSpan lifetime,
+        ulong actionBudget) =>
+        PublishBoundedControlPolicy(
+            lifetime,
+            actionBudget,
+            SkipRedundantReadbackCopyAction);
+
+    private HookControlPolicy PublishBoundedControlPolicy(
+        TimeSpan lifetime,
+        ulong actionBudget,
+        ulong actionMask)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromSeconds(4))
@@ -219,7 +237,7 @@ public sealed class HookRingReader : IDisposable
         return PublishControlPolicy(new HookControlPolicy(
             Epoch: 1,
             ExpiresAtQpc: expiresAtQpc,
-            ActionMask: SkipRedundantCopyResourceAction,
+            ActionMask: actionMask,
             ActionBudget: actionBudget));
     }
 
