@@ -24,7 +24,7 @@ public sealed class HookLabRunnerTests
     public void Deterministic_workload_accepts_only_the_first_redundant_copy_as_skipped()
     {
         var events = BuildDeterministicWorkload();
-        events[6] = events[6] with { Flags = 3 };
+        ApplyCopyElision(events);
 
         Assert.True(HookLabRunner.MatchesDeterministicWorkload(events, 1, true));
 
@@ -36,7 +36,7 @@ public sealed class HookLabRunnerTests
     public void Deterministic_workload_requires_managed_policy_acceptance_event()
     {
         var events = BuildDeterministicWorkload();
-        events[6] = events[6] with { Flags = 3 };
+        ApplyCopyElision(events);
         events.Insert(0, new HookIpcEvent(
             Sequence: 0,
             QpcTicks: 900,
@@ -200,5 +200,12 @@ public sealed class HookLabRunnerTests
         events[29] = events[29] with { RegionKey = fullRegion };
         events[30] = events[30] with { RegionKey = fullRegion };
         return events;
+    }
+
+    private static void ApplyCopyElision(List<HookIpcEvent> events)
+    {
+        events[6] = events[6] with { Generation = 1, Flags = 3 };
+        events[8] = events[8] with { Generation = 2 };
+        events[9] = events[9] with { Generation = 3 };
     }
 }
