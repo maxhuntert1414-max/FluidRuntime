@@ -54,6 +54,15 @@ public sealed record HookIpcEvent(
 
     public bool IsUploadTransfer =>
         (Type is HookEventType.CopyResource or HookEventType.MapWrite or
-            HookEventType.UnmapWrite) &&
+            HookEventType.UnmapWrite or HookEventType.UpdateSubresource) &&
         (Flags & 32) != 0;
+
+    public bool IsContentCompared =>
+        Type == HookEventType.UpdateSubresource && (Flags & 64) != 0;
+
+    public bool IsRedundantUpdateSubresourceCandidate =>
+        Type == HookEventType.UpdateSubresource && (Flags & 1) != 0;
+
+    public bool WasUpdateSubresourceSkipped =>
+        Type == HookEventType.UpdateSubresource && (Flags & 2) != 0;
 }

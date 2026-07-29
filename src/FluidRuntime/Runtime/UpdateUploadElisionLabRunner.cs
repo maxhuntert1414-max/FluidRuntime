@@ -5,23 +5,22 @@ using FluidRuntime.Native;
 
 namespace FluidRuntime.Runtime;
 
-public sealed class ReadbackElisionLabRunner
+public sealed class UpdateUploadElisionLabRunner
 {
     private const int MinimumPairsForPerformanceClaim = 10;
-    private const long TotalReadbackCopies =
-        ReadbackElisionLabOptions.RedundantCopyCount + 1L;
-    private const ulong LegacyCopyBytes = 49_152;
-    private const long LegacyCopyCount = 6;
-    private const long LegacyRedundantCopyCount = 3;
+    private const double CpuComparisonOverheadBudgetMicroseconds = 1000;
+    private const double CpuComparisonOverheadBudgetPercent = 10;
+    private const long LegacyUpdateCount = 3;
+    private const ulong LegacyUpdateBytes = 9_216;
 
-    public async Task<ReadbackElisionLabReport> RunAsync(
-        ReadbackElisionLabOptions options,
+    public async Task<UpdateUploadElisionLabReport> RunAsync(
+        UpdateUploadElisionLabOptions options,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         var targetPath = RequireFile(options.TargetPath, "Hook target executable");
         var hookPath = RequireFile(options.HookPath, "Hook DLL");
-        var trials = new List<ReadbackElisionTrialReport>();
+        var trials = new List<UpdateUploadElisionTrialReport>();
         for (var pair = 0; pair < options.WarmupPairs; ++pair)
         {
             trials.Add(await RunPairAsync(
@@ -47,8 +46,8 @@ public sealed class ReadbackElisionLabRunner
         return BuildReport(trials, options);
     }
 
-    private static async Task<ReadbackElisionTrialReport> RunPairAsync(
-        ReadbackElisionLabOptions options,
+    private static async Task<UpdateUploadElisionTrialReport> RunPairAsync(
+        UpdateUploadElisionLabOptions options,
         string targetPath,
         string hookPath,
         int pairIndex,
@@ -56,41 +55,25 @@ public sealed class ReadbackElisionLabRunner
         bool includedInStatistics,
         CancellationToken cancellationToken)
     {
-        ReadbackElisionRunReport baseline;
-        ReadbackElisionRunReport optimized;
+        UpdateUploadElisionRunReport baseline;
+        UpdateUploadElisionRunReport optimized;
         var baselineFirst = pairIndex % 2 == 0;
         if (baselineFirst)
         {
             baseline = await RunOneAsync(
-                options,
-                targetPath,
-                hookPath,
-                optimized: false,
-                cancellationToken);
+                options, targetPath, hookPath, optimized: false, cancellationToken);
             optimized = await RunOneAsync(
-                options,
-                targetPath,
-                hookPath,
-                optimized: true,
-                cancellationToken);
+                options, targetPath, hookPath, optimized: true, cancellationToken);
         }
         else
         {
             optimized = await RunOneAsync(
-                options,
-                targetPath,
-                hookPath,
-                optimized: true,
-                cancellationToken);
+                options, targetPath, hookPath, optimized: true, cancellationToken);
             baseline = await RunOneAsync(
-                options,
-                targetPath,
-                hookPath,
-                optimized: false,
-                cancellationToken);
+                options, targetPath, hookPath, optimized: false, cancellationToken);
         }
 
-        return new ReadbackElisionTrialReport(
+        return new UpdateUploadElisionTrialReport(
             pairIndex,
             phase,
             includedInStatistics,
@@ -107,8 +90,8 @@ public sealed class ReadbackElisionLabRunner
             optimized);
     }
 
-    private static async Task<ReadbackElisionRunReport> RunOneAsync(
-        ReadbackElisionLabOptions options,
+    private static async Task<UpdateUploadElisionRunReport> RunOneAsync(
+        UpdateUploadElisionLabOptions options,
         string targetPath,
         string hookPath,
         bool optimized,
@@ -130,9 +113,9 @@ public sealed class ReadbackElisionLabRunner
         startInfo.ArgumentList.Add(options.HoldMs.ToString());
         startInfo.ArgumentList.Add("--gpu-timeout-ms");
         startInfo.ArgumentList.Add(options.GpuTimeoutMs.ToString());
-        startInfo.ArgumentList.Add("--readback-copy-count");
+        startInfo.ArgumentList.Add("--update-upload-count");
         startInfo.ArgumentList.Add(
-            ReadbackElisionLabOptions.RedundantCopyCount.ToString());
+            UpdateUploadElisionLabOptions.RedundantUpdateCount.ToString());
         if (options.UseHardware)
         {
             startInfo.ArgumentList.Add("--hardware");
@@ -145,7 +128,7 @@ public sealed class ReadbackElisionLabRunner
         }
 
         using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Unable to start readback target.");
+            ?? throw new InvalidOperationException("Unable to start update-upload target.");
         try
         {
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -154,9 +137,9 @@ public sealed class ReadbackElisionLabRunner
             HookControlPolicy? policy = null;
             if (optimized)
             {
-                policy = reader.PublishReadbackElisionPolicy(
+                policy = reader.PublishUpdateSubresourceElisionPolicy(
                     TimeSpan.FromSeconds(4),
-                    ReadbackElisionLabOptions.RedundantCopyCount);
+                    UpdateUploadElisionLabOptions.RedundantUpdateCount);
                 await reader.WaitForControlAcknowledgmentAsync(
                     policy.Epoch,
                     TimeSpan.FromSeconds(5),
@@ -176,7 +159,7 @@ public sealed class ReadbackElisionLabRunner
             if (process.ExitCode != 0)
             {
                 throw new InvalidOperationException(
-                    $"Readback target exited with code {process.ExitCode}: " +
+                    $"Update-upload target exited with code {process.ExitCode}: " +
                     $"{stderr.Trim()} {stdout.Trim()}");
             }
 
@@ -201,8 +184,8 @@ public sealed class ReadbackElisionLabRunner
         }
     }
 
-    private static ReadbackElisionRunReport BuildRunReport(
-        ReadbackElisionLabOptions options,
+    private static UpdateUploadElisionRunReport BuildRunReport(
+        UpdateUploadElisionLabOptions options,
         bool optimized,
         int processId,
         HookControlPolicy? policy,
@@ -214,71 +197,62 @@ public sealed class ReadbackElisionLabRunner
         var resources = report.GetProperty("resources");
         var timing = report.GetProperty("timing");
         var adapter = report.GetProperty("adapter");
-        var copyEvents = events
-            .Where(item => item.Type == HookEventType.CopyResource)
-            .ToArray();
-        var readbackCopyEvents = copyEvents
-            .Where(item => item.IsReadbackTransfer)
-            .ToArray();
-        var redundantReadbackEvents = readbackCopyEvents
-            .Where(item => item.IsRedundantCopyCandidate)
-            .ToArray();
-        var mapEvents = events
-            .Where(item => item.Type == HookEventType.MapRead)
-            .ToArray();
-        var skippedEvents = readbackCopyEvents
-            .Where(item => item.WasCopySkipped)
-            .ToArray();
-        var acceptedEvents = events
-            .Where(item => item.Type == HookEventType.ControlPolicyAccepted)
-            .ToArray();
-        var expectedSkippedCopies = optimized
-            ? ReadbackElisionLabOptions.RedundantCopyCount
+        var directEvents = events.Where(item =>
+            item.Type == HookEventType.UpdateSubresource &&
+            item.IsUploadTransfer &&
+            item.IsContentCompared).ToArray();
+        var candidateEvents = directEvents.Where(item =>
+            item.IsRedundantUpdateSubresourceCandidate).ToArray();
+        var skippedEvents = directEvents.Where(item =>
+            item.WasUpdateSubresourceSkipped).ToArray();
+        var acceptedEvents = events.Where(item =>
+            item.Type == HookEventType.ControlPolicyAccepted).ToArray();
+        var initialHash = report.GetProperty("update_upload_initial_hash").GetString() ?? "";
+        var finalHash = report.GetProperty("update_upload_final_hash").GetString() ?? "";
+        var guardHash = report.GetProperty("update_upload_guard_hash").GetString() ?? "";
+        var destinationHash = report
+            .GetProperty("update_upload_destination_buffer_hash")
+            .GetString() ?? "";
+        var expectedSkipped = optimized
+            ? UpdateUploadElisionLabOptions.RedundantUpdateCount
             : 0L;
-        var expectedSkippedBytes = (ulong)expectedSkippedCopies *
-            ReadbackElisionLabOptions.ReadbackBufferBytes;
-        var totalReadbackBytes = (ulong)TotalReadbackCopies *
-            ReadbackElisionLabOptions.ReadbackBufferBytes;
-        var totalCopyCount = LegacyCopyCount + TotalReadbackCopies;
-        var totalCopyBytes = LegacyCopyBytes + totalReadbackBytes;
-        var expectedForwardedCopies = totalCopyCount - expectedSkippedCopies;
-        var expectedForwardedBytes = totalCopyBytes - expectedSkippedBytes;
+        var expectedForwarded = LegacyUpdateCount +
+            UpdateUploadElisionLabOptions.TotalUpdateCount - expectedSkipped;
+        var expectedForwardedBytes = LegacyUpdateBytes +
+            (ulong)(UpdateUploadElisionLabOptions.TotalUpdateCount - expectedSkipped) *
+                UpdateUploadElisionLabOptions.BufferBytes;
         var expectedStatus = optimized
             ? HookControlPolicyStatus.Exhausted
             : HookControlPolicyStatus.None;
-        var expectedPolicyEpoch = optimized ? 1L : 0L;
-        var sequencesMatch = events
-            .Select((item, index) => item.Sequence == index)
-            .All(value => value);
-        var expectedHash = report.GetProperty("readback_expected_hash").GetString() ?? "";
-        var firstMapHash = report.GetProperty("readback_first_map_hash").GetString() ?? "";
-        var finalMapHash = report.GetProperty("readback_final_map_hash").GetString() ?? "";
-        var sourceHash = report.GetProperty("readback_source_buffer_hash").GetString() ?? "";
-        var destinationHash =
-            report.GetProperty("readback_destination_buffer_hash").GetString() ?? "";
-        var contentEquivalent =
-            report.GetProperty("content_readback_succeeded").GetBoolean() &&
-            report.GetProperty("readback_all_maps_succeeded").GetBoolean() &&
-            report.GetProperty("readback_all_maps_equal").GetBoolean() &&
-            report.GetProperty("readback_successful_map_count").GetInt64() ==
-                TotalReadbackCopies &&
-            report.GetProperty("readback_buffer_contents_equal").GetBoolean() &&
-            report.GetProperty("buffer_contents_equal").GetBoolean() &&
-            report.GetProperty("texture_contents_equal").GetBoolean() &&
-            report.GetProperty("subresource_contents_equal").GetBoolean() &&
-            expectedHash != "0000000000000000" &&
-            expectedHash == firstMapHash &&
-            expectedHash == finalMapHash &&
-            expectedHash == sourceHash &&
-            expectedHash == destinationHash;
+        var expectedEpoch = optimized ? 1L : 0L;
+        var sequencesMatch = events.Select((item, index) =>
+            item.Sequence == index).All(value => value);
+        var eventPatternMatches = DirectEventPatternMatches(
+            directEvents,
+            optimized,
+            initialHash,
+            finalHash);
         var acceptedEventMatches = acceptedEvents.Length == (optimized ? 1 : 0) &&
             (!optimized ||
                 (acceptedEvents[0].Sequence == 0 &&
                  acceptedEvents[0].ResourceA == 1 &&
                  acceptedEvents[0].ResourceB ==
-                    HookRingReader.SkipRedundantReadbackCopyAction &&
+                    HookRingReader.SkipRedundantUpdateSubresourceAction &&
                  acceptedEvents[0].SizeBytes ==
-                    ReadbackElisionLabOptions.RedundantCopyCount));
+                    UpdateUploadElisionLabOptions.RedundantUpdateCount));
+        var contentEquivalent =
+            report.GetProperty("update_upload_mutation_applied").GetBoolean() &&
+            report.GetProperty("update_upload_generation_guard_applied").GetBoolean() &&
+            report.GetProperty("update_upload_contents_equal").GetBoolean() &&
+            initialHash.Length == 16 &&
+            finalHash.Length == 16 &&
+            guardHash.Length == 16 &&
+            initialHash != finalHash &&
+            guardHash != finalHash &&
+            finalHash == destinationHash;
+
+        var totalDirectBytes = (ulong)UpdateUploadElisionLabOptions.TotalUpdateCount *
+            UpdateUploadElisionLabOptions.BufferBytes;
         var valid =
             report.GetProperty("mode").GetString() ==
                 "fluidruntime-resource-hook-lab-v0.12.0" &&
@@ -286,125 +260,97 @@ public sealed class ReadbackElisionLabRunner
             !report.GetProperty("remote_injection").GetBoolean() &&
             report.GetProperty("render_driver").GetString() ==
                 (options.UseHardware ? "hardware" : "warp") &&
-            report.GetProperty("readback_scope").GetString() ==
-                "owned-d3d11-default-to-readable-staging-buffer" &&
-            report.GetProperty("readback_copy_count").GetInt32() ==
-                ReadbackElisionLabOptions.RedundantCopyCount &&
-            report.GetProperty("readback_buffer_bytes").GetInt32() ==
-                ReadbackElisionLabOptions.ReadbackBufferBytes &&
-            report.GetProperty("readback_logical_copy_bytes").GetUInt64() ==
-                totalReadbackBytes &&
+            report.GetProperty("update_upload_scope").GetString() ==
+                "owned-d3d11-default-buffer-full-update-subresource-exact-content" &&
+            report.GetProperty("update_upload_count").GetInt32() ==
+                UpdateUploadElisionLabOptions.RedundantUpdateCount &&
+            report.GetProperty("update_upload_call_count").GetInt32() ==
+                UpdateUploadElisionLabOptions.TotalUpdateCount &&
+            report.GetProperty("update_upload_buffer_bytes").GetInt32() ==
+                UpdateUploadElisionLabOptions.BufferBytes &&
+            report.GetProperty("update_upload_logical_bytes").GetUInt64() ==
+                totalDirectBytes &&
             report.GetProperty("optimization_requested").GetBoolean() == optimized &&
-            report.GetProperty("would_skip_copies").GetBoolean() == optimized &&
+            report.GetProperty("would_skip_updates").GetBoolean() == optimized &&
+            !report.GetProperty("would_skip_copies").GetBoolean() &&
             report.GetProperty("optimization_kind").GetString() ==
                 (optimized
-                    ? "managed-policy-skip-redundant-readback-copy"
+                    ? "managed-policy-skip-redundant-update-subresource"
                     : "none") &&
-            report.GetProperty("control_policy_requested").GetBoolean() == optimized &&
-            report.GetProperty("control_policy_wait_hresult").GetString() ==
-                (optimized ? "0x00000000" : "0x00000001") &&
-            report.GetProperty("resource_metrics_matched").GetBoolean() &&
+            report.GetProperty("max_skipped_update_count").GetInt64() ==
+                expectedSkipped &&
             report.GetProperty("original_pointer_restored").GetBoolean() &&
-            resources.GetProperty("map_read_count").GetInt64() == TotalReadbackCopies &&
-            resources.GetProperty("map_read_bytes_estimated").GetUInt64() ==
-                totalReadbackBytes &&
-            resources.GetProperty("copy_resource_count").GetInt64() == totalCopyCount &&
-            resources.GetProperty("copy_resource_bytes_estimated").GetUInt64() ==
-                totalCopyBytes &&
-            resources.GetProperty("redundant_copy_candidate_count").GetInt64() ==
-                LegacyRedundantCopyCount +
-                    ReadbackElisionLabOptions.RedundantCopyCount &&
-            resources.GetProperty("readback_copy_count").GetInt64() ==
-                TotalReadbackCopies &&
-            resources.GetProperty("readback_copy_bytes_estimated").GetUInt64() ==
-                totalReadbackBytes &&
-            resources.GetProperty("skipped_readback_copy_count").GetInt64() ==
-                expectedSkippedCopies &&
-            resources.GetProperty("skipped_readback_copy_bytes_estimated").GetUInt64() ==
-                expectedSkippedBytes &&
-            resources.GetProperty("skipped_copy_count").GetInt64() ==
-                expectedSkippedCopies &&
-            resources.GetProperty("skipped_copy_bytes_estimated").GetUInt64() ==
-                expectedSkippedBytes &&
-            resources.GetProperty("forwarded_copy_count").GetInt64() ==
-                expectedForwardedCopies &&
-            resources.GetProperty("forwarded_copy_bytes_estimated").GetUInt64() ==
+            report.GetProperty("detach_hresult").GetString() == "0x00000000" &&
+            report.GetProperty("resource_metrics_matched").GetBoolean() &&
+            resources.GetProperty("update_subresource_count").GetInt64() ==
+                LegacyUpdateCount + UpdateUploadElisionLabOptions.TotalUpdateCount &&
+            resources.GetProperty("tracked_update_subresource_count").GetInt64() ==
+                UpdateUploadElisionLabOptions.TotalUpdateCount &&
+            resources.GetProperty(
+                "redundant_update_subresource_candidate_count").GetInt64() ==
+                UpdateUploadElisionLabOptions.RedundantUpdateCount &&
+            resources.GetProperty("forwarded_update_subresource_count").GetInt64() ==
+                expectedForwarded &&
+            resources.GetProperty(
+                "forwarded_update_subresource_bytes_estimated").GetUInt64() ==
                 expectedForwardedBytes &&
-            resources.GetProperty("control_policy_enabled").GetInt64() ==
-                (optimized ? 1 : 0) &&
-            resources.GetProperty("control_policy_epoch").GetInt64() ==
-                expectedPolicyEpoch &&
-            resources.GetProperty("control_policy_acknowledged_epoch").GetInt64() ==
-                expectedPolicyEpoch &&
+            resources.GetProperty("skipped_update_subresource_count").GetInt64() ==
+                expectedSkipped &&
+            resources.GetProperty(
+                "skipped_update_subresource_bytes_estimated").GetUInt64() ==
+                (ulong)expectedSkipped * UpdateUploadElisionLabOptions.BufferBytes &&
+            resources.GetProperty("update_content_cache_resource_count").GetInt64() == 1 &&
+            resources.GetProperty("update_content_cache_bytes").GetUInt64() ==
+                UpdateUploadElisionLabOptions.BufferBytes &&
             resources.GetProperty("control_policy_applied_action_count").GetInt64() ==
-                expectedSkippedCopies &&
-            resources.GetProperty("control_policy_rejected_count").GetInt64() == 0 &&
-            resources.GetProperty("control_policy_status").GetInt64() ==
-                (long)expectedStatus &&
+                expectedSkipped &&
             resources.GetProperty("provenance_failure_count").GetInt64() == 0 &&
-            resources.GetProperty("release_hook_failure_count").GetInt64() == 0 &&
             resources.GetProperty("ipc_overrun_count").GetInt64() == 0 &&
-            copyEvents.LongLength == totalCopyCount &&
-            copyEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes) ==
-                totalCopyBytes &&
-            readbackCopyEvents.LongLength == TotalReadbackCopies &&
-            readbackCopyEvents.All(item =>
-                item.SizeBytes == ReadbackElisionLabOptions.ReadbackBufferBytes) &&
-            redundantReadbackEvents.LongLength ==
-                ReadbackElisionLabOptions.RedundantCopyCount &&
-            mapEvents.LongLength == TotalReadbackCopies &&
-            mapEvents.All(item =>
-                item.IsReadbackTransfer &&
-                item.SizeBytes == ReadbackElisionLabOptions.ReadbackBufferBytes) &&
-            skippedEvents.LongLength == expectedSkippedCopies &&
-            skippedEvents.Aggregate(0UL, (sum, item) => sum + item.SizeBytes) ==
-                expectedSkippedBytes &&
+            directEvents.Length == UpdateUploadElisionLabOptions.TotalUpdateCount &&
+            candidateEvents.Length == UpdateUploadElisionLabOptions.RedundantUpdateCount &&
+            skippedEvents.LongLength == expectedSkipped &&
             acceptedEventMatches &&
+            eventPatternMatches &&
             sequencesMatch &&
-            events.Count == resources.GetProperty("ipc_event_count").GetInt64() &&
             reader.LostSequenceCount == 0 &&
             reader.NativeOverrunCount == 0 &&
-            control.PublishedEpoch == expectedPolicyEpoch &&
-            control.AcknowledgedEpoch == expectedPolicyEpoch &&
-            control.AppliedActionCount == expectedSkippedCopies &&
+            control.PublishedEpoch == expectedEpoch &&
+            control.AcknowledgedEpoch == expectedEpoch &&
+            control.AppliedActionCount == expectedSkipped &&
             control.Status == expectedStatus &&
             (!optimized ||
                 (policy is not null &&
-                 policy.ActionMask == HookRingReader.SkipRedundantReadbackCopyAction &&
+                 policy.ActionMask ==
+                    HookRingReader.SkipRedundantUpdateSubresourceAction &&
                  policy.ActionBudget ==
-                    ReadbackElisionLabOptions.RedundantCopyCount)) &&
+                    UpdateUploadElisionLabOptions.RedundantUpdateCount)) &&
             contentEquivalent;
         if (!valid)
         {
             throw new InvalidDataException(
-                $"Readback {(optimized ? "optimized" : "baseline")} run " +
+                $"Update-upload {(optimized ? "optimized" : "baseline")} run " +
                 "violated the native/managed evidence contract.");
         }
 
         var qpcFrequency = timing.GetProperty("qpc_frequency").GetUInt64();
-        if (qpcFrequency == 0)
-        {
-            throw new InvalidDataException("Target reported a zero QPC frequency.");
-        }
         var cpuMicroseconds = Math.Round(
             timing.GetProperty("workload_qpc_ticks").GetUInt64() *
                 1_000_000d / qpcFrequency,
             3);
         double? gpuMicroseconds = null;
-        if (timing.GetProperty("gpu_timing_valid").GetBoolean())
+        if (timing.GetProperty("gpu_timing_valid").GetBoolean() &&
+            !timing.GetProperty("gpu_timing_disjoint").GetBoolean() &&
+            !timing.GetProperty("gpu_query_timed_out").GetBoolean() &&
+            timing.GetProperty("gpu_frequency").GetUInt64() is var gpuFrequency &&
+            gpuFrequency != 0)
         {
-            var gpuFrequency = timing.GetProperty("gpu_frequency").GetUInt64();
-            if (gpuFrequency == 0)
-            {
-                throw new InvalidDataException("Valid GPU timing had zero frequency.");
-            }
             gpuMicroseconds = Math.Round(
                 timing.GetProperty("gpu_workload_ticks").GetUInt64() *
                     1_000_000d / gpuFrequency,
                 3);
         }
 
-        return new ReadbackElisionRunReport(
+        return new UpdateUploadElisionRunReport(
             optimized,
             processId,
             reader.AbiVersion,
@@ -417,33 +363,83 @@ public sealed class ReadbackElisionLabRunner
             events.Count,
             reader.LostSequenceCount,
             reader.NativeOverrunCount,
-            TotalReadbackCopies,
-            totalReadbackBytes,
-            TotalReadbackCopies,
-            totalReadbackBytes,
-            expectedForwardedCopies,
+            UpdateUploadElisionLabOptions.TotalUpdateCount,
+            totalDirectBytes,
+            UpdateUploadElisionLabOptions.RedundantUpdateCount,
+            (ulong)UpdateUploadElisionLabOptions.RedundantUpdateCount *
+                UpdateUploadElisionLabOptions.BufferBytes,
+            expectedForwarded,
             expectedForwardedBytes,
-            expectedSkippedCopies,
-            expectedSkippedBytes,
+            expectedSkipped,
+            (ulong)expectedSkipped * UpdateUploadElisionLabOptions.BufferBytes,
+            1,
+            UpdateUploadElisionLabOptions.BufferBytes,
             control.PublishedEpoch,
             control.AcknowledgedEpoch,
             control.AppliedActionCount,
             control.Status.ToString().ToLowerInvariant(),
+            MutationApplied: true,
+            GenerationGuardApplied: true,
             contentEquivalent,
             RollbackRestored: true,
-            expectedHash,
-            firstMapHash,
-            finalMapHash,
-            sourceHash,
+            initialHash,
+            finalHash,
+            guardHash,
             destinationHash,
             cpuMicroseconds,
             gpuMicroseconds,
             report);
     }
 
-    internal static ReadbackElisionLabReport BuildReport(
-        IReadOnlyList<ReadbackElisionTrialReport> trials,
-        ReadbackElisionLabOptions options)
+    private static bool DirectEventPatternMatches(
+        IReadOnlyList<HookIpcEvent> events,
+        bool optimized,
+        string initialHash,
+        string finalHash)
+    {
+        if (!ulong.TryParse(initialHash, System.Globalization.NumberStyles.HexNumber, null,
+                out var initialKey) ||
+            !ulong.TryParse(finalHash, System.Globalization.NumberStyles.HexNumber, null,
+                out var finalKey) ||
+            events.Count != UpdateUploadElisionLabOptions.TotalUpdateCount)
+        {
+            return false;
+        }
+
+        var split = 1 + UpdateUploadElisionLabOptions.RedundantUpdateCount / 2;
+        var generationGuardIndex = split + 1 +
+            UpdateUploadElisionLabOptions.RedundantUpdateCount / 4;
+        for (var index = 0; index < events.Count; ++index)
+        {
+            var item = events[index];
+            var required = index == 0 || index == split ||
+                index == generationGuardIndex;
+            var expectedKey = index < split ? initialKey : finalKey;
+            var expectedGeneration = optimized
+                ? (index < split
+                    ? 1UL
+                    : (index < generationGuardIndex ? 2UL : 4UL))
+                : (ulong)index + (index < generationGuardIndex ? 1UL : 2UL);
+            if (item.ResourceA != events[0].ResourceA ||
+                item.ResourceA == 0 ||
+                item.ResourceB != 0 ||
+                item.SubresourceA != 0 ||
+                item.SubresourceB != 0 ||
+                item.SizeBytes != UpdateUploadElisionLabOptions.BufferBytes ||
+                item.RegionKey != expectedKey ||
+                item.Generation != expectedGeneration ||
+                item.IsRedundantUpdateSubresourceCandidate == required ||
+                item.WasUpdateSubresourceSkipped != (optimized && !required))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    internal static UpdateUploadElisionLabReport BuildReport(
+        IReadOnlyList<UpdateUploadElisionTrialReport> trials,
+        UpdateUploadElisionLabOptions options)
     {
         var included = trials.Where(item => item.IncludedInStatistics).ToArray();
         var warmups = trials.Where(item => !item.IncludedInStatistics).ToArray();
@@ -467,17 +463,20 @@ public sealed class ReadbackElisionLabRunner
             trials.Any(item =>
                 !item.ContentEquivalent ||
                 !item.RollbackRestoredInBothRuns ||
-                item.Optimized.SkippedReadbackCopyCount !=
-                    ReadbackElisionLabOptions.RedundantCopyCount ||
-                item.Baseline.SkippedReadbackCopyCount != 0 ||
-                item.Optimized.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
+                !item.Baseline.MutationApplied ||
+                !item.Optimized.MutationApplied ||
+                !item.Baseline.GenerationGuardApplied ||
+                !item.Optimized.GenerationGuardApplied ||
+                item.Baseline.SkippedUpdateSubresourceCount != 0 ||
+                item.Optimized.SkippedUpdateSubresourceCount !=
+                    UpdateUploadElisionLabOptions.RedundantUpdateCount ||
                 item.Baseline.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
-                item.Optimized.RingCapacity != HookRingReader.ExpectedCapacity ||
+                item.Optimized.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
                 item.Baseline.RingCapacity != HookRingReader.ExpectedCapacity ||
-                item.Optimized.ReadMapCount != TotalReadbackCopies ||
-                item.Baseline.ReadMapCount != TotalReadbackCopies))
+                item.Optimized.RingCapacity != HookRingReader.ExpectedCapacity))
         {
-            throw new InvalidDataException("Readback trial trace is incomplete or unsafe.");
+            throw new InvalidDataException(
+                "Update-upload trial trace is incomplete or unsafe.");
         }
 
         var cpuSummary = CopyElisionLabCommand.SummarizePairs(
@@ -491,17 +490,28 @@ public sealed class ReadbackElisionLabRunner
             : CopyElisionLabCommand.SummarizePairs(
                 gpuPairs.Select(item => item.BaselineGpuMicroseconds!.Value),
                 gpuPairs.Select(item => item.OptimizedGpuMicroseconds!.Value));
+        var cpuWithinBudgetPairCount = included.Count(item =>
+        {
+            var delta = item.OptimizedCpuMicroseconds - item.BaselineCpuMicroseconds;
+            var deltaPercent = item.BaselineCpuMicroseconds == 0
+                ? (delta <= 0 ? 0 : double.PositiveInfinity)
+                : delta * 100d / item.BaselineCpuMicroseconds;
+            return delta <= CpuComparisonOverheadBudgetMicroseconds &&
+                deltaPercent <= CpuComparisonOverheadBudgetPercent;
+        });
         var requiredWins = (int)Math.Ceiling(included.Length * 0.8);
         var blockers = new List<string>();
         if (included.Length < MinimumPairsForPerformanceClaim)
         {
             blockers.Add("insufficient-trial-pairs");
         }
-        if (cpuSummary.Delta.P50 >= 0 ||
-            cpuSummary.Delta.P95 >= 0 ||
-            cpuSummary.OptimizedLowerCount < requiredWins)
+        if (cpuWithinBudgetPairCount != included.Length ||
+            cpuSummary.Delta.P50 > CpuComparisonOverheadBudgetMicroseconds ||
+            cpuSummary.Delta.P95 > CpuComparisonOverheadBudgetMicroseconds ||
+            cpuSummary.DeltaPercent.P50 > CpuComparisonOverheadBudgetPercent ||
+            cpuSummary.DeltaPercent.P95 > CpuComparisonOverheadBudgetPercent)
         {
-            blockers.Add("cpu-improvement-not-consistent");
+            blockers.Add("cpu-content-comparison-overhead-budget-exceeded");
         }
         if (gpuPairs.Length != included.Length)
         {
@@ -525,15 +535,18 @@ public sealed class ReadbackElisionLabRunner
             blockers.Add("software-adapter-not-hardware");
         }
 
-        return new ReadbackElisionLabReport(
-            "fluidruntime-readback-elision-trace-v0.12.0",
+        return new UpdateUploadElisionLabReport(
+            "fluidruntime-update-upload-elision-trace-v0.12.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
-            ReadbackElisionLabOptions.ReadbackBufferBytes,
-            ReadbackElisionLabOptions.RedundantCopyCount,
-            (ulong)ReadbackElisionLabOptions.RedundantCopyCount *
-                ReadbackElisionLabOptions.ReadbackBufferBytes,
+            UpdateUploadElisionLabOptions.BufferBytes,
+            UpdateUploadElisionLabOptions.RequiredUpdateCount,
+            UpdateUploadElisionLabOptions.RedundantUpdateCount,
+            (ulong)UpdateUploadElisionLabOptions.RedundantUpdateCount *
+                UpdateUploadElisionLabOptions.BufferBytes,
+            ExactContentCacheResourceLimit: 1,
+            ExactContentCacheByteLimit: UpdateUploadElisionLabOptions.BufferBytes,
             options.TrialPairs,
             options.WarmupPairs,
             included.Length,
@@ -542,12 +555,18 @@ public sealed class ReadbackElisionLabRunner
             included[0].Baseline.AdapterVendorId,
             included[0].Baseline.AdapterDeviceId,
             included[0].Baseline.AdapterLuid,
+            MutationGuardPassed: true,
+            GenerationGuardPassed: true,
             ContentEquivalent: true,
             RollbackRestoredInAllRuns: true,
-            "owned-d3d11-default-to-staging-readback-workload-only",
+            "owned-d3d11-default-buffer-full-update-subresource-exact-content-workload-only",
+            "gpu-interval-improvement-with-bounded-cpu-content-comparison-overhead",
             PerformanceClaimAllowed: blockers.Count == 0,
             blockers,
             cpuSummary.OptimizedLowerCount,
+            cpuWithinBudgetPairCount,
+            CpuComparisonOverheadBudgetMicroseconds,
+            CpuComparisonOverheadBudgetPercent,
             gpuPairs.Length,
             cpuSummary,
             gpuSummary,
@@ -555,8 +574,8 @@ public sealed class ReadbackElisionLabRunner
     }
 
     private static bool SameAdapter(
-        ReadbackElisionRunReport first,
-        ReadbackElisionRunReport second) =>
+        UpdateUploadElisionRunReport first,
+        UpdateUploadElisionRunReport second) =>
         !string.IsNullOrWhiteSpace(first.AdapterLuid) &&
         first.AdapterLuid == second.AdapterLuid &&
         first.AdapterVendorId == second.AdapterVendorId &&

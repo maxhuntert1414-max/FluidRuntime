@@ -6,7 +6,7 @@ namespace FluidRuntime.Native;
 public sealed class HookRingReader : IDisposable
 {
     public const uint ExpectedMagic = 0x47524C46;
-    public const uint ExpectedAbiVersion = 8;
+    public const uint ExpectedAbiVersion = 9;
     public const uint ExpectedControlMagic = 0x4C544346;
     public const uint ExpectedControlAbiVersion = 1;
     public const int RingHeaderSize = 64;
@@ -20,6 +20,7 @@ public sealed class HookRingReader : IDisposable
     public const ulong SkipRedundantCopyResourceAction = 1;
     public const ulong SkipRedundantReadbackCopyAction = 2;
     public const ulong SkipRedundantUploadCopyAction = 4;
+    public const ulong SkipRedundantUpdateSubresourceAction = 8;
     public const ulong MaxControlActionBudget = 128;
 
     private const int ControlPublishedEpochOffset = 72;
@@ -217,6 +218,14 @@ public sealed class HookRingReader : IDisposable
             lifetime,
             actionBudget,
             SkipRedundantUploadCopyAction);
+
+    public HookControlPolicy PublishUpdateSubresourceElisionPolicy(
+        TimeSpan lifetime,
+        ulong actionBudget) =>
+        PublishBoundedControlPolicy(
+            lifetime,
+            actionBudget,
+            SkipRedundantUpdateSubresourceAction);
 
     private HookControlPolicy PublishBoundedControlPolicy(
         TimeSpan lifetime,

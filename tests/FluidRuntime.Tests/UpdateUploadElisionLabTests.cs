@@ -1,45 +1,46 @@
 using System.Text.Json;
 using FluidRuntime.Cli;
+using FluidRuntime.Native;
 using FluidRuntime.Runtime;
 
 namespace FluidRuntime.Tests;
 
-public sealed class UploadElisionLabTests
+public sealed class UpdateUploadElisionLabTests
 {
     [Fact]
-    public void Options_use_the_fixed_bounded_upload_contract()
+    public void Options_use_the_fixed_exact_content_contract()
     {
-        var options = UploadElisionLabOptions.Parse(
+        var options = UpdateUploadElisionLabOptions.Parse(
         [
-            "upload-elision-lab",
+            "update-upload-elision-lab",
             "--target", "target.exe",
             "--hook", "hook.dll",
             "--out", "report.json"
         ]);
 
-        Assert.Equal(64, UploadElisionLabOptions.RedundantCopyCount);
-        Assert.Equal(4 * 1024 * 1024, UploadElisionLabOptions.UploadBufferBytes);
+        Assert.Equal(4 * 1024 * 1024, UpdateUploadElisionLabOptions.BufferBytes);
+        Assert.Equal(3, UpdateUploadElisionLabOptions.RequiredUpdateCount);
+        Assert.Equal(64, UpdateUploadElisionLabOptions.RedundantUpdateCount);
+        Assert.Equal(67, UpdateUploadElisionLabOptions.TotalUpdateCount);
         Assert.Equal(10, options.TrialPairs);
         Assert.Equal(1, options.WarmupPairs);
-        Assert.Equal(50, options.HoldMs);
-        Assert.Equal(5000, options.GpuTimeoutMs);
         Assert.False(options.UseHardware);
     }
 
     [Fact]
     public void Options_reject_unknown_or_unpaired_values()
     {
-        Assert.Throws<ArgumentException>(() => UploadElisionLabOptions.Parse(
+        Assert.Throws<ArgumentException>(() => UpdateUploadElisionLabOptions.Parse(
         [
-            "upload-elision-lab",
+            "update-upload-elision-lab",
             "--target", "target.exe",
             "--hook", "hook.dll",
             "--out", "report.json",
-            "--copy-count", "65"
+            "--update-count", "64"
         ]));
-        Assert.Throws<ArgumentException>(() => UploadElisionLabOptions.Parse(
+        Assert.Throws<ArgumentException>(() => UpdateUploadElisionLabOptions.Parse(
         [
-            "upload-elision-lab",
+            "update-upload-elision-lab",
             "--target", "target.exe",
             "--hook", "hook.dll",
             "--out"
@@ -47,7 +48,24 @@ public sealed class UploadElisionLabTests
     }
 
     [Fact]
-    public void Report_allows_gpu_improvement_with_bounded_cpu_submission_overhead()
+    public void Event_flags_are_direction_and_operation_specific()
+    {
+        var item = new HookIpcEvent(
+            0, 1, HookEventType.UpdateSubresource, 2, 3, 0,
+            UpdateUploadElisionLabOptions.BufferBytes, 1,
+            Flags: 1 | 2 | 32 | 64,
+            RegionKey: 42);
+
+        Assert.True(item.IsUploadTransfer);
+        Assert.True(item.IsContentCompared);
+        Assert.True(item.IsRedundantUpdateSubresourceCandidate);
+        Assert.True(item.WasUpdateSubresourceSkipped);
+        Assert.False(item.IsRedundantCopyCandidate);
+        Assert.False(item.WasCopySkipped);
+    }
+
+    [Fact]
+    public void Report_allows_gpu_improvement_with_bounded_comparison_overhead()
     {
         var options = Options(useHardware: true);
         var trials = Trials(
@@ -57,19 +75,20 @@ public sealed class UploadElisionLabTests
             optimizedGpu: 100,
             driver: "hardware");
 
-        var report = UploadElisionLabRunner.BuildReport(trials, options);
+        var report = UpdateUploadElisionLabRunner.BuildReport(trials, options);
 
         Assert.True(report.PerformanceClaimAllowed);
         Assert.Empty(report.PerformanceClaimBlockers);
-        Assert.Equal(268_435_456UL, report.AvoidedUploadBytesPerOptimizedRun);
-        Assert.Equal(0, report.CpuImprovedPairCount);
-        Assert.Equal(10, report.GpuWorkload!.OptimizedLowerCount);
+        Assert.Equal(268_435_456UL, report.AvoidedUpdateBytesPerOptimizedRun);
+        Assert.True(report.MutationGuardPassed);
+        Assert.True(report.GenerationGuardPassed);
         Assert.Equal(10, report.CpuWithinBudgetPairCount);
+        Assert.Equal(10, report.GpuWorkload!.OptimizedLowerCount);
         Assert.Equal(
-            "gpu-interval-improvement-with-bounded-cpu-submission-overhead",
+            "gpu-interval-improvement-with-bounded-cpu-content-comparison-overhead",
             report.PerformanceClaimBasis);
         Assert.Equal(
-            "owned-d3d11-writable-staging-to-default-upload-copy-workload-only",
+            "owned-d3d11-default-buffer-full-update-subresource-exact-content-workload-only",
             report.ClaimScope);
     }
 
@@ -84,16 +103,16 @@ public sealed class UploadElisionLabTests
             optimizedGpu: 100,
             driver: "warp");
 
-        var report = UploadElisionLabRunner.BuildReport(trials, options);
+        var report = UpdateUploadElisionLabRunner.BuildReport(trials, options);
 
         Assert.False(report.PerformanceClaimAllowed);
         Assert.Contains(
-            "cpu-submission-overhead-budget-exceeded",
+            "cpu-content-comparison-overhead-budget-exceeded",
             report.PerformanceClaimBlockers);
         Assert.Contains("software-adapter-not-hardware", report.PerformanceClaimBlockers);
     }
 
-    private static UploadElisionLabOptions Options(bool useHardware) => new(
+    private static UpdateUploadElisionLabOptions Options(bool useHardware) => new(
         "target.exe",
         "hook.dll",
         "report.json",
@@ -103,7 +122,7 @@ public sealed class UploadElisionLabTests
         GpuTimeoutMs: 5000,
         UseHardware: useHardware);
 
-    private static IReadOnlyList<UploadElisionTrialReport> Trials(
+    private static IReadOnlyList<UpdateUploadElisionTrialReport> Trials(
         double baselineCpu,
         double optimizedCpu,
         double baselineGpu,
@@ -113,7 +132,7 @@ public sealed class UploadElisionLabTests
         {
             var baseline = Run(false, baselineCpu, baselineGpu, driver);
             var optimized = Run(true, optimizedCpu, optimizedGpu, driver);
-            return new UploadElisionTrialReport(
+            return new UpdateUploadElisionTrialReport(
                 index,
                 "measured",
                 true,
@@ -131,43 +150,48 @@ public sealed class UploadElisionLabTests
                 optimized);
         }).ToArray();
 
-    private static UploadElisionRunReport Run(
+    private static UpdateUploadElisionRunReport Run(
         bool optimized,
         double cpu,
         double gpu,
         string driver)
     {
         using var document = JsonDocument.Parse("{}");
-        return new UploadElisionRunReport(
+        return new UpdateUploadElisionRunReport(
             Optimized: optimized,
             ProcessId: 42,
-            RingAbiVersion: 9,
-            RingCapacity: 2048,
+            RingAbiVersion: HookRingReader.ExpectedAbiVersion,
+            RingCapacity: HookRingReader.ExpectedCapacity,
             RenderDriver: driver,
             AdapterDescription: "Test GPU",
             AdapterVendorId: 0x1002,
             AdapterDeviceId: 0x6FDF,
             AdapterLuid: "0000000000000001",
-            EventCount: 329,
+            EventCount: 330,
             LostSequenceCount: 0,
             NativeOverrunCount: 0,
-            UploadCopyCount: 65,
-            UploadCopyBytes: 272_629_760,
-            UploadWriteMapCount: 1,
-            UploadWriteMapBytes: 4_194_304,
-            ForwardedCopyCount: optimized ? 7 : 71,
-            ForwardedCopyBytes: optimized ? 4_243_456UL : 272_678_912UL,
-            SkippedUploadCopyCount: optimized ? 64 : 0,
-            SkippedUploadCopyBytes: optimized ? 268_435_456UL : 0,
+            DirectUploadUpdateCount: 67,
+            DirectUploadBytes: 281_018_368,
+            RedundantUpdateCandidateCount: 64,
+            RedundantUpdateCandidateBytes: 268_435_456,
+            ForwardedUpdateSubresourceCount: optimized ? 6 : 70,
+            ForwardedUpdateSubresourceBytes: optimized ? 12_592_128UL : 281_027_584UL,
+            SkippedUpdateSubresourceCount: optimized ? 64 : 0,
+            SkippedUpdateSubresourceBytes: optimized ? 268_435_456UL : 0,
+            ContentCacheResourceCount: 1,
+            ContentCacheBytes: 4_194_304,
             PublishedPolicyEpoch: optimized ? 1 : 0,
             AcknowledgedPolicyEpoch: optimized ? 1 : 0,
             AppliedPolicyActions: optimized ? 64 : 0,
             PolicyStatus: optimized ? "exhausted" : "none",
+            MutationApplied: true,
+            GenerationGuardApplied: true,
             ContentEquivalent: true,
             RollbackRestored: true,
-            ExpectedHash: "0123456789abcdef",
-            PostDetachSourceHash: "0123456789abcdef",
-            PostDetachDestinationHash: "0123456789abcdef",
+            InitialHash: "0123456789abcdef",
+            FinalHash: "fedcba9876543210",
+            GuardHash: "aaaaaaaaaaaaaaaa",
+            PostDetachDestinationHash: "fedcba9876543210",
             CpuWorkloadMicroseconds: cpu,
             GpuWorkloadMicroseconds: gpu,
             TargetReport: document.RootElement.Clone());

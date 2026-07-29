@@ -56,14 +56,19 @@ coordinate the interfaces the operating system and graphics APIs expose.
   owned upload workload, exact post-detach hashes, lock-free bounded action
   reservation, WARP/RX 580 traces, and a positive GPU-interval claim with a
   bounded CPU submission-overhead envelope.
+- **v0.12.0:** exact-content full-buffer `UpdateSubresource` classification,
+  dedicated action bit 8, attach-options ABI 3, ring ABI 9, snapshot ABI 12,
+  one-resource/4 MiB cache bounds, one-bit content mutation and external-write
+  generation guards, 67-update paired workload, WARP/RX 580 traces, and a
+  positive scoped CPU/GPU interval claim.
 
 ## Next Milestones
 
-### v0.12: Upload Provenance and Synchronization Hardening
+### v0.13: Upload Generalization and Synchronization Hardening
 
-- Extend upload evidence from one unchanged staging generation to measured
-  `UpdateSubresource`, dynamic-buffer, partial-region, reuse, and batching
-  patterns without hashing write-only application memory in the hot path.
+- Extend upload evidence to textures, pitch-aware data, partial boxes,
+  `UpdateSubresource1`, dynamic-buffer, reuse, and batching patterns without an
+  unbounded hot-path content cache.
 - Measure map/unmap, copy, fence/query, and synchronization costs before
   authorizing any new action.
 - Cover destruction through interface aliases and non-primary resource views.
@@ -75,7 +80,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Derive bounded policies from live FluidGateway evidence instead of a fixed
   lab action, with explicit regression rollback.
 
-### v0.13+: Controlled External Observation
+### v0.14+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

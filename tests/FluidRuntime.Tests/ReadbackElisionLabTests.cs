@@ -135,7 +135,7 @@ public sealed class ReadbackElisionLabTests
         return new ReadbackElisionRunReport(
             Optimized: optimized,
             ProcessId: 42,
-            RingAbiVersion: 8,
+            RingAbiVersion: 9,
             RingCapacity: 2048,
             RenderDriver: driver,
             AdapterDescription: "Test GPU",

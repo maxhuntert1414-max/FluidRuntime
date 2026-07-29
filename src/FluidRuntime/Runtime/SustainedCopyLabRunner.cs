@@ -266,7 +266,7 @@ public sealed class SustainedCopyLabRunner
         var expectedPolicyEpoch = optimized ? 1L : 0L;
         var valid =
             report.GetProperty("mode").GetString() ==
-                "fluidruntime-resource-hook-lab-v0.11.0" &&
+                "fluidruntime-resource-hook-lab-v0.12.0" &&
             report.GetProperty("target_owned").GetBoolean() &&
             !report.GetProperty("remote_injection").GetBoolean() &&
             report.GetProperty("render_driver").GetString() ==
@@ -466,7 +466,7 @@ public sealed class SustainedCopyLabRunner
         }
 
         return new SustainedCopyLabReport(
-            "fluidruntime-sustained-copy-elision-trace-v0.11.0",
+            "fluidruntime-sustained-copy-elision-trace-v0.12.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,

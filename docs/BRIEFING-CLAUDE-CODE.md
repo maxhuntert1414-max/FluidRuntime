@@ -1,225 +1,170 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-07-26 para o release candidate v0.11.0.
+Handoff atualizado em 2026-07-29 para o release candidate v0.12.0.
 
 ## 1. Objetivo geral
 
 Construir um runtime open source que reduza desperdicio entre CPU, GPU, RAM,
-VRAM, recursos graficos e apresentacao. A tese e:
+VRAM, buffers, texturas e apresentacao. O projeto procura evitar copias,
+sincronizacoes e trabalho redundante usando evidencia e atuacao reversivel.
 
-> O futuro da performance nao e so mais potencia. E menos desperdicio.
-
-Nao e clone de DLSS, FSR ou Lossless Scaling. Software nao transforma hardware
-discreto em memoria fisicamente unificada, mas pode observar as APIs expostas,
-tomar decisoes antes, evitar trabalho redundante e reverter atuacao quando a
-evidencia falha.
+Software nao transforma uma GPU discreta em memoria unificada fisica. A meta e
+encurtar o caminho logico nas APIs disponiveis, sem vender equivalencia com
+Apple Silicon nem prometer FPS antes da prova.
 
 ## 2. Repositorios
 
-| Repo | Papel |
-| --- | --- |
-| [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway) | PresentMon, diagnostico, evidencia, policy e ledger operacional |
-| [FluidRuntime](https://github.com/maxhuntert1414-max/FluidRuntime) | Telemetria Windows/GPU, hook D3D11 cooperativo, control plane, atuacao owned e rollback |
+- `FluidGateway`: analise offline de PresentMon, diagnosticos, ranking, policy
+  modeling e operational ledger.
+- `FluidRuntime`: telemetria Windows/GPU/memoria, hook D3D11 cooperativo,
+  shared-memory IPC, control plane, workloads, atuacao e evidence gates.
 
-Fluxo atual:
+Diretorio local:
 
-```text
-PresentMon CSV
-  -> FluidGateway (achados + ledger)
-  -> FluidRuntime (.NET manager + telemetria)
-  -> shared-memory control block
-  -> native D3D11 hook (target owned com opt-in)
-```
+`C:\Users\maxhu\Documents\Trabalho\Project_FluidGateway`
 
-## 3. Nivel de operacao
+Repositorios publicos:
 
-Ja e real:
+- https://github.com/maxhuntert1414-max/FluidGateway
+- https://github.com/maxhuntert1414-max/FluidRuntime
 
-- diagnostico PresentMon offline em HTML/JSON;
-- probe read-only de processo, RAM, GPU e VRAM pelo Windows;
-- observacao cooperativa D3D11 de Present, recursos, lifecycle, maps, updates,
-  copies, subresources e RTV/UAV clears;
-- ring de memoria compartilhada com validacao nativa/managed e perda zero;
-- policy managed de um epoch, uma action exata e budget de 1..128;
-- elisao reversivel de `CopyResource` redundante no lab owned;
-- elisao dedicada de readback `DEFAULT -> STAGING + CPU_READ` no lab owned;
-- elisao dedicada de upload `STAGING + CPU_WRITE -> DEFAULT` no lab owned;
+## 3. Nivel operacional atual
+
+Real e verificado em software owned:
+
+- telemetria de processo, RAM, WDDM VRAM e GPU engines;
+- observacao de Present, recursos, Map/Unmap, updates, copies, clears e lifetime;
+- ring IPC versionado e policy managed de um epoch/uma action/budget 1..128;
+- elisao reversivel de `CopyResource` generica;
+- readback `DEFAULT -> STAGING + CPU_READ`;
+- upload `STAGING + CPU_WRITE -> DEFAULT`;
+- upload direto full-buffer por `UpdateSubresource`, com comparacao exata;
 - baseline/optimized pareado, hashes, adapter identity, timing e rollback.
 
 Ainda nao e real:
 
 - injection/attach em jogos ou processos externos;
 - scheduler de threads do Windows;
-- controle de residencia fisica RAM/VRAM;
-- upload dinamico, `UpdateSubresource`, batching ou residencia fisica;
-- atuacao no presentation path;
-- D3D12 ou Vulkan;
-- claim geral de FPS, energia ou "salvar maquina velha".
+- residencia fisica RAM/VRAM, PCIe bytes ou unified memory;
+- texturas/boxes/pitches, buffers dynamic, `UpdateSubresource1` ou batching;
+- fences, command lists, deferred contexts e todos os shader writes;
+- atuacao no presentation path, D3D12 ou Vulkan;
+- claim geral de FPS, energia ou maquinas antigas.
 
-## 4. Entregas v0.10.0 e v0.11.0
+## 4. Contrato v0.12
 
-### Contrato de readback
+Action bit 8 e exclusiva para um upload direto elegivel:
 
-O hook registra `D3D11_USAGE` e `CPUAccessFlags` apenas para recursos cuja
-criacao e lifetime foram observados. Uma copia e classificada como readback
-somente quando:
+- recurso observado na criacao e com proveniencia confiavel;
+- `D3D11_USAGE_DEFAULT`, buffer, subresource zero;
+- update completo, box nulo, row/depth pitch zero;
+- tamanho de 1..4 MiB;
+- um unico recurso retido no cache;
+- bytes exatos iguais e geracao do destino igual.
 
-- origem: `D3D11_USAGE_DEFAULT`;
-- destino: `D3D11_USAGE_STAGING`;
-- destino: `D3D11_CPU_ACCESS_READ`;
-- proveniencia de ambos continua confiavel;
-- a repeticao usa a mesma origem/geracao e o destino nao mudou.
+O target usa um buffer de 4 MiB e 67 updates diretos:
 
-Action 1 continua sendo copia generica. Action 2 e exclusiva para readback.
-Uma mask combinada ou desconhecida e rejeitada.
+1. A obrigatorio e 32 A repetidos;
+2. B com um bit alterado e 16 B repetidos;
+3. `CopyResource` externo grava C;
+4. B e reenviado obrigatoriamente e repetido mais 16 vezes.
 
-### Workload owned
+Baseline encaminha 67/67. Optimized encaminha os tres obrigatorios e pula 64.
+Com os tres updates legados, os totais nativos sao 70 forwarded no baseline e
+6 no optimized. O destino final precisa ser B, diferente de A e C.
 
-`readback-elision-lab` cria um buffer de origem de 4 MiB e um staging legivel.
-Cada processo executa uma copia/map necessaria e 64 repeticoes inalteradas.
+`memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
+apagam os bytes retidos.
 
-- baseline: 65 readback copies encaminhadas, 65 maps;
-- optimized: 1 readback copy encaminhada, 64 puladas, 65 maps;
-- economia logica por run otimizado: 268.435.456 bytes;
-- todos os 4 MiB sao comparados depois de cada map;
-- expected, first-map, final-map, source e destination hashes devem coincidir;
-- snapshot, eventos, policy e rollback devem coincidir sem perda.
+## 5. Evidencia local v0.12
 
-### Transporte e observabilidade
-
-O novo `MapRead` levou a carga acima do ring antigo. O primeiro baseline
-registrou 18 overruns e falhou corretamente. O ring ABI 7 foi ampliado para
-2.048 eventos e o gate continua exigindo zero overrun e zero sequencia perdida.
-
-### Contrato de upload v0.11
-
-Uma copia e classificada como upload somente quando:
-
-- origem: `D3D11_USAGE_STAGING` com `D3D11_CPU_ACCESS_WRITE`;
-- destino: `D3D11_USAGE_DEFAULT`;
-- ambos foram observados na criacao e continuam com proveniencia confiavel;
-- a mesma origem/geracao ja foi copiada e o destino nao mudou.
-
-O target escreve 4 MiB uma vez via `Map`/`Unmap`, encaminha uma copia
-obrigatoria e repete a copia 64 vezes. Action bit 4 e exclusiva para upload.
-Um novo `Unmap` de escrita muda a geracao da origem e obriga a proxima copia a
-ser encaminhada. Um skip nao muda geracao porque nenhum byte foi escrito.
-
-## 5. Evidencia local v0.11
-
-Validacao concluida:
-
-- managed tests: 73/73;
-- CTests Release: 8/8;
-- CTests Debug: 8/8;
+- managed tests: 79/79;
+- CTests Release: 9/9;
+- CTests Debug: 9/9;
 - matriz negativa Release/Debug: 320/320;
-- WARP upload: 4/4 raw runs, claim bloqueado;
-- RX 580 upload: 22/22 raw runs, 1 warmup + 10 pares medidos.
+- contrato exato de CI executado localmente: passou;
+- WARP: 4/4 raw runs, claim bloqueado;
+- RX 580: 22/22 raw runs, 1 warmup + 10 pares medidos;
+- smokes generic, manager, sustained, readback e staging-upload: passaram.
 
-AMD Radeon RX 580 2048SP:
+AMD Radeon RX 580 2048SP, LUID `000000000000d8c9`:
 
 | Metrica | Baseline p50 | Optimized p50 | Baseline p95 | Optimized p95 |
 | --- | ---: | ---: | ---: | ---: |
-| CPU submission QPC | 11.989,250 us | 11.987,300 us | 13.397,080 us | 12.391,395 us |
-| GPU timestamp interval | 31.883,320 us | 1.669,600 us | 32.520,304 us | 1.734,448 us |
+| CPU workload QPC | 309,334.000 us | 82,718.050 us | 333,514.890 us | 89,121.825 us |
+| GPU timestamp interval | 260,434.700 us | 2,500.480 us | 275,276.644 us | 3,213.016 us |
 
-GPU wins: 10/10. CPU wins: 6/10, com 10/10 pares dentro do envelope
-predeclarado de +1.000 us / +10%. Delta pareado GPU p50/p95: -94,814% e
--94,445%. Delta CPU p95: +377,070 us (+3,198%). O gate passou somente para:
+CPU wins: 10/10. GPU wins: 10/10. Delta pareado CPU p50/p95: -73,442%
+e -67,795%. Delta pareado GPU p50/p95: -99,046% e -98,831%.
 
-`owned-d3d11-writable-staging-to-default-upload-copy-workload-only`
+Scope aprovado:
+
+`owned-d3d11-default-buffer-full-update-subresource-exact-content-workload-only`
 
 Base do claim:
 
-`gpu-interval-improvement-with-bounded-cpu-submission-overhead`
+`gpu-interval-improvement-with-bounded-cpu-content-comparison-overhead`
 
-O GPU timestamp mede o intervalo entre comandos D3D11, nao GPU busy por hardware
-counter. Nao extrapolar para PCIe, residencia fisica, FPS, energia ou jogo; nao
-afirmar que CPU ficou mais rapida.
+## 6. Contratos ABI
 
-## 6. ABIs e invariantes
-
-- Snapshot ABI: 11
-- Attach-options ABI: 2
-- Ring ABI: 8
-- Control ABI: 1
-- Event size: 80 bytes
-- Ring capacity: 2.048
-- Ring header: 64 bytes
-- Control block: 64 bytes
-- Mapping total: 163.968 bytes
-- `ControlPolicyAccepted = 15`
-- `MapRead = 16`
-- action generic copy: 1
-- action readback copy: 2
-- action upload copy: 4
+- attach options ABI 3;
+- ring ABI 9, 2.048 slots, eventos de 80 bytes;
+- snapshot ABI 12;
+- control block ABI 1;
+- action generic copy: 1;
+- action readback copy: 2;
+- action staging upload copy: 4;
+- action direct UpdateSubresource: 8;
+- primeiro bit desconhecido no negative matrix: 16.
 
 Invariantes:
 
-- target owned e opt-in obrigatorios;
-- attach-option e managed policy sao mutuamente exclusivos;
-- epoch unico, action exata, budget 1..128;
-- expiracao futura e no maximo 4 segundos;
-- reserva atomica nao ultrapassa budget;
-- policy invalida/expirada falha fechada;
-- detach desativa atuacao e restaura dispatch;
-- modulo permanece pinado ate o processo terminar;
-- reattach no mesmo processo e rejeitado.
+- target owned e opt-in;
+- uma action exata por epoch;
+- budget 1..128 e expiracao maxima de quatro segundos;
+- zero overrun e zero sequencia perdida;
+- conteudo, eventos, snapshot, policy, adapter e rollback precisam concordar;
+- baseline e optimized em processos separados e ordem alternada;
+- warmup fica no trace, mas fora da estatistica.
 
-## 7. Como verificar
+## 7. Comandos de verificacao
 
 ```powershell
 dotnet test FluidRuntime.slnx -c Release
-
 cmake -S native -B native/build -A x64
 cmake --build native/build --config Release
 cmake --build native/build --config Debug
 ctest --test-dir native/build -C Release --output-on-failure
 ctest --test-dir native/build -C Debug --output-on-failure
 
-dotnet run --project src/FluidRuntime -c Release -- upload-elision-lab `
+dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
   --target native/build/Release/fluidruntime-hook-target.exe `
   --hook native/build/Release/fluidruntime-present-hook.dll `
   --trial-pairs 10 --warmup-pairs 1 `
   --hold-ms 50 --gpu-timeout-ms 5000 --hardware true `
-  --out artifacts/upload-elision-hardware.json
+  --out artifacts/update-upload-elision-hardware.json
 ```
 
-## 8. Arquivos centrais
+## 8. Evidencia
 
-- Native API: `native/include/fluidruntime_hook_api.h`
-- Hook: `native/src/present_hook.cpp`
-- Target: `native/src/hook_target.cpp`
-- Managed ring/policy: `src/FluidRuntime/Native/HookRingReader.cs`
-- Upload runner: `src/FluidRuntime/Runtime/UploadElisionLabRunner.cs`
-- Claim report: `src/FluidRuntime/Runtime/UploadElisionLabReport.cs`
-- CI: `.github/workflows/ci.yml`
-
-## 9. Evidencia
-
-- [v0.11.0 report](evidence/v0.11.0-upload-elision.md)
-- [RX 580 upload trace](evidence/traces/upload-elision-rx580-v0.11.0.json)
-- [WARP upload trace](evidence/traces/upload-elision-warp-v0.11.0.json)
-- [policy matrix v0.11](evidence/traces/control-policy-matrix-v0.11.0.json)
-- [v0.10.0 report](evidence/v0.10.0-readback-elision.md)
-- [RX 580 trace](evidence/traces/readback-elision-rx580-v0.10.0.json)
-- [WARP trace](evidence/traces/readback-elision-warp-v0.10.0.json)
-- [policy matrix](evidence/traces/control-policy-matrix-v0.10.0.json)
+- [v0.12.0 report](evidence/v0.12.0-update-upload-elision.md)
+- [RX 580 trace](evidence/traces/update-upload-elision-rx580-v0.12.0.json)
+- [WARP trace](evidence/traces/update-upload-elision-warp-v0.12.0.json)
+- [policy matrix](evidence/traces/control-policy-matrix-v0.12.0.json)
 - [architecture](architecture.md)
 - [roadmap](roadmap.md)
 
-## 10. Proximo passo recomendado
+## 9. Proximo passo recomendado
 
-O proximo passo e ampliar a proveniencia do upload para `UpdateSubresource`,
-buffers dynamic, regioes parciais, reuse, batching, fences e sincronizacao. Cada
-novo padrao precisa de action separada, equivalencia e rollback; residencia
-fisica continua bloqueada.
+Generalizar upload com seguranca: texturas e pitches canonicos, boxes parciais,
+`UpdateSubresource1`, buffers dynamic, aliases, batching, fences e deferred
+contexts. O cache nao pode crescer sem limite e cada novo padrao precisa de
+equivalencia, regressao, budget, expiracao e rollback proprios.
 
-Em paralelo, endurecer aliases, shader writes, fences, deferred contexts e
-command lists. External attach continua depois desses contratos, com allowlist,
-consentimento, modo read-only e rollback.
+External observation vem depois, com allowlist, consentimento, identidade do
+executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
+qualquer atuacao.
 
-Mensagem curta: v0.11 prova interferencia especifica no upload D3D11 owned,
-com intervalo GPU menor, overhead CPU limitado e conteudo identico na RX 580.
-Nao alargue o claim e nao chame `DEFAULT` de VRAM fisica nem `STAGING` de RAM
-fisica.
+Mensagem curta: v0.12 prova interferencia especifica e reversivel em uploads
+`UpdateSubresource` owned, com bytes exatos, geracao protegida e intervalos CPU
+e GPU menores na RX 580. Nao alargue esse claim para RAM/VRAM fisica ou jogos.

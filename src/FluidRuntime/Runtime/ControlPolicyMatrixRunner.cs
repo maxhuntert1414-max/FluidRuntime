@@ -112,7 +112,7 @@ public sealed class ControlPolicyMatrixRunner
             ControlPolicyMatrixOptions.RepetitionsPerCase;
         var completedRunCount = caseReports.Sum(item => item.CompletedRunCount);
         return new ControlPolicyMatrixReport(
-            "fluidruntime-control-policy-matrix-trace-v0.11.0",
+            "fluidruntime-control-policy-matrix-trace-v0.12.0",
             TargetOwned: true,
             WarpOnly: true,
             PerformanceClaim: false,
@@ -295,7 +295,7 @@ public sealed class ControlPolicyMatrixRunner
         var passed =
             exitCode == 0 &&
             report.GetProperty("mode").GetString() ==
-                "fluidruntime-resource-hook-lab-v0.11.0" &&
+                "fluidruntime-resource-hook-lab-v0.12.0" &&
             report.GetProperty("render_driver").GetString() == "warp" &&
             report.GetProperty("control_policy_case").GetString() ==
                 policyCase.ToCliValue() &&

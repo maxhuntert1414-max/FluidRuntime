@@ -29,17 +29,18 @@ flowchart LR
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
   resource creation, retirement, pointer reuse, CPU reads/writes, updates, and
   GPU clears through owned RTV/UAV views, plus whole-resource and
-  subresource-region copies.
+  subresource-region copies. An explicit owned-lab option can retain one bounded
+  exact source image for direct-update comparison.
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
   installation, event delivery, validation, and complete rollback.
 
 ## Hook Event Transport
 
-Version 0.11.0 publishes 80-byte ABI-v8 events into a 2,048-slot named
+Version 0.12.0 publishes 80-byte ABI-v9 events into a 2,048-slot named
 shared-memory ring after a 64-byte ring header and a 64-byte ABI-v1 control
-block. ABI 8 retains `MapRead`, adds an upload-direction flag to write-map,
-unmap, and copy events, and keeps enough capacity for both 65-copy workloads
-without weakening the zero-overrun gate.
+block. ABI 9 retains directional map/copy flags and adds a content-compared flag
+for exact `UpdateSubresource` evidence. Capacity remains sufficient for the
+67-update workload without weakening the zero-overrun gate.
 The mapping is local to the Windows session and named for the target PID. The
 header, control, and event layouts are versioned independently from the report
 schema. The mapping and retained forwarding metadata stay alive until the owned
@@ -77,7 +78,8 @@ publishes status `accepted`, emits an evidence event, and acknowledges the epoch
 The accepted action mask must be exactly one known action:
 `skip_redundant_copy_resource` (bit 1) or
 `skip_redundant_readback_copy` (bit 2) or
-`skip_redundant_upload_copy` (bit 4). Version 0.11.0 accepts a bounded budget
+`skip_redundant_upload_copy` (bit 4) or
+`skip_redundant_update_subresource` (bit 8). Version 0.12.0 accepts a bounded budget
 from 1 through 128; expiration must be in the future but no more than four
 seconds away. A combined mask, second epoch, unknown bit, out-of-range
 budget, or invalid expiration is rejected. `CopyResource` consults cached native
@@ -93,8 +95,9 @@ The managed comparison still uses separate baseline and optimized processes.
 It rejects any missing acknowledgment, policy rejection, wrong event order,
 budget mismatch, lost event, content drift, lifecycle error, or rollback error.
 CPU scheduling, physical RAM/VRAM residency, and presentation actuation have no
-policy action or writable backend in this ABI. API-visible D3D11 readback and
-upload elision are separate active owned-lab lanes, not residency control.
+policy action or writable backend in this ABI. API-visible D3D11 readback,
+staging upload, and direct update elision are separate active owned-lab lanes,
+not residency control.
 
 ## Safety Boundary
 
@@ -148,6 +151,16 @@ one required upload, and issues 64 unchanged repeats. A later write `Unmap`
 advances source generation and forces the next copy to be forwarded. Snapshot
 ABI 11 exposes upload and skipped-upload counters. D3D11 still delegates
 physical placement to the runtime, driver, and memory manager.
+
+Version 0.12.0 adds attach-options ABI 3 and action bit 8. The option bounds
+retained source content to one 4 MiB resource. Only a full default buffer,
+subresource zero, null box, zero pitches, trusted creation provenance, matching
+destination generation, and exact `memcmp` can become a candidate. The first A
+upload, a one-bit A-to-B mutation, and B after an intervening C `CopyResource`
+write are all forwarded; 64 exact repeats may be skipped. Snapshot ABI 12
+reports observed, tracked, candidate, forwarded, skipped, and cache totals.
+Retirement and detach erase cached bytes. Hashes label events but do not replace
+exact comparison.
 
 The v0.6 evidence layer wraps the owned resource workload in a D3D11
 `TIMESTAMP_DISJOINT` query and start/end timestamp queries. Query polling has a
@@ -204,6 +217,9 @@ observe-only, and all regional copies remain forwarded.
   part of the resource-generation model.
 - A repeated copy is a candidate, not proof that removal is safe outside the
   deterministic owned workload.
+- Direct-update elision is limited to one full 4 MiB default buffer in the owned
+  immediate-context workload. Textures, boxes, pitches, aliases, concurrent
+  context calls, and unobserved writes are excluded.
 - The control plane supports one process-local epoch, one exact selected action
   bit, and a bounded budget of at most 128 applied actions in owned workloads.
 - The lab permits one successful hook attachment per process lifetime. Reattach

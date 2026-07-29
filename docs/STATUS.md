@@ -1,84 +1,79 @@
 # Project Status
 
-FluidRuntime v0.11.0 was verified locally and remotely on 2026-07-26.
+FluidRuntime v0.12.0 is implemented and locally verified as of 2026-07-29.
+Remote CI, merge, tag, release, and FluidGateway synchronization remain release
+gates until their GitHub state is verified.
 
-## Public Release
+## Local Release Gate
 
-- Branch/tag: `main` / `v0.11.0`
-- Runtime main validation:
-  [GitHub Actions run 30232835526](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30232835526)
-- Feature validation:
-  [GitHub Actions run 30232683504](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30232683504)
-- FluidGateway documentation: commit `5725f4f`,
-  [GitHub Actions run 30233019441](https://github.com/maxhuntert1414-max/FluidGateway/actions/runs/30233019441)
-- Managed tests: 73/73 passed.
-- Native tests: 8/8 Release and 8/8 Debug passed.
+- Managed tests: 79/79 passed.
+- Native tests: 9/9 Release and 9/9 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
-- WARP upload trace: 4/4 raw runs passed with the performance claim blocked.
-- RX 580 upload trace: 22/22 raw runs passed; scoped performance gate passed.
-- Legacy generic, sustained, and readback optimized smokes passed after the
-  shared hot-path change.
-- Release evidence and raw traces are committed with the tagged source.
+- Exact local CI evidence contract: passed.
+- WARP update-upload trace: 4/4 raw runs passed; claim blocked as intended.
+- RX 580 update-upload trace: 22/22 raw runs passed; scoped gate passed.
+- Generic, manager, sustained, readback, and staging-upload regression smokes
+  passed after ABI and hook changes.
+- Raw WARP, RX 580, and policy-matrix traces are committed with the source.
 
-## New In v0.11.0
+## New In v0.12.0
 
-- Snapshot ABI 11 and ring ABI 8 add upload classification, directional
-  map/unmap flags, and upload-specific counters.
-- Control action bit 4 is dedicated to trusted D3D11
-  `STAGING + CPU_WRITE -> DEFAULT` whole-resource repeats.
-- `upload-elision-lab` writes a 4 MiB staging source once, forwards one required
-  upload, and issues 64 unchanged repeats in separate baseline and optimized
-  processes.
-- Baselines forward all 65 uploads. Optimized runs forward one and skip exactly
-  64, avoiding 268,435,456 logical copy bytes.
-- Expected, staging-source, and default-destination hashes agree after detach.
-- Skip reservation is lock-free and budgeted; provenance proof and reservation
-  are linearized under the resource lock. Skips do not advance content
-  generation because no bytes changed.
-- The manager exposes `ram-gpu-upload` as active only in the owned lab while
+- Ring ABI 9 and snapshot ABI 12 add content-compared update events and exact
+  observed/tracked/candidate/forwarded/skipped/cache counters.
+- Attach-options ABI 3 bounds retained source content to one 4 MiB resource.
+- Control action bit 8 is dedicated to repeated full-buffer
+  `UpdateSubresource`; unknown action moved to bit 16.
+- `update-upload-elision-lab` performs 67 direct 4 MiB uploads: three required
+  and 64 redundant.
+- A one-bit A-to-B change proves content mismatch forwarding.
+- An intervening C `CopyResource` write proves generation invalidation before B
+  is re-uploaded.
+- Exact `memcmp` authorizes a candidate; FNV-1a hashes only label evidence.
+- Baseline runs forward all 67 direct updates. Optimized runs forward three and
+  skip 64, avoiding 268,435,456 logical source bytes.
+- The manager exposes `ram-gpu-direct-update` as active only in the owned lab;
   physical `ram-vram-residency` remains blocked.
 
 ## Evidence Claim
 
-The positive evidence scope is exactly:
+Positive scope:
 
-`owned-d3d11-writable-staging-to-default-upload-copy-workload-only`
+`owned-d3d11-default-buffer-full-update-subresource-exact-content-workload-only`
 
 Claim basis:
 
-`gpu-interval-improvement-with-bounded-cpu-submission-overhead`
+`gpu-interval-improvement-with-bounded-cpu-content-comparison-overhead`
 
-AMD Radeon RX 580 2048SP:
+AMD Radeon RX 580 2048SP, LUID `000000000000d8c9`:
 
 | Metric | Baseline p50 | Optimized p50 | Baseline p95 | Optimized p95 |
 | --- | ---: | ---: | ---: | ---: |
-| CPU submission QPC | 11,989.250 us | 11,987.300 us | 13,397.080 us | 12,391.395 us |
-| GPU timestamp interval | 31,883.320 us | 1,669.600 us | 32,520.304 us | 1,734.448 us |
+| CPU workload QPC | 309,334.000 us | 82,718.050 us | 333,514.890 us | 89,121.825 us |
+| GPU timestamp interval | 260,434.700 us | 2,500.480 us | 275,276.644 us | 3,213.016 us |
 
-GPU won 10/10 pairs; paired p50/p95 deltas were -94.814% and -94.445%.
-CPU won 6/10 pairs; all 10 stayed inside the predeclared +1,000 us / +10%
-submission-overhead envelope. CPU paired delta p95 was +377.070 us (+3.198%),
-so this release does not claim CPU acceleration.
+CPU and GPU each favored optimized in 10/10 measured pairs. CPU paired
+p50/p95 deltas were -73.442% and -67.795%; GPU paired p50/p95 deltas were
+-99.046% and -98.831%. Every CPU pair stayed inside the predeclared
++1,000 us / +10% regression envelope.
 
-The GPU value is a guarded timestamp interval around the owned workload, not a
-GPU-busy hardware counter. This evidence does not prove physical RAM/VRAM
-placement, PCIe bytes, FPS, power, external-game support, or general upload
-caching.
+The GPU value is a disjoint-guarded interval around the owned workload, not GPU
+busy. These measurements do not prove physical RAM/VRAM placement, PCIe bytes,
+FPS, power, texture/partial uploads, external-game support, or a general cache.
 
 ## Operating Level
 
 FluidRuntime can inspect process/GPU/memory telemetry, observe an owned D3D11
-resource pipeline, publish a bounded managed policy, and interfere reversibly
-with three proven owned-lab copy patterns: generic unchanged `CopyResource`,
-default-to-readable-staging readback, and writable-staging-to-default upload.
+resource pipeline, publish bounded managed policies, and interfere reversibly
+with four owned-lab patterns: generic `CopyResource`, default-to-staging
+readback, staging-to-default upload, and exact full-buffer `UpdateSubresource`.
 
 It still does not inject into external games, schedule OS threads, control
 physical RAM/VRAM residency, actuate presentation, or support D3D12/Vulkan.
 
 ## Read Next
 
-- [v0.11.0 evidence](evidence/v0.11.0-upload-elision.md)
+- [v0.12.0 evidence](evidence/v0.12.0-update-upload-elision.md)
 - [Architecture](architecture.md)
 - [Roadmap](roadmap.md)
 - [Full handoff](BRIEFING-CLAUDE-CODE.md)
-- [v0.10.0 evidence](evidence/v0.10.0-readback-elision.md)
+- [v0.11.0 evidence](evidence/v0.11.0-upload-elision.md)

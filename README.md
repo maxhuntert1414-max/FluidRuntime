@@ -19,11 +19,12 @@ Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.m
 [v0.9 sustained copy-elision evidence](docs/evidence/v0.9.0-sustained-copy-elision.md) |
 [v0.10 readback-elision evidence](docs/evidence/v0.10.0-readback-elision.md) |
 [v0.11 upload-elision evidence](docs/evidence/v0.11.0-upload-elision.md) |
+[v0.12 direct-update evidence](docs/evidence/v0.12.0-update-upload-elision.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.11.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.12.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -60,6 +61,14 @@ map/unmap, exact event/snapshot totals, and rollback. The RX 580 trace passed
 interval while every CPU submission pair stayed inside the declared +1 ms / +10%
 overhead envelope.
 
+Version 0.12.0 adds `update-upload-elision-lab`, the first intervention directly
+on CPU-memory input to `UpdateSubresource`. One exact 4 MiB cache entry compares
+full default-buffer uploads byte for byte. The target issues 67 direct updates:
+64 unchanged repeats and three required writes. A one-bit A-to-B mutation and an
+intervening `CopyResource` of distinct C content force separate forwards,
+proving that both bytes and destination generation participate in the decision.
+Action bit 8 skips only the 64 exact repeats and the final readback must equal B.
+
 Version 0.9.0 adds `sustained-copy-lab`. A managed policy may spend a bounded
 budget of up to 128 actions on unchanged repeats inside a 4 MiB owned buffer
 workload. With the default budget, each optimized run removes 128 redundant
@@ -77,14 +86,19 @@ at least 80% paired GPU wins are mandatory, while CPU submission must remain
 inside a predeclared overhead envelope. It does not claim CPU acceleration,
 physical RAM-to-VRAM traffic reduction, or residency control.
 
+The v0.12 direct-update gate includes exact comparison/cache CPU cost. On the
+RX 580, CPU and guarded GPU intervals improved in 10/10 measured pairs. The
+claim remains limited to the owned full-buffer workload and does not imply
+physical PCIe/VRAM traffic, game FPS, texture uploads, or external safety.
+
 Version 0.8.0 added the first managed control plane. In `manager-lab`, the .NET
 runtime opens the target's shared mapping and publishes one short-lived policy
 epoch with a one-action budget. The native hook validates and acknowledges the
-policy, then may consume it only for the same proven redundant `CopyResource`
-used by the owned experiment. The hook uses cached atomics on the API path; it
-does not call managed code per copy. The report exposes generic copy, readback,
-and upload control as active only in owned labs, while CPU scheduling and
-physical RAM/VRAM residency stay blocked and presentation stays observe-only.
+policy, then may consume it only for a proven owned-lab action. The hook uses
+cached atomics on the API path; it does not call managed code per operation. The
+report exposes generic copy, readback, staging upload, and direct-update control
+as active only in owned labs, while CPU scheduling and physical RAM/VRAM
+residency stay blocked and presentation stays observe-only.
 
 Detach is a reversible dispatch boundary, not an unsafe unload shortcut. The
 module, event mapping, original function pointers, and Release-slot metadata
@@ -292,6 +306,20 @@ dotnet run --project src/FluidRuntime -c Release -- upload-elision-lab `
   --out artifacts/upload-elision-hardware.json
 ```
 
+Run the bounded exact-content `UpdateSubresource` intervention:
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
+  --hold-ms 50 `
+  --gpu-timeout-ms 5000 `
+  --hardware true `
+  --out artifacts/update-upload-elision-hardware.json
+```
+
 Each pair contains a baseline and optimized process, and pair order alternates
 to reduce first/second-run bias. Warmups remain in the trace but are excluded
 from statistics. Baselines forward all six copies; optimized runs observe the
@@ -319,6 +347,12 @@ source has been written and unmapped. A later CPU write advances source
 generation and forces the next upload to be forwarded. Skipped copies do not
 advance content generation because no resource bytes changed.
 
+`update-upload-elision-lab` uses action bit 8 and a fixed budget of 64.
+Baseline runs forward all 67 direct updates; optimized runs forward three and
+skip 64, avoiding 268,435,456 logical source bytes. The skip proof is exact
+`memcmp`; hashes only label evidence. The cache is opt-in, one resource, and
+4 MiB. A content mutation and an unrelated API write both force forwarding.
+
 Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
 guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,
 execution order, every raw run, and explicit performance-claim blockers.
@@ -334,6 +368,6 @@ for the same returned Buffer/Texture2D interface in the owned lab; interface
 aliases, shader draw/dispatch writes, other clear operations, fences, deferred
 contexts, and general resource-view aliasing are not covered yet. Regional-copy
 candidates remain diagnostic-only. The manager currently supports one epoch,
-one selected action from three exact action bits, and a bounded budget of at most
+one selected action from four exact action bits, and a bounded budget of at most
 128 actions per owned target process. It is the control-plane foundation for
 broader scheduling and memory work, not yet a general game manager.

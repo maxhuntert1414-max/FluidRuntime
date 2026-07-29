@@ -279,7 +279,7 @@ public sealed class UploadElisionLabRunner
                     UploadElisionLabOptions.RedundantCopyCount));
         var valid =
             report.GetProperty("mode").GetString() ==
-                "fluidruntime-resource-hook-lab-v0.11.0" &&
+                "fluidruntime-resource-hook-lab-v0.12.0" &&
             report.GetProperty("target_owned").GetBoolean() &&
             !report.GetProperty("remote_injection").GetBoolean() &&
             report.GetProperty("render_driver").GetString() ==
@@ -536,7 +536,7 @@ public sealed class UploadElisionLabRunner
         }
 
         return new UploadElisionLabReport(
-            "fluidruntime-upload-elision-trace-v0.11.0",
+            "fluidruntime-upload-elision-trace-v0.12.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,

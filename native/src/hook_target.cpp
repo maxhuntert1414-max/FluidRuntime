@@ -32,11 +32,14 @@ constexpr UINT kBufferBytes = 4096;
 constexpr UINT kSustainedBufferBytes = 4 * 1024 * 1024;
 constexpr UINT kReadbackBufferBytes = 4 * 1024 * 1024;
 constexpr UINT kUploadBufferBytes = 4 * 1024 * 1024;
+constexpr UINT kUpdateUploadBufferBytes = 4 * 1024 * 1024;
 constexpr unsigned long kMaximumSustainedCopyCount =
     static_cast<unsigned long>(fluid_hook_control_max_action_budget);
 constexpr unsigned long kMaximumReadbackCopyCount =
     static_cast<unsigned long>(fluid_hook_control_max_action_budget);
 constexpr unsigned long kMaximumUploadCopyCount =
+    static_cast<unsigned long>(fluid_hook_control_max_action_budget);
+constexpr unsigned long kMaximumUpdateUploadCount =
     static_cast<unsigned long>(fluid_hook_control_max_action_budget);
 constexpr UINT kCooperativeBufferBytes = 256;
 constexpr UINT kAutomaticBufferBytes = 512;
@@ -60,6 +63,10 @@ constexpr std::uint64_t kExpectedRedundantSubresourceCopyBytes = 5 * 16 * 16 * 4
 constexpr std::uint64_t kExpectedGpuViewWriteBytes =
     (kSubresourceTextureWidth * kSubresourceTextureHeight +
         (kSubresourceTextureWidth / 2) * (kSubresourceTextureHeight / 2)) * 4;
+constexpr std::uint64_t kExpectedUpdateSubresourceBytes =
+    kBufferBytes +
+    kSubresourceTextureWidth * kSubresourceTextureHeight * 4 +
+    (kSubresourceTextureWidth / 2) * (kSubresourceTextureHeight / 2) * 4;
 constexpr std::uint64_t kExpectedResourceRetireCount = 1;
 constexpr std::uint64_t kExpectedResourceDestroyCount = kAutomaticLifetimeCycles;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
@@ -157,6 +164,7 @@ struct Options {
     unsigned long sustained_copy_count{};
     unsigned long readback_copy_count{};
     unsigned long upload_copy_count{};
+    unsigned long update_upload_count{};
     bool use_hardware{};
     bool skip_first_redundant_copy{};
     bool managed_control{};
@@ -173,6 +181,8 @@ struct WorkloadResources {
     ComPtr<ID3D11Buffer> readback_destination_buffer;
     ComPtr<ID3D11Buffer> upload_source_buffer;
     ComPtr<ID3D11Buffer> upload_destination_buffer;
+    ComPtr<ID3D11Buffer> update_upload_destination_buffer;
+    ComPtr<ID3D11Buffer> update_upload_guard_source_buffer;
     ComPtr<ID3D11Buffer> source_buffer;
     ComPtr<ID3D11Buffer> destination_buffer;
     ComPtr<ID3D11Buffer> dynamic_buffer;
@@ -189,6 +199,7 @@ struct ContentVerification {
     bool sustained_buffer_contents_equal{true};
     bool readback_buffer_contents_equal{true};
     bool upload_buffer_contents_equal{true};
+    bool update_upload_contents_equal{true};
     bool buffer_contents_equal{};
     bool texture_contents_equal{};
     bool subresource_contents_equal{};
@@ -200,6 +211,7 @@ struct ContentVerification {
     std::uint64_t readback_destination_buffer_hash{};
     std::uint64_t upload_source_buffer_hash{};
     std::uint64_t upload_destination_buffer_hash{};
+    std::uint64_t update_upload_destination_buffer_hash{};
     std::uint64_t source_texture_hash{};
     std::uint64_t destination_texture_hash{};
     std::uint64_t source_subresource_hash{};
@@ -218,6 +230,14 @@ struct ReadbackWorkloadVerification {
 struct UploadWorkloadVerification {
     bool write_map_succeeded{};
     std::uint64_t expected_hash{};
+};
+
+struct UpdateUploadWorkloadVerification {
+    bool mutation_applied{};
+    bool generation_guard_applied{};
+    std::uint64_t initial_hash{};
+    std::uint64_t final_hash{};
+    std::uint64_t guard_hash{};
 };
 
 struct TimingMetrics {
@@ -327,6 +347,13 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
                 return std::nullopt;
             }
             options.upload_copy_count = *upload_copy_count;
+        } else if (argument == L"--update-upload-count" && index + 1 < argc) {
+            const auto update_upload_count = parse_positive(argv[++index]);
+            if (!update_upload_count.has_value() ||
+                *update_upload_count > kMaximumUpdateUploadCount) {
+                return std::nullopt;
+            }
+            options.update_upload_count = *update_upload_count;
         } else if (argument == L"--hardware") {
             options.use_hardware = true;
         } else if (argument == L"--skip-first-redundant-copy") {
@@ -354,7 +381,8 @@ std::optional<Options> parse_options(int argc, wchar_t* argv[]) {
     const auto specialized_workload_count =
         (options.sustained_copy_count != 0 ? 1 : 0) +
         (options.readback_copy_count != 0 ? 1 : 0) +
-        (options.upload_copy_count != 0 ? 1 : 0);
+        (options.upload_copy_count != 0 ? 1 : 0) +
+        (options.update_upload_count != 0 ? 1 : 0);
     if (options.hook_path.empty() ||
         specialized_workload_count > 1 ||
         (specialized_workload_count != 0 &&
@@ -648,6 +676,8 @@ ContentVerification verify_workload_content(
     const auto has_upload_buffers =
         resources.upload_source_buffer.Get() != nullptr ||
         resources.upload_destination_buffer.Get() != nullptr;
+    const auto has_update_upload_buffer =
+        resources.update_upload_destination_buffer.Get() != nullptr;
     std::optional<std::vector<unsigned char>> sustained_source_buffer;
     std::optional<std::vector<unsigned char>> sustained_destination_buffer;
     if (has_sustained_buffers) {
@@ -681,6 +711,13 @@ ContentVerification verify_workload_content(
             device,
             context,
             resources.upload_destination_buffer.Get());
+    }
+    std::optional<std::vector<unsigned char>> update_upload_destination_buffer;
+    if (has_update_upload_buffer) {
+        update_upload_destination_buffer = readback_buffer(
+            device,
+            context,
+            resources.update_upload_destination_buffer.Get());
     }
     const auto source_buffer = readback_buffer(
         device,
@@ -718,6 +755,8 @@ ContentVerification verify_workload_content(
         (!has_upload_buffers ||
             (upload_source_buffer.has_value() &&
              upload_destination_buffer.has_value())) &&
+        (!has_update_upload_buffer ||
+            update_upload_destination_buffer.has_value()) &&
         source_buffer.has_value() &&
         destination_buffer.has_value() &&
         source_texture.has_value() &&
@@ -763,6 +802,12 @@ ContentVerification verify_workload_content(
             upload_destination_buffer->size());
         result.upload_buffer_contents_equal =
             *upload_source_buffer == *upload_destination_buffer;
+    }
+    if (has_update_upload_buffer) {
+        result.update_upload_destination_buffer_hash = hash_bytes(
+            kFnvOffsetBasis,
+            update_upload_destination_buffer->data(),
+            update_upload_destination_buffer->size());
     }
 
     result.source_buffer_hash = hash_bytes(
@@ -908,8 +953,10 @@ bool run_resource_workload(
     unsigned long sustained_copy_count,
     unsigned long readback_copy_count,
     unsigned long upload_copy_count,
+    unsigned long update_upload_count,
     ReadbackWorkloadVerification& readback_verification,
     UploadWorkloadVerification& upload_verification,
+    UpdateUploadWorkloadVerification& update_upload_verification,
     bool& context_vtable_pointer_stable,
     bool& context_copy_entry_stable,
     bool& context_subresource_copy_entry_stable,
@@ -1070,6 +1117,120 @@ bool run_resource_workload(
             context->CopyResource(
                 resources.upload_destination_buffer.Get(),
                 resources.upload_source_buffer.Get());
+        }
+    }
+
+    if (update_upload_count != 0) {
+        std::vector<std::uint32_t> initial_data(
+            kUpdateUploadBufferBytes / sizeof(std::uint32_t));
+        for (size_t index = 0; index < initial_data.size(); ++index) {
+            initial_data[index] =
+                0xD1200000U ^ static_cast<std::uint32_t>(index * 3266489917U);
+        }
+        auto final_data = initial_data;
+        final_data[final_data.size() / 2] ^= 0x00000001U;
+        auto guard_data = final_data;
+        for (size_t index = 0; index < guard_data.size(); ++index) {
+            guard_data[index] ^= 0x5A5A0000U;
+        }
+        update_upload_verification.mutation_applied =
+            final_data[final_data.size() / 2] !=
+                initial_data[initial_data.size() / 2];
+        update_upload_verification.initial_hash = hash_bytes(
+            kFnvOffsetBasis,
+            initial_data.data(),
+            initial_data.size() * sizeof(initial_data.front()));
+        update_upload_verification.final_hash = hash_bytes(
+            kFnvOffsetBasis,
+            final_data.data(),
+            final_data.size() * sizeof(final_data.front()));
+        update_upload_verification.guard_hash = hash_bytes(
+            kFnvOffsetBasis,
+            guard_data.data(),
+            guard_data.size() * sizeof(guard_data.front()));
+
+        D3D11_BUFFER_DESC description{};
+        description.ByteWidth = kUpdateUploadBufferBytes;
+        description.Usage = D3D11_USAGE_DEFAULT;
+        result = device->CreateBuffer(
+            &description,
+            nullptr,
+            &resources.update_upload_destination_buffer);
+        if (FAILED(result)) {
+            return false;
+        }
+        D3D11_SUBRESOURCE_DATA guard_initial_data{};
+        guard_initial_data.pSysMem = guard_data.data();
+        result = device->CreateBuffer(
+            &description,
+            &guard_initial_data,
+            &resources.update_upload_guard_source_buffer);
+        if (FAILED(result)) {
+            return false;
+        }
+
+        context->UpdateSubresource(
+            resources.update_upload_destination_buffer.Get(),
+            0,
+            nullptr,
+            initial_data.data(),
+            0,
+            0);
+        const auto initial_repeat_count = update_upload_count / 2;
+        for (unsigned long update = 0;
+             update < initial_repeat_count;
+             ++update) {
+            context->UpdateSubresource(
+                resources.update_upload_destination_buffer.Get(),
+                0,
+                nullptr,
+                initial_data.data(),
+                0,
+                0);
+        }
+
+        context->UpdateSubresource(
+            resources.update_upload_destination_buffer.Get(),
+            0,
+            nullptr,
+            final_data.data(),
+            0,
+            0);
+        const auto final_repeat_count = update_upload_count - initial_repeat_count;
+        const auto final_repeats_before_guard = final_repeat_count / 2;
+        for (unsigned long update = 0;
+             update < final_repeats_before_guard;
+             ++update) {
+            context->UpdateSubresource(
+                resources.update_upload_destination_buffer.Get(),
+                0,
+                nullptr,
+                final_data.data(),
+                0,
+                0);
+        }
+
+        context->CopyResource(
+            resources.update_upload_destination_buffer.Get(),
+            resources.update_upload_guard_source_buffer.Get());
+        update_upload_verification.generation_guard_applied = true;
+        context->UpdateSubresource(
+            resources.update_upload_destination_buffer.Get(),
+            0,
+            nullptr,
+            final_data.data(),
+            0,
+            0);
+        for (unsigned long update = final_repeats_before_guard;
+             update < final_repeat_count;
+             ++update) {
+            context->UpdateSubresource(
+                resources.update_upload_destination_buffer.Get(),
+                0,
+                nullptr,
+                final_data.data(),
+                0,
+                0);
         }
     }
 
@@ -1544,9 +1705,12 @@ bool snapshot_matches_workload(
         static_cast<std::uint64_t>(options.readback_copy_count);
     const auto upload_copy_count =
         static_cast<std::uint64_t>(options.upload_copy_count);
+    const auto update_upload_count =
+        static_cast<std::uint64_t>(options.update_upload_count);
     const auto has_sustained_workload = sustained_copy_count != 0;
     const auto has_readback_workload = readback_copy_count != 0;
     const auto has_upload_workload = upload_copy_count != 0;
+    const auto has_update_upload_workload = update_upload_count != 0;
     const auto sustained_copy_call_count = has_sustained_workload
         ? sustained_copy_count + 1
         : 0;
@@ -1556,6 +1720,9 @@ bool snapshot_matches_workload(
     const auto upload_copy_call_count = has_upload_workload
         ? upload_copy_count + 1
         : 0;
+    const auto update_upload_call_count = has_update_upload_workload
+        ? update_upload_count + 3
+        : 0;
     const auto policy_accepted = control_policy_accepted(options.control_policy_case);
     const auto policy_rejected = control_policy_rejected(options.control_policy_case);
     const auto expected_control_applied_action_count =
@@ -1564,12 +1731,20 @@ bool snapshot_matches_workload(
             ? sustained_copy_count
             : (has_readback_workload
                 ? readback_copy_count
-                : (has_upload_workload ? upload_copy_count : 1ULL)))
+                : (has_upload_workload
+                    ? upload_copy_count
+                    : (has_update_upload_workload
+                        ? update_upload_count
+                        : 1ULL))))
         : 0ULL;
-    const auto expected_skipped_count = options.skip_first_redundant_copy
+    const auto expected_skipped_copy_count = has_update_upload_workload
+        ? 0ULL
+        : (options.skip_first_redundant_copy
         ? kExpectedSkippedCopyCount
-        : expected_control_applied_action_count;
-    const auto expected_skipped_bytes = options.skip_first_redundant_copy
+        : expected_control_applied_action_count);
+    const auto expected_skipped_copy_bytes = has_update_upload_workload
+        ? 0ULL
+        : (options.skip_first_redundant_copy
         ? kExpectedSkippedCopyBytes
         : (has_sustained_workload
             ? expected_control_applied_action_count * kSustainedBufferBytes
@@ -1578,14 +1753,20 @@ bool snapshot_matches_workload(
                 : (has_upload_workload
                     ? expected_control_applied_action_count * kUploadBufferBytes
                     : expected_control_applied_action_count *
-                        kExpectedSkippedCopyBytes)));
+                        kExpectedSkippedCopyBytes))));
+    const auto expected_skipped_update_count = has_update_upload_workload
+        ? expected_control_applied_action_count
+        : 0ULL;
+    const auto expected_skipped_update_bytes =
+        expected_skipped_update_count * kUpdateUploadBufferBytes;
     const auto expected_copy_count =
         kExpectedCopyCount + sustained_copy_call_count + readback_copy_call_count +
-            upload_copy_call_count;
+            upload_copy_call_count + (has_update_upload_workload ? 1ULL : 0ULL);
     const auto expected_copy_bytes =
         kExpectedCopyBytes + sustained_copy_call_count * kSustainedBufferBytes +
             readback_copy_call_count * kReadbackBufferBytes +
-            upload_copy_call_count * kUploadBufferBytes;
+            upload_copy_call_count * kUploadBufferBytes +
+            (has_update_upload_workload ? kUpdateUploadBufferBytes : 0ULL);
     const auto expected_redundant_copy_count =
         kExpectedRedundantCopyCount + sustained_copy_count + readback_copy_count +
             upload_copy_count;
@@ -1593,6 +1774,11 @@ bool snapshot_matches_workload(
         kExpectedRedundantCopyBytes + sustained_copy_count * kSustainedBufferBytes +
             readback_copy_count * kReadbackBufferBytes +
             upload_copy_count * kUploadBufferBytes;
+    const auto expected_update_subresource_count =
+        3ULL + update_upload_call_count;
+    const auto expected_update_subresource_bytes =
+        kExpectedUpdateSubresourceBytes +
+            update_upload_call_count * kUpdateUploadBufferBytes;
     const auto expected_retire_count = options.automatic_lifetime_tracking
         ? kExpectedResourceRetireCount
         : kExpectedResourceRetireCount + kExpectedResourceDestroyCount;
@@ -1603,13 +1789,16 @@ bool snapshot_matches_workload(
         snapshot.create_buffer_count ==
             4 + kAutomaticLifetimeCycles +
                 (has_sustained_workload || has_readback_workload ||
-                    has_upload_workload ? 2 : 0) &&
+                    has_upload_workload || has_update_upload_workload
+                        ? 2
+                        : 0) &&
         snapshot.buffer_bytes_requested ==
             3 * kBufferBytes + kCooperativeBufferBytes +
                 kAutomaticLifetimeCycles * kAutomaticBufferBytes +
                 (has_sustained_workload ? 2ULL * kSustainedBufferBytes : 0ULL) +
                 (has_readback_workload ? 2ULL * kReadbackBufferBytes : 0ULL) +
-                (has_upload_workload ? 2ULL * kUploadBufferBytes : 0ULL) &&
+                (has_upload_workload ? 2ULL * kUploadBufferBytes : 0ULL) +
+                (has_update_upload_workload ? 2ULL * kUpdateUploadBufferBytes : 0ULL) &&
         snapshot.create_texture2d_count == 4 &&
         snapshot.texture_bytes_estimated ==
             2 * kTextureWidth * kTextureHeight * 4 +
@@ -1621,7 +1810,28 @@ bool snapshot_matches_workload(
             readback_copy_call_count * kReadbackBufferBytes &&
         snapshot.map_write_count == (has_upload_workload ? 2ULL : 1ULL) &&
         snapshot.unmap_write_count == (has_upload_workload ? 2ULL : 1ULL) &&
-        snapshot.update_subresource_count == 3 &&
+        snapshot.update_subresource_count == expected_update_subresource_count &&
+        snapshot.update_subresource_bytes_estimated ==
+            expected_update_subresource_bytes &&
+        snapshot.tracked_update_subresource_count == update_upload_call_count &&
+        snapshot.tracked_update_subresource_bytes_estimated ==
+            update_upload_call_count * kUpdateUploadBufferBytes &&
+        snapshot.redundant_update_subresource_candidate_count ==
+            update_upload_count &&
+        snapshot.redundant_update_subresource_bytes_estimated ==
+            update_upload_count * kUpdateUploadBufferBytes &&
+        snapshot.forwarded_update_subresource_count ==
+            expected_update_subresource_count - expected_skipped_update_count &&
+        snapshot.forwarded_update_subresource_bytes_estimated ==
+            expected_update_subresource_bytes - expected_skipped_update_bytes &&
+        snapshot.skipped_update_subresource_count ==
+            expected_skipped_update_count &&
+        snapshot.skipped_update_subresource_bytes_estimated ==
+            expected_skipped_update_bytes &&
+        snapshot.update_content_cache_resource_count ==
+            (has_update_upload_workload ? 1ULL : 0ULL) &&
+        snapshot.update_content_cache_bytes ==
+            (has_update_upload_workload ? kUpdateUploadBufferBytes : 0ULL) &&
         snapshot.copy_resource_count == expected_copy_count &&
         snapshot.copy_resource_bytes_estimated == expected_copy_bytes &&
         snapshot.redundant_copy_candidate_count == expected_redundant_copy_count &&
@@ -1646,28 +1856,31 @@ bool snapshot_matches_workload(
         snapshot.control_policy_rejected_count == (policy_rejected ? 1ULL : 0ULL) &&
         snapshot.control_policy_status == static_cast<std::uint64_t>(
             expected_control_status(options.control_policy_case)) &&
-        snapshot.forwarded_copy_count == expected_copy_count - expected_skipped_count &&
+        snapshot.forwarded_copy_count ==
+            expected_copy_count - expected_skipped_copy_count &&
         snapshot.forwarded_copy_bytes_estimated ==
-            expected_copy_bytes - expected_skipped_bytes &&
-        snapshot.skipped_copy_count == expected_skipped_count &&
-        snapshot.skipped_copy_bytes_estimated == expected_skipped_bytes &&
+            expected_copy_bytes - expected_skipped_copy_bytes &&
+        snapshot.skipped_copy_count == expected_skipped_copy_count &&
+        snapshot.skipped_copy_bytes_estimated == expected_skipped_copy_bytes &&
         snapshot.readback_copy_count == readback_copy_call_count &&
         snapshot.readback_copy_bytes_estimated ==
             readback_copy_call_count * kReadbackBufferBytes &&
         snapshot.skipped_readback_copy_count ==
-            (has_readback_workload ? expected_skipped_count : 0ULL) &&
+            (has_readback_workload ? expected_skipped_copy_count : 0ULL) &&
         snapshot.skipped_readback_copy_bytes_estimated ==
-            (has_readback_workload ? expected_skipped_bytes : 0ULL) &&
+            (has_readback_workload ? expected_skipped_copy_bytes : 0ULL) &&
         snapshot.upload_copy_count == upload_copy_call_count &&
         snapshot.upload_copy_bytes_estimated ==
             upload_copy_call_count * kUploadBufferBytes &&
         snapshot.skipped_upload_copy_count ==
-            (has_upload_workload ? expected_skipped_count : 0ULL) &&
+            (has_upload_workload ? expected_skipped_copy_count : 0ULL) &&
         snapshot.skipped_upload_copy_bytes_estimated ==
-            (has_upload_workload ? expected_skipped_bytes : 0ULL) &&
+            (has_upload_workload ? expected_skipped_copy_bytes : 0ULL) &&
         snapshot.tracked_resource_count ==
             (has_sustained_workload || has_readback_workload ||
-                has_upload_workload ? 9ULL : 7ULL) &&
+                has_upload_workload || has_update_upload_workload
+                    ? 9ULL
+                    : 7ULL) &&
         snapshot.resource_retire_count == expected_retire_count &&
         snapshot.resource_destroy_count == expected_destroy_count &&
         snapshot.resource_reuse_count <= kAutomaticLifetimeCycles &&
@@ -1686,7 +1899,8 @@ bool snapshot_matches_workload(
                 (policy_accepted ? 1 : 0) +
                 (has_sustained_workload ? sustained_copy_count + 3 : 0) +
                 (has_readback_workload ? 2 * readback_copy_count + 4 : 0) +
-                (has_upload_workload ? upload_copy_count + 5 : 0) &&
+                (has_upload_workload ? upload_copy_count + 5 : 0) +
+                (has_update_upload_workload ? update_upload_count + 6 : 0) &&
         snapshot.ipc_overrun_count == 0;
 }
 
@@ -1709,6 +1923,7 @@ std::string build_report(
     bool context_gpu_view_write_entries_stable,
     const ReadbackWorkloadVerification& readback_verification,
     const UploadWorkloadVerification& upload_verification,
+    const UpdateUploadWorkloadVerification& update_upload_verification,
     const ContentVerification& content,
     const TimingMetrics& timing,
     const AdapterIdentity& adapter) {
@@ -1720,14 +1935,21 @@ std::string build_report(
                 ? static_cast<std::uint64_t>(options.readback_copy_count)
                 : (options.upload_copy_count != 0
                     ? static_cast<std::uint64_t>(options.upload_copy_count)
-                    : 1ULL)))
+                    : (options.update_upload_count != 0
+                        ? static_cast<std::uint64_t>(options.update_upload_count)
+                        : 1ULL))))
         : 0ULL;
     const auto optimization_enabled =
         options.skip_first_redundant_copy ||
         managed_action_budget != 0;
-    const auto expected_skipped_copy_count = options.skip_first_redundant_copy
+    const auto expected_skipped_copy_count = options.update_upload_count != 0
+        ? 0ULL
+        : (options.skip_first_redundant_copy
         ? 1ULL
-        : managed_action_budget;
+        : managed_action_budget);
+    const auto expected_skipped_update_count = options.update_upload_count != 0
+        ? managed_action_budget
+        : 0ULL;
     const auto optimization_requested =
         options.skip_first_redundant_copy || options.managed_control;
     const auto optimization_kind = options.managed_control
@@ -1735,13 +1957,15 @@ std::string build_report(
             ? "managed-policy-skip-redundant-readback-copy"
             : (options.upload_copy_count != 0
                 ? "managed-policy-skip-redundant-upload-copy"
-                : "managed-policy-skip-redundant-copy-resource"))
+                : (options.update_upload_count != 0
+                    ? "managed-policy-skip-redundant-update-subresource"
+                    : "managed-policy-skip-redundant-copy-resource")))
         : (options.skip_first_redundant_copy
             ? "attach-option-skip-redundant-copy-resource"
             : "none");
     std::ostringstream output;
     output << "{\n"
-           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.11.0\",\n"
+           << "  \"mode\": \"fluidruntime-resource-hook-lab-v0.12.0\",\n"
            << "  \"target_owned\": true,\n"
            << "  \"cooperative_load\": true,\n"
            << "  \"remote_injection\": false,\n"
@@ -1749,7 +1973,15 @@ std::string build_report(
            << (optimization_enabled ? "false" : "true") << ",\n"
            << "  \"would_modify_frame_data\": false,\n"
            << "  \"would_skip_copies\": "
-           << (optimization_enabled ? "true" : "false") << ",\n"
+           << (optimization_enabled && options.update_upload_count == 0
+                ? "true"
+                : "false")
+           << ",\n"
+           << "  \"would_skip_updates\": "
+           << (optimization_enabled && options.update_upload_count != 0
+                ? "true"
+                : "false")
+           << ",\n"
            << "  \"optimization_requested\": "
            << (optimization_requested ? "true" : "false") << ",\n"
            << "  \"optimization_kind\": \"" << optimization_kind << "\",\n"
@@ -1757,6 +1989,8 @@ std::string build_report(
            << (SUCCEEDED(attach_result) ? "true" : "false") << ",\n"
            << "  \"max_skipped_copy_count\": "
            << expected_skipped_copy_count << ",\n"
+           << "  \"max_skipped_update_count\": "
+           << expected_skipped_update_count << ",\n"
            << "  \"control_plane\": "
            << (options.managed_control
                ? "\"managed-shared-memory-policy-v1\""
@@ -1785,6 +2019,8 @@ std::string build_report(
               "\"owned-d3d11-default-to-readable-staging-buffer\",\n"
            << "  \"upload_scope\": "
               "\"owned-d3d11-readable-writable-staging-to-default-buffer\",\n"
+           << "  \"update_upload_scope\": "
+              "\"owned-d3d11-default-buffer-full-update-subresource-exact-content\",\n"
            << "  \"render_driver\": \""
            << (options.use_hardware ? "hardware" : "warp") << "\",\n"
            << "  \"adapter\": {\n"
@@ -1835,6 +2071,22 @@ std::string build_report(
                     kUploadBufferBytes
                 : 0ULL)
            << ",\n"
+           << "  \"update_upload_count\": "
+           << options.update_upload_count << ",\n"
+           << "  \"update_upload_call_count\": "
+           << (options.update_upload_count != 0
+                ? static_cast<std::uint64_t>(options.update_upload_count) + 3
+                : 0ULL)
+           << ",\n"
+           << "  \"update_upload_buffer_bytes\": "
+           << (options.update_upload_count != 0 ? kUpdateUploadBufferBytes : 0)
+           << ",\n"
+           << "  \"update_upload_logical_bytes\": "
+           << (options.update_upload_count != 0
+                ? (static_cast<std::uint64_t>(options.update_upload_count) + 3) *
+                    kUpdateUploadBufferBytes
+                : 0ULL)
+           << ",\n"
            << "  \"hold_ms\": " << options.hold_ms << ",\n"
            << "  \"observed_presents\": " << snapshot.present_count << ",\n"
            << "  \"render_succeeded\": "
@@ -1874,6 +2126,21 @@ std::string build_report(
            << "  \"upload_buffer_contents_equal\": "
            << (content.upload_buffer_contents_equal ? "true" : "false")
            << ",\n"
+           << "  \"update_upload_mutation_applied\": "
+           << (update_upload_verification.mutation_applied ? "true" : "false")
+           << ",\n"
+           << "  \"update_upload_generation_guard_applied\": "
+           << (update_upload_verification.generation_guard_applied
+                ? "true"
+                : "false")
+           << ",\n"
+           << "  \"update_upload_contents_equal\": "
+           << (options.update_upload_count == 0 ||
+                    content.update_upload_destination_buffer_hash ==
+                        update_upload_verification.final_hash
+                ? "true"
+                : "false")
+           << ",\n"
            << "  \"buffer_contents_equal\": "
            << (content.buffer_contents_equal ? "true" : "false") << ",\n"
            << "  \"texture_contents_equal\": "
@@ -1901,6 +2168,14 @@ std::string build_report(
            << uint64_hex(content.upload_source_buffer_hash) << "\",\n"
            << "  \"upload_destination_buffer_hash\": \""
            << uint64_hex(content.upload_destination_buffer_hash) << "\",\n"
+           << "  \"update_upload_initial_hash\": \""
+           << uint64_hex(update_upload_verification.initial_hash) << "\",\n"
+           << "  \"update_upload_final_hash\": \""
+           << uint64_hex(update_upload_verification.final_hash) << "\",\n"
+           << "  \"update_upload_guard_hash\": \""
+           << uint64_hex(update_upload_verification.guard_hash) << "\",\n"
+           << "  \"update_upload_destination_buffer_hash\": \""
+           << uint64_hex(content.update_upload_destination_buffer_hash) << "\",\n"
            << "  \"source_buffer_hash\": \""
            << uint64_hex(content.source_buffer_hash) << "\",\n"
            << "  \"destination_buffer_hash\": \""
@@ -1942,6 +2217,28 @@ std::string build_report(
            << "    \"unmap_write_count\": " << snapshot.unmap_write_count << ",\n"
            << "    \"update_subresource_count\": "
            << snapshot.update_subresource_count << ",\n"
+           << "    \"update_subresource_bytes_estimated\": "
+           << snapshot.update_subresource_bytes_estimated << ",\n"
+           << "    \"tracked_update_subresource_count\": "
+           << snapshot.tracked_update_subresource_count << ",\n"
+           << "    \"tracked_update_subresource_bytes_estimated\": "
+           << snapshot.tracked_update_subresource_bytes_estimated << ",\n"
+           << "    \"redundant_update_subresource_candidate_count\": "
+           << snapshot.redundant_update_subresource_candidate_count << ",\n"
+           << "    \"redundant_update_subresource_bytes_estimated\": "
+           << snapshot.redundant_update_subresource_bytes_estimated << ",\n"
+           << "    \"forwarded_update_subresource_count\": "
+           << snapshot.forwarded_update_subresource_count << ",\n"
+           << "    \"forwarded_update_subresource_bytes_estimated\": "
+           << snapshot.forwarded_update_subresource_bytes_estimated << ",\n"
+           << "    \"skipped_update_subresource_count\": "
+           << snapshot.skipped_update_subresource_count << ",\n"
+           << "    \"skipped_update_subresource_bytes_estimated\": "
+           << snapshot.skipped_update_subresource_bytes_estimated << ",\n"
+           << "    \"update_content_cache_resource_count\": "
+           << snapshot.update_content_cache_resource_count << ",\n"
+           << "    \"update_content_cache_bytes\": "
+           << snapshot.update_content_cache_bytes << ",\n"
            << "    \"copy_resource_count\": " << snapshot.copy_resource_count << ",\n"
            << "    \"copy_resource_bytes_estimated\": "
            << snapshot.copy_resource_bytes_estimated << ",\n"
@@ -2037,8 +2334,9 @@ int wmain(int argc, wchar_t* argv[]) {
                       L"[--gpu-timeout-ms <milliseconds>] "
                       L"[--control-timeout-ms <milliseconds>] "
                       L"[--sustained-copy-count <count>] "
-                      L"[--readback-copy-count <count>] "
-                      L"[--upload-copy-count <count>] "
+                       L"[--readback-copy-count <count>] "
+                       L"[--upload-copy-count <count>] "
+                       L"[--update-upload-count <count>] "
                       L"[--out <report.json>] [--hardware] "
                       L"[--skip-first-redundant-copy] [--managed-control] "
                       L"[--control-policy-case <case>] "
@@ -2182,6 +2480,13 @@ int wmain(int argc, wchar_t* argv[]) {
         ? fluid_hook_attach_flag_track_resource_lifetime
         : 0;
     attach_options.max_skipped_copy_count = 0;
+    if (options->update_upload_count != 0) {
+        attach_options.flags |=
+            fluid_hook_attach_flag_track_update_subresource_content;
+        attach_options.max_tracked_update_subresource_bytes =
+            kUpdateUploadBufferBytes;
+        attach_options.max_tracked_update_subresource_resources = 1;
+    }
     if (options->skip_first_redundant_copy) {
         attach_options.flags |= fluid_hook_attach_flag_skip_first_redundant_copy;
         attach_options.max_skipped_copy_count = 1;
@@ -2242,7 +2547,7 @@ int wmain(int argc, wchar_t* argv[]) {
         std::ostringstream stress_output;
         stress_output << "{\n"
                       << "  \"mode\": "
-                         "\"fluidruntime-concurrent-lifetime-detach-v0.11.0\",\n"
+                         "\"fluidruntime-concurrent-lifetime-detach-v0.12.0\",\n"
                       << "  \"target_owned\": true,\n"
                       << "  \"automatic_lifetime_tracking\": true,\n"
                       << "  \"module_pinned_until_process_exit\": true,\n"
@@ -2299,6 +2604,7 @@ int wmain(int argc, wchar_t* argv[]) {
     WorkloadResources workload_resources;
     ReadbackWorkloadVerification readback_verification;
     UploadWorkloadVerification upload_verification;
+    UpdateUploadWorkloadVerification update_upload_verification;
     bool context_vtable_pointer_stable = false;
     bool context_copy_entry_stable = false;
     bool context_subresource_copy_entry_stable = false;
@@ -2328,8 +2634,10 @@ int wmain(int argc, wchar_t* argv[]) {
             options->sustained_copy_count,
             options->readback_copy_count,
             options->upload_copy_count,
+            options->update_upload_count,
             readback_verification,
             upload_verification,
+            update_upload_verification,
             context_vtable_pointer_stable,
             context_copy_entry_stable,
             context_subresource_copy_entry_stable,
@@ -2412,6 +2720,7 @@ int wmain(int argc, wchar_t* argv[]) {
         context_gpu_view_write_entries_stable,
         readback_verification,
         upload_verification,
+        update_upload_verification,
         content,
         timing,
         adapter_identity);
@@ -2443,6 +2752,19 @@ int wmain(int argc, wchar_t* argv[]) {
          upload_verification.expected_hash != 0 &&
          content.upload_source_buffer_hash == upload_verification.expected_hash &&
          content.upload_destination_buffer_hash == upload_verification.expected_hash);
+    const auto update_upload_workload_verified =
+        options->update_upload_count == 0 ||
+        (update_upload_verification.mutation_applied &&
+         update_upload_verification.generation_guard_applied &&
+         update_upload_verification.initial_hash != 0 &&
+         update_upload_verification.final_hash != 0 &&
+         update_upload_verification.guard_hash != 0 &&
+         update_upload_verification.initial_hash !=
+            update_upload_verification.final_hash &&
+         update_upload_verification.guard_hash !=
+            update_upload_verification.final_hash &&
+         content.update_upload_destination_buffer_hash ==
+            update_upload_verification.final_hash);
     const auto passed = render_succeeded &&
         resource_workload_succeeded &&
         resource_metrics_matched &&
@@ -2455,6 +2777,7 @@ int wmain(int argc, wchar_t* argv[]) {
         context_gpu_view_write_entries_stable &&
         readback_workload_verified &&
         upload_workload_verified &&
+        update_upload_workload_verified &&
         content.readback_succeeded &&
         content.sustained_buffer_contents_equal &&
         content.readback_buffer_contents_equal &&

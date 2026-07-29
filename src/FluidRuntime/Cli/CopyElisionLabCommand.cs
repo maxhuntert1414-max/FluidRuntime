@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FluidRuntime.Native;
 using FluidRuntime.Runtime;
 
 namespace FluidRuntime.Cli;
@@ -339,8 +340,8 @@ public static class CopyElisionLabCommand
 
         return new CopyElisionLabReport(
             Mode: managedControl
-                ? "fluidruntime-manager-control-trace-v0.11.0"
-                : "fluidruntime-copy-elision-trace-v0.11.0",
+                ? "fluidruntime-manager-control-trace-v0.12.0"
+                : "fluidruntime-copy-elision-trace-v0.12.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -406,6 +407,14 @@ public static class CopyElisionLabCommand
             ActuationEnabled: true,
             SafetyBoundary:
                 "owned D3D11 writable-staging-to-default copies; bounded action 4 only"),
+        new(
+            Lane: "ram-gpu-direct-update",
+            State: "active-owned-lab",
+            NativeBackendAvailable: true,
+            ActuationEnabled: true,
+            SafetyBoundary:
+                "owned full-buffer UpdateSubresource with exact 4 MiB content cache; " +
+                "bounded action 8 only"),
         new(
             Lane: "ram-vram-residency",
             State: "blocked-no-native-backend",
@@ -483,7 +492,7 @@ public static class CopyElisionLabCommand
             : null;
 
     private static bool HasSafeLifecycle(HookLabReport report) =>
-        report.RingAbiVersion == 8 &&
+        report.RingAbiVersion == HookRingReader.ExpectedAbiVersion &&
         report.ModulePinnedUntilProcessExit &&
         report.AutomaticLifetimeTracking &&
         report.ReleaseObservationScope == "owned-returned-buffer-texture-interface" &&
