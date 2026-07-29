@@ -1,8 +1,18 @@
 # Project Status
 
-FluidRuntime v0.12.0 is implemented and locally verified as of 2026-07-29.
-Remote CI, merge, tag, release, and FluidGateway synchronization remain release
-gates until their GitHub state is verified.
+FluidRuntime v0.12.0 was verified locally and remotely on 2026-07-29.
+
+## Public Release
+
+- Branch/tag: `main` / `v0.12.0`
+- Feature validation:
+  [GitHub Actions run 30481139281](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30481139281)
+- Runtime main validation:
+  [GitHub Actions run 30481370442](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30481370442)
+- Release:
+  [FluidRuntime v0.12.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.12.0)
+- FluidGateway synchronization is tracked separately until its remote commit and
+  CI are verified.
 
 ## Local Release Gate
 
@@ -10,6 +20,7 @@ gates until their GitHub state is verified.
 - Native tests: 9/9 Release and 9/9 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
+- Feature and `main` remote CI evidence contracts: passed.
 - WARP update-upload trace: 4/4 raw runs passed; claim blocked as intended.
 - RX 580 update-upload trace: 22/22 raw runs passed; scoped gate passed.
 - Generic, manager, sustained, readback, and staging-upload regression smokes

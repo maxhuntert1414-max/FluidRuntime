@@ -2,8 +2,8 @@
 
 ## Status
 
-Implementation and local evidence complete. Remote publication and CI are the
-remaining release gates.
+Complete on `main`; implementation, local evidence, feature CI, and main CI are
+verified. Tag/release publication is the final immutable packaging step.
 
 ## Verified Locally
 
@@ -12,6 +12,7 @@ remaining release gates.
 - Native Debug: 9/9.
 - Negative policy matrix: 320/320.
 - Exact local CI evidence script: passed.
+- Feature CI and main CI: passed.
 - WARP paired runs: 4/4, scoped claim blocked.
 - RX 580 paired runs: 22/22, scoped performance gate passed.
 - Legacy generic, manager, sustained, readback, and staging-upload smokes passed.

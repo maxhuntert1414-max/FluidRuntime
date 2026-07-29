@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-07-29 para o release candidate v0.12.0.
+Handoff atualizado em 2026-07-29 para o release v0.12.0.
 
 ## 1. Objetivo geral
 
@@ -83,6 +83,7 @@ apagam os bytes retidos.
 - CTests Debug: 9/9;
 - matriz negativa Release/Debug: 320/320;
 - contrato exato de CI executado localmente: passou;
+- feature CI e main CI no GitHub: passaram;
 - WARP: 4/4 raw runs, claim bloqueado;
 - RX 580: 22/22 raw runs, 1 warmup + 10 pares medidos;
 - smokes generic, manager, sustained, readback e staging-upload: passaram.
