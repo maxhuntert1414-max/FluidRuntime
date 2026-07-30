@@ -1,16 +1,15 @@
 # Project Status
 
-FluidRuntime v0.13.0 is a locally verified release candidate as of 2026-07-29.
+FluidRuntime v0.13.0 is verified locally and remotely as of 2026-07-29.
 The v0.12.0 native actuation evidence remains unchanged.
 
 ## Public Release
 
-- Candidate branch/tag: `main` / `v0.13.0`
-- FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
-- Runtime workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
-- Release target: [FluidRuntime v0.13.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.13.0)
-- The status will be marked remote-verified only after both workflows and the
-  public release are confirmed.
+- Release branch/tag: `main` / `v0.13.0`
+- FluidLink interop: [run 30511854168](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30511854168)
+- Runtime validation: [run 30511854153](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30511854153)
+- Canonical Gateway contract: [FluidGateway v0.63.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.63.0)
+- Public release: [FluidRuntime v0.13.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.13.0)
 
 ## Local Release Gate
 
