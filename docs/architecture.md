@@ -9,7 +9,9 @@ memory, GPU, and graphics API telemetry.
 flowchart LR
     PM[PresentMon trace] --> FG[FluidGateway]
     FG --> L[Operational ledger]
-    L --> MR[Managed runtime]
+    FG <--> FL[FluidLink binary advisory transport]
+    FL <--> MR[Managed runtime]
+    L --> MR
     NP[Native process and GPU probe] --> MR
     D3D[D3D11 cooperative hook] --> R[Shared-memory event ring]
     R --> MR
@@ -24,6 +26,8 @@ flowchart LR
   operational ledger contract.
 - `FluidRuntime`: .NET CLI, identity checks, telemetry aggregation, decision
   plans, report validation, and future safety policy.
+- `FluidLink`: dependency-free .NET client and cross-repository contract for
+  loopback binary request/response transport with numeric opcodes.
 - `fluidruntime-native-probe`: read-only Windows process, memory, WDDM VRAM,
   and GPU-engine counters for one PID.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
@@ -33,6 +37,27 @@ flowchart LR
   exact source image for direct-update comparison.
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
   installation, event delivery, validation, and complete rollback.
+
+## FluidLink Control Transport
+
+Version 0.13.0 adds a separate user-space path between the Gateway policy plane
+and the managed runtime. FluidLink v1 uses a fixed 56-byte little-endian header:
+magic/version, frame kind, message/event/decision opcodes, flags, sequence,
+16-byte message and session identities, and a 32-bit payload length. Dynamic
+event fields remain a strict UTF-8 JSON object bounded to 1 MiB, 64 nesting
+levels, and finite numbers.
+
+The first request negotiates the exact contract SHA-256, required capabilities,
+limits, and a new session. Later requests must advance sequence exactly once and
+responses must match message, sequence, session, and subject. The .NET client
+permits loopback hosts only, serializes concurrent calls, verifies heartbeat
+nonces, and invalidates its connection on framing or correlation drift. The
+Gateway retains its raw JSONL endpoint as a per-connection legacy mode.
+
+This transport is advisory. It does not share the native hook ABI and does not
+write the shared-memory control block. A FluidLink decision still needs a
+separate owned-target policy with provenance, action, budget, expiration,
+equivalence, evidence, and rollback before native actuation can occur.
 
 ## Hook Event Transport
 

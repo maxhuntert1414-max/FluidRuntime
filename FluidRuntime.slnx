@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/FluidLink/FluidLink.csproj" />
     <Project Path="src/FluidRuntime/FluidRuntime.csproj" />
   </Folder>
   <Folder Name="/tests/">

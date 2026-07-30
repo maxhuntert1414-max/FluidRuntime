@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>FluidLink</AssemblyName>
+    <RootNamespace>FluidLink</RootNamespace>
+    <Version>0.1.0</Version>
+    <PackageId>FluidLink</PackageId>
+    <Title>FluidLink binary transport</Title>
+    <Authors>Fluid project contributors</Authors>
+    <Description>Binary local transport contracts and client for FluidGateway and FluidRuntime.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageTags>fluidgateway;fluidruntime;binary;ipc;telemetry;gpu</PackageTags>
+    <PackageProjectUrl>https://github.com/maxhuntert1414-max/FluidRuntime</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/maxhuntert1414-max/FluidRuntime</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReleaseNotes>FluidLink v1 binary framing, numeric opcodes, exact contract negotiation, bounded JSON payloads, and correlated loopback transport.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\contracts\fluidlink-v1.contract.json"
+          Link="contracts\fluidlink-v1.contract.json"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="true"
+          PackagePath="contentFiles\any\any\contracts" />
+  </ItemGroup>
+
+</Project>

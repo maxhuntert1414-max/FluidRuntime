@@ -61,10 +61,15 @@ coordinate the interfaces the operating system and graphics APIs expose.
   one-resource/4 MiB cache bounds, one-bit content mutation and external-write
   generation guards, 67-update paired workload, WARP/RX 580 traces, and a
   positive scoped CPU/GPU interval claim.
+- **v0.13.0:** FluidLink 0.1.0 cross-repository transport with a fixed 56-byte
+  binary header, one-byte message/event/decision opcodes, exact contract and
+  capability negotiation, bounded strict JSON payloads, serialized correlated
+  .NET round trips, legacy JSONL isolation, Python/.NET interoperability CI,
+  and a reproducible envelope-size report.
 
 ## Next Milestones
 
-### v0.13: Upload Generalization and Synchronization Hardening
+### v0.14: Upload Generalization and Synchronization Hardening
 
 - Extend upload evidence to textures, pitch-aware data, partial boxes,
   `UpdateSubresource1`, dynamic-buffer, reuse, and batching patterns without an
@@ -80,7 +85,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Derive bounded policies from live FluidGateway evidence instead of a fixed
   lab action, with explicit regression rollback.
 
-### v0.14+: Controlled External Observation
+### v0.15+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

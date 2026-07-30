@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-07-29 para o release v0.12.0.
+Handoff atualizado em 2026-07-29 para o release v0.13.0.
 
 ## 1. Objetivo geral
 
@@ -18,6 +18,8 @@ Apple Silicon nem prometer FPS antes da prova.
   modeling e operational ledger.
 - `FluidRuntime`: telemetria Windows/GPU/memoria, hook D3D11 cooperativo,
   shared-memory IPC, control plane, workloads, atuacao e evidence gates.
+- `FluidLink`: contrato binario compartilhado e cliente .NET tipado para
+  eventos/decisoes consultivas entre os dois repositorios.
 
 Diretorio local:
 
@@ -40,6 +42,8 @@ Real e verificado em software owned:
 - upload `STAGING + CPU_WRITE -> DEFAULT`;
 - upload direto full-buffer por `UpdateSubresource`, com comparacao exata;
 - baseline/optimized pareado, hashes, adapter identity, timing e rollback.
+- FluidLink loopback com header binario, opcodes numericos, fingerprint exato,
+  sequencia/correlacao, heartbeat e payload dinamico JSON limitado.
 
 Ainda nao e real:
 
@@ -51,7 +55,24 @@ Ainda nao e real:
 - atuacao no presentation path, D3D12 ou Vulkan;
 - claim geral de FPS, energia ou maquinas antigas.
 
-## 4. Contrato v0.12
+## 4. Contrato FluidLink v0.13
+
+- header little-endian fixo de 56 bytes;
+- opcodes de mensagem, evento e decisao em um byte cada;
+- payload dinamico como objeto JSON UTF-8 de ate 1 MiB e depth 64;
+- somente numeros finitos e strings de controle com limites UTF-8;
+- Hello/Welcome com SHA-256 exato do manifesto e capabilities obrigatorias;
+- sequencia monotona, message ID, session ID e subject correlacionados;
+- cliente .NET loopback-only com round trips concorrentes serializados;
+- framing/correlacao invalida fecha a sessao;
+- endpoint JSONL legado fica em modo separado por conexao;
+- decisao Gateway e consultiva, sem autoridade sobre o ABI nativo.
+
+Fingerprint:
+
+`10b46685472d13d2d49cc81aa1f7df2d654c1ec53fdc666e086e0d062ad114fa`
+
+## 5. Contrato nativo v0.12
 
 Action bit 8 e exclusiva para um upload direto elegivel:
 
@@ -76,9 +97,13 @@ Com os tres updates legados, os totais nativos sao 70 forwarded no baseline e
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 5. Evidencia local v0.12
+## 6. Evidencia local v0.13
 
-- managed tests: 79/79;
+- managed tests: 93/93;
+- FluidLink .NET: 14/14;
+- FluidGateway FluidLink: 23/23;
+- interop Python/.NET: 11/11 round trips;
+- frame bytes: 3.189 contra 6.570 em envelopes JSON equivalentes, -51,46%;
 - CTests Release: 9/9;
 - CTests Debug: 9/9;
 - matriz negativa Release/Debug: 320/320;
@@ -106,7 +131,10 @@ Base do claim:
 
 `gpu-interval-improvement-with-bounded-cpu-content-comparison-overhead`
 
-## 6. Contratos ABI
+As linhas nativas continuam sendo a evidencia publicada da v0.12; a v0.13 nao
+altera fonte nativa, ABI, policy de hook ou claim de hardware.
+
+## 7. Contratos ABI
 
 - attach options ABI 3;
 - ring ABI 9, 2.048 slots, eventos de 80 bytes;
@@ -128,10 +156,15 @@ Invariantes:
 - baseline e optimized em processos separados e ordem alternada;
 - warmup fica no trace, mas fora da estatistica.
 
-## 7. Comandos de verificacao
+## 8. Comandos de verificacao
 
 ```powershell
 dotnet test FluidRuntime.slnx -c Release
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/Test-FluidLinkIntegration.ps1 `
+  -GatewayPath ..\FluidGateway
+dotnet pack src/FluidLink/FluidLink.csproj -c Release `
+  -o artifacts/packages
 cmake -S native -B native/build -A x64
 cmake --build native/build --config Release
 cmake --build native/build --config Debug
@@ -146,8 +179,10 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
   --out artifacts/update-upload-elision-hardware.json
 ```
 
-## 8. Evidencia
+## 9. Evidencia
 
+- [v0.13.0 FluidLink report](evidence/v0.13.0-fluidlink-binary-interop.md)
+- [v0.13.0 FluidLink trace](evidence/traces/fluidlink-cross-process-v0.13.0.json)
 - [v0.12.0 report](evidence/v0.12.0-update-upload-elision.md)
 - [RX 580 trace](evidence/traces/update-upload-elision-rx580-v0.12.0.json)
 - [WARP trace](evidence/traces/update-upload-elision-warp-v0.12.0.json)
@@ -155,7 +190,7 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 - [architecture](architecture.md)
 - [roadmap](roadmap.md)
 
-## 9. Proximo passo recomendado
+## 10. Proximo passo recomendado
 
 Generalizar upload com seguranca: texturas e pitches canonicos, boxes parciais,
 `UpdateSubresource1`, buffers dynamic, aliases, batching, fences e deferred
@@ -166,6 +201,7 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.12 prova interferencia especifica e reversivel em uploads
-`UpdateSubresource` owned, com bytes exatos, geracao protegida e intervalos CPU
-e GPU menores na RX 580. Nao alargue esse claim para RAM/VRAM fisica ou jogos.
+Mensagem curta: v0.13 entrega um transporte binario versionado, limitado e
+interoperavel para ligar Gateway e Runtime. A v0.12 continua sendo a prova de
+interferencia especifica e reversivel em `UpdateSubresource` owned. Nenhum dos
+dois resultados prova RAM/VRAM fisica, PCIe, FPS ou suporte a jogos externos.

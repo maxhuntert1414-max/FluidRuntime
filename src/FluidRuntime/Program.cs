@@ -12,6 +12,12 @@ public static class RuntimeApplication
     public static async Task<int> RunAsync(string[] args)
     {
         if (args.Length > 0 &&
+            string.Equals(args[0], "link-probe", StringComparison.OrdinalIgnoreCase))
+        {
+            return await FluidLinkProbeCommand.RunAsync(args);
+        }
+
+        if (args.Length > 0 &&
             string.Equals(
                 args[0],
                 "update-upload-elision-lab",
@@ -82,6 +88,7 @@ public static class RuntimeApplication
             Console.WriteLine(ReadbackElisionLabOptions.Usage);
             Console.WriteLine(UploadElisionLabOptions.Usage);
             Console.WriteLine(UpdateUploadElisionLabOptions.Usage);
+            Console.WriteLine(FluidLinkProbeOptions.Usage);
             return 0;
         }
 
