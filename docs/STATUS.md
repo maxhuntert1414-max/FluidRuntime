@@ -1,20 +1,20 @@
 # Project Status
 
-FluidRuntime v0.15.0 is verified locally as of 2026-08-01.
-It connects live FluidGateway decisions to the existing bounded v0.12 native
-action without changing the hook ABI or its exact-content safety gate.
+FluidRuntime v0.16.0 is verified locally as of 2026-08-01. It adds a strict
+owned D3D12 upload/default/readback observation path while preserving the v0.15
+Gateway-managed D3D11 control loop and the native hook ABI.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.15.0`
+- Target branch/tag: `main` / `v0.16.0`
 - Canonical Gateway contract: [FluidGateway v0.64.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.64.0)
-- Target release: [FluidRuntime v0.15.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.15.0)
+- Target release: [FluidRuntime v0.16.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.16.0)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 133/133 passed.
+- Managed tests: 152/152 passed.
 - Focused FluidLink/Gateway/process-binding tests: 54/54 passed.
 - FluidGateway complete suite: 242/242 passed.
 - FluidGateway FluidLink tests: 43/43 passed across v1 and v2.
@@ -25,7 +25,7 @@ action without changing the hook ABI or its exact-content safety gate.
   bytes or 41.05% for the same cross-process semantic flow.
 - `FluidLink.0.2.1.nupkg` inspected with the DLL, README, v1/v2 contracts,
   and v2 golden vectors present.
-- Native tests: 9/9 Release and 9/9 Debug passed.
+- Native tests: 12/12 Release and 12/12 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
 - Remote CI is verified after the release candidate is pushed.
@@ -33,7 +33,22 @@ action without changing the hook ABI or its exact-content safety gate.
 - RX 580 update-upload trace: 22/22 raw runs passed; scoped gate passed.
 - Generic, manager, sustained, readback, and staging-upload regression smokes
   passed after ABI and hook changes.
-- Raw WARP, RX 580, and policy-matrix traces are committed with the source.
+- Raw D3D11 and D3D12 WARP/RX 580 traces are committed with the source.
+
+The v0.16 D3D12 gate also passed:
+
+- 5/5 WARP Release, 5/5 WARP Debug, and 10/10 RX 580 owned runs;
+- exact 4 MiB content after UPLOAD-to-DEFAULT-to-READBACK in every run;
+- one COPY command list, two copy commands, one explicit transition, and one
+  completed fence per run;
+- DEFAULT buffer `COMMON` creation, implicit `COPY_DEST` promotion,
+  `COPY_SOURCE` transition, and expected post-execution buffer decay;
+- Debug Layer message validation with zero warnings and zero errors;
+- stable adapter/architecture identity, launched PID binding, and target
+  SHA-256 verified before and after each aggregate lab;
+- strict rejection of missing/unknown report fields and invalid native options;
+- performance claim blocked because the lab has no optimized baseline and
+  logical command bytes are not physical transfer counters.
 
 The v0.15 closed-loop gate also passed:
 
@@ -56,6 +71,25 @@ The v0.15 closed-loop gate also passed:
 
 The v0.15 code does not modify native source or ABI. It adds a fail-closed bridge
 that may publish the existing action-8 policy only after exact live decisions.
+
+## New In v0.16.0
+
+- `fluidruntime-d3d12-observation` is a separate owned executable; it does not
+  reuse or modify the D3D11 hook.
+- `d3d12-observe-lab` launches 1-30 bounded runs against WARP or a hardware
+  adapter and writes a structured aggregate report with every raw run.
+- The native path records adapter identity, UMA/cache-coherent UMA, heap tier,
+  COPY queue metadata, committed UPLOAD/DEFAULT/READBACK buffers, declared
+  states, commands, fence values, exact hashes, timings, and DXGI local/non-local
+  memory snapshots.
+- The DEFAULT buffer relies on free `COMMON` promotion for its first
+  `COPY_DEST` access and one explicit transition before readback; Debug Layer
+  validation is clean.
+- The managed parser rejects unknown or missing fields and any drift in fixed
+  sizes, heap/state facts, queue counts, hashes, fences, claim scope, adapter,
+  architecture, PID, timestamp order, or executable identity.
+- Observation remains non-actuating. No D3D12 command is skipped and no
+  physical RAM/VRAM, PCIe, FPS, or game-performance claim is made.
 
 ## New In v0.15.0
 
@@ -145,7 +179,14 @@ that may publish the existing action-8 policy only after exact live decisions.
 
 ## Evidence Claim
 
-Positive scope:
+D3D12 observation scope:
+
+`owned-d3d12-upload-default-readback-observation-only`
+
+Its report always sets `performance_claim_allowed=false`; timings describe the
+owned command-recording and submit-to-fence path without an optimized baseline.
+
+D3D11 positive actuation scope:
 
 `owned-d3d11-default-buffer-full-update-subresource-exact-content-workload-only`
 
@@ -177,8 +218,8 @@ is functional closed-loop evidence, not end-to-end acceleration.
 
 ## Operating Level
 
-FluidRuntime can inspect process/GPU/memory telemetry, observe an owned D3D11
-resource pipeline, publish bounded managed policies, and interfere reversibly
+FluidRuntime can inspect process/GPU/memory telemetry, observe owned D3D11 and
+D3D12 resource paths, publish bounded managed policies, and interfere reversibly
 with four owned-lab patterns: generic `CopyResource`, default-to-staging
 readback, staging-to-default upload, and exact full-buffer `UpdateSubresource`.
 It can also exchange bounded events and compact decisions with FluidGateway
@@ -186,10 +227,11 @@ through FluidLink. One exact owned-lab path now turns those decisions into a
 bounded native action budget; all other Gateway management remains advisory.
 
 It still does not inject into external games, schedule OS threads, control
-physical RAM/VRAM residency, actuate presentation, or support D3D12/Vulkan.
+physical RAM/VRAM residency, actuate presentation or D3D12, or support Vulkan.
 
 ## Read Next
 
+- [v0.16.0 D3D12 observation evidence](evidence/v0.16.0-d3d12-observation.md)
 - [v0.15.0 Gateway-managed actuation evidence](evidence/v0.15.0-gateway-managed-update-upload.md)
 - [v0.14.0 FluidLink v2 evidence](evidence/v0.14.0-fluidlink-v2.md)
 - [v0.13.0 FluidLink evidence](evidence/v0.13.0-fluidlink-binary-interop.md)

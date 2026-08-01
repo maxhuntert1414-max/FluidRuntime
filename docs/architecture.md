@@ -13,6 +13,7 @@ flowchart LR
     FL <--> MR[Managed runtime]
     L --> MR
     NP[Native process and GPU probe] --> MR
+    D12[D3D12 owned observer] --> MR
     D3D[D3D11 cooperative hook] --> R[Shared-memory event ring]
     R --> MR
     MR --> P[Validated control plan]
@@ -30,6 +31,9 @@ flowchart LR
   loopback binary request/response transport with numeric opcodes.
 - `fluidruntime-native-probe`: read-only Windows process, memory, WDDM VRAM,
   and GPU-engine counters for one PID.
+- `fluidruntime-d3d12-observation`: standalone owned 4 MiB
+  UPLOAD/DEFAULT/READBACK workload with explicit queue, command, state, fence,
+  exact-content, timing, architecture, and DXGI memory evidence.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
   resource creation, retirement, pointer reuse, CPU reads/writes, updates, and
   GPU clears through owned RTV/UAV views, plus whole-resource and
@@ -117,6 +121,29 @@ path has a bounded end-to-end measurement. This is a functional authority bridge
 for one owned action, not a production scheduler or generic RAM/VRAM manager.
 The OS process binding narrows accidental/wrong-peer risk but is explicitly not
 cryptographic authentication against a hostile or compromised same-user peer.
+
+## Owned D3D12 Observation
+
+Version 0.16 introduces a separate executable instead of extending the D3D11
+hook or ABI. It selects WARP or a high-performance adapter, creates one COPY
+queue and command list, and moves a deterministic 4 MiB pattern through
+committed UPLOAD, DEFAULT, and READBACK buffers. The DEFAULT resource starts in
+`COMMON`, is implicitly promoted to `COPY_DEST`, transitions to `COPY_SOURCE`
+for readback, and is expected to decay to `COMMON` after queue execution. A
+fence with a bounded wait establishes completion before full byte comparison.
+
+The target reports adapter LUID/vendor/device, UMA properties, heap tier,
+declared states and command counts, fence values, logical bytes, FNV labels,
+CPU command-record and submit-to-fence timings, and process-scoped local and
+non-local `QueryVideoMemoryInfo` snapshots. Debug builds enable the D3D12 Debug
+Layer when available and fail on warning, error, or corruption messages.
+
+The managed runner opens the executable without write/delete sharing, hashes it
+before and after the run set, binds each JSON report to the launched PID, and
+requires stable adapter/architecture identity and monotonic timestamps. The
+schema rejects unknown and missing members. This path has no native policy
+block, no command skip, and no external target; its report always blocks a
+performance claim.
 
 ## Hook Event Transport
 
@@ -293,7 +320,10 @@ observe-only, and all regional copies remain forwarded.
 
 ## Known Limits
 
-- D3D11 only; D3D12 and Vulkan are not instrumented yet.
+- Native actuation remains D3D11-only. D3D12 currently observes one owned
+  buffer round trip; it does not hook, elide commands, or cover textures,
+  aliases, multiple queues, placed resources, or residency control. Vulkan is
+  not instrumented yet.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
 - Shader draw/dispatch writes, UAV integer clears, depth/stencil clears, fences,

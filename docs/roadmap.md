@@ -82,10 +82,17 @@ coordinate the interfaces the operating system and graphics APIs expose.
   deadline. WARP and RX 580 evidence are recorded. Performance remains blocked
   because Gateway authorization is outside the native timing window; process
   binding is not cryptographic peer authentication.
+- **v0.16.0:** first owned D3D12-native observation path. A deterministic 4 MiB
+  UPLOAD-to-DEFAULT-to-READBACK workload records adapter architecture, committed
+  heaps, COPY queue/list commands, implicit state promotion, one explicit
+  transition, fence completion, exact content, timings, and DXGI memory-budget
+  snapshots. Managed evidence binds the launched PID and frozen target SHA-256,
+  rejects schema or adapter drift, and remains explicitly non-actuating. WARP,
+  Debug Layer, and RX 580 traces are recorded with no performance claim.
 
 ## Next Milestones
 
-### v0.16: Low-Latency Decisions and Upload Generalization
+### v0.17: Low-Latency Decisions and Upload Generalization
 
 - Replace 74 serial pre-authorization round trips with a bounded batch decision
   packet or another measured transport shape before considering per-frame use.
@@ -108,17 +115,18 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Generalize live FluidGateway authorization only after each new native pattern
   has equivalence, provenance, budget, expiration, and rollback evidence.
 
-### v0.17: Owned D3D12 Backend
+### v0.18: Bounded D3D12 Actuation
 
-- Add an opt-in owned-app observation layer for devices, command queues,
-  resources/heaps, map/unmap, copy commands, resource barriers, queue submits,
-  fences, and residency signals.
+- Extend the owned observer to map/unmap, placed resources, textures, copy
+  regions, multiple command lists/queues, aliases, and residency signals.
 - Build a D3D12-specific provenance and synchronization model. Do not reuse
   D3D11 generation assumptions where explicit states, queues, and fences differ.
-- Keep actuation disabled until an owned deterministic workload proves final
-  content, resource-state correctness, queue ordering, budget, and rollback.
+- Add alternating baseline/optimized evidence for one exact redundant transfer.
+- Keep actuation disabled until final content, Debug Layer cleanliness,
+  resource-state correctness, queue ordering, bounded authority, and rollback
+  all pass on WARP and hardware.
 
-### v0.18: Owned Vulkan Backend
+### v0.19: Owned Vulkan Backend
 
 - Add an explicit opt-in Vulkan layer for the owned lab, observing allocations,
   memory binding, buffers/images, copy commands, barriers, queue submit/present,
@@ -128,7 +136,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Promote one bounded action only after deterministic equivalence, validation-
   layer cleanliness, fault controls, timing, and complete layer removal pass.
 
-### v0.19+: Controlled External Observation
+### v0.20+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

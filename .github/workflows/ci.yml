@@ -92,7 +92,14 @@ jobs:
           --trial-pairs 2 --warmup-pairs 0
           --hold-ms 50 --gpu-timeout-ms 5000 --hardware false
           --out artifacts/update-upload-elision-ci.json
-      - name: Validate v0.12 evidence contracts
+      - name: Test owned D3D12 observation
+        run: >-
+          dotnet run --project src/FluidRuntime -c Release --no-build --
+          d3d12-observe-lab
+          --target native/build/Release/fluidruntime-d3d12-observation.exe
+          --runs 2 --gpu-timeout-ms 10000 --process-timeout-ms 20000
+          --hardware false --out artifacts/d3d12-observation-ci.json
+      - name: Validate evidence contracts
         shell: pwsh
         run: |
           $hook = Get-Content artifacts/hook-ipc-ci.json -Raw | ConvertFrom-Json
@@ -104,6 +111,62 @@ jobs:
           $upload = Get-Content artifacts/upload-elision-ci.json -Raw | ConvertFrom-Json
           $update = Get-Content artifacts/update-upload-elision-ci.json -Raw |
             ConvertFrom-Json
+          $d3d12 = Get-Content artifacts/d3d12-observation-ci.json -Raw |
+            ConvertFrom-Json
+          if ($d3d12.mode -ne
+                'fluidruntime-d3d12-observation-trace-v0.16.0' -or
+              -not $d3d12.target_owned -or
+              -not $d3d12.cooperative_load -or
+              $d3d12.remote_injection -or
+              -not $d3d12.read_only_observation -or
+              $d3d12.actuation_enabled -or
+              $d3d12.physical_transfer_bytes_measured -or
+              $d3d12.render_driver -ne 'warp' -or
+              $d3d12.captured_at_unix_ms_start -le 0 -or
+              $d3d12.captured_at_unix_ms_end -lt
+                $d3d12.captured_at_unix_ms_start -or
+              $d3d12.completed_runs -ne 2 -or
+              -not $d3d12.adapter_identity_stable -or
+              $d3d12.queue_type -ne 'copy' -or
+              $d3d12.buffer_bytes -ne 4194304 -or
+              $d3d12.logical_upload_bytes_per_run -ne 4194304 -or
+              $d3d12.logical_readback_bytes_per_run -ne 4194304 -or
+              -not $d3d12.content_equivalent_in_all_runs -or
+              -not $d3d12.fence_completed_in_all_runs -or
+              $d3d12.claim_scope -ne
+                'owned-d3d12-upload-default-readback-observation-only' -or
+              $d3d12.performance_claim_allowed -or
+              $d3d12.performance_claim_blockers -notcontains
+                'observation-only-no-comparable-baseline' -or
+              $d3d12.performance_claim_blockers -notcontains
+                'logical-copy-bytes-not-physical-traffic') {
+            throw 'D3D12 CI report violated the observation-only contract.'
+          }
+          if ($d3d12.runs | Where-Object {
+              $_.mode -ne
+                'fluidruntime-owned-d3d12-observation-v0.1.0' -or
+              $_.render_driver -ne 'warp' -or
+              $_.debug_warning_count -ne 0 -or
+              $_.debug_error_count -ne 0 -or
+              $_.queue.type -ne 'copy' -or
+              $_.transfer.default_initial_state -ne 'common' -or
+              $_.transfer.default_first_access_promotion -ne 'copy-dest' -or
+              $_.transfer.default_state_before_readback_copy -ne 'copy-source' -or
+              $_.transfer.expected_default_post_execute_state -ne
+                'common-via-buffer-decay' -or
+              $_.transfer.command_list_count -ne 1 -or
+              $_.transfer.copy_command_count -ne 2 -or
+              $_.transfer.resource_barrier_count -ne 1 -or
+              $_.transfer.logical_total_copy_bytes -ne 8388608 -or
+              $_.transfer.source_hash -ne $_.transfer.readback_hash -or
+              -not $_.transfer.content_equivalent -or
+              -not $_.transfer.wait_completed -or
+              $_.memory.source -ne
+                'idxgiadapter3-query-video-memory-info' -or
+              $_.limitations.Count -lt 3
+            }) {
+            throw 'D3D12 native runs violated the fixed round-trip contract.'
+          }
           if ($hook.mode -ne 'fluidruntime-hook-ipc-lab-v0.12.0' -or
               $hook.lost_sequence_count -ne 0 -or
               $hook.native_overrun_count -ne 0 -or

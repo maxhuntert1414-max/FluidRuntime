@@ -22,11 +22,12 @@ Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.m
 [v0.12 direct-update evidence](docs/evidence/v0.12.0-update-upload-elision.md) |
 [v0.14 FluidLink v2 evidence](docs/evidence/v0.14.0-fluidlink-v2.md) |
 [v0.15 Gateway-managed actuation evidence](docs/evidence/v0.15.0-gateway-managed-update-upload.md) |
+[v0.16 D3D12 observation evidence](docs/evidence/v0.16.0-d3d12-observation.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.15.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.16.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -35,6 +36,16 @@ Version 0.15.0 keeps normal inspection and external-process behavior advisory-on
 - streams owned D3D11 hook events into the managed runtime through shared memory;
 - never changes process priority, affinity, RAM/VRAM residency, GPU queues,
   drivers, games, or OS state.
+
+Version 0.16.0 adds a separate owned D3D12 observation target. It records the
+adapter and architecture, three committed heap types, COPY queue/list commands,
+implicit state promotion, one explicit barrier, fence completion, exact 4 MiB
+upload/readback content, and process-scoped DXGI memory-budget snapshots. The
+managed lab binds each report to the launched PID and a target SHA-256 held
+stable across all runs. It performs no hook, injection, command elision,
+residency control, or external-process actuation, and its performance gate is
+always blocked because there is no comparable optimized baseline or physical
+transfer-byte counter.
 
 Version 0.14.0 adds `FluidLink` package 0.2.0 and the preferred `fluidlink-v2`
 wire protocol without removing v1. The 56-byte binary header remains stable,
@@ -248,6 +259,25 @@ as missing telemetry instead of being converted into a fake zero.
 
 `--native-probe` executes the path supplied by the operator. Use only a probe
 binary built from this repository or another binary you explicitly trust.
+
+## D3D12 observation lab
+
+The owned D3D12 target exercises one deterministic 4 MiB
+UPLOAD-to-DEFAULT-to-READBACK path. The DEFAULT buffer starts in `COMMON`, is
+implicitly promoted to `COPY_DEST`, transitions once to `COPY_SOURCE`, and
+is expected to decay back to `COMMON` after COPY queue execution. A bounded
+fence wait and full `memcmp` are mandatory.
+
+```powershell
+dotnet run --project src/FluidRuntime -c Release -- d3d12-observe-lab `
+  --target native/build/Release/fluidruntime-d3d12-observation.exe `
+  --runs 5 --gpu-timeout-ms 10000 --process-timeout-ms 20000 `
+  --hardware false --out artifacts/d3d12-observation.json
+```
+
+Set `--hardware true` to select a high-performance hardware adapter. Logical
+copy bytes and DXGI usage/budget snapshots do not establish physical RAM/VRAM
+placement, PCIe traffic, or a performance improvement.
 
 ## Present hook lab
 

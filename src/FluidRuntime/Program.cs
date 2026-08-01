@@ -12,6 +12,15 @@ public static class RuntimeApplication
     public static async Task<int> RunAsync(string[] args)
     {
         if (args.Length > 0 &&
+            string.Equals(
+                args[0],
+                "d3d12-observe-lab",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return await D3D12ObservationLabCommand.RunAsync(args);
+        }
+
+        if (args.Length > 0 &&
             string.Equals(args[0], "link-probe", StringComparison.OrdinalIgnoreCase))
         {
             return await FluidLinkProbeCommand.RunAsync(args);
@@ -99,6 +108,7 @@ public static class RuntimeApplication
             Console.WriteLine(UpdateUploadElisionLabOptions.Usage);
             Console.WriteLine(GatewayUpdateUploadLabOptions.Usage);
             Console.WriteLine(FluidLinkProbeOptions.Usage);
+            Console.WriteLine(D3D12ObservationLabOptions.Usage);
             return 0;
         }
 

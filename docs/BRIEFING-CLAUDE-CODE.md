@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-01 para o release v0.15.0.
+Handoff atualizado em 2026-08-01 para o release v0.16.0.
 
 ## 1. Objetivo geral
 
@@ -17,7 +17,8 @@ Apple Silicon nem prometer FPS antes da prova.
 - `FluidGateway`: analise offline de PresentMon, diagnosticos, ranking, policy
   modeling e operational ledger.
 - `FluidRuntime`: telemetria Windows/GPU/memoria, hook D3D11 cooperativo,
-  shared-memory IPC, control plane, workloads, atuacao e evidence gates.
+  observador D3D12 owned, shared-memory IPC, control plane, workloads, atuacao
+  limitada e evidence gates.
 - `FluidLink`: contrato binario compartilhado e cliente .NET tipado para
   eventos/decisoes consultivas entre os dois repositorios.
 
@@ -46,6 +47,8 @@ Real e verificado em software owned:
   sequencia/correlacao, heartbeat e payload posicional binario sem JSON.
 - bridge fail-closed que transforma 64 decisoes live exatas do FluidGateway em
   budget nativo de action 8 somente no workload owned de `UpdateSubresource`.
+- observacao D3D12 owned de UPLOAD -> DEFAULT -> READBACK com COPY queue,
+  promocao/barreira/decay, fence, conteudo exato, arquitetura e budgets DXGI.
 
 Ainda nao e real:
 
@@ -53,8 +56,9 @@ Ainda nao e real:
 - scheduler de threads do Windows;
 - residencia fisica RAM/VRAM, PCIe bytes ou unified memory;
 - texturas/boxes/pitches, buffers dynamic, `UpdateSubresource1` ou batching;
-- fences, command lists, deferred contexts e todos os shader writes;
-- atuacao no presentation path, D3D12 ou Vulkan;
+- command lists/fences fora do workload D3D12 owned, deferred contexts e todos
+  os shader writes;
+- atuacao no presentation path ou D3D12 e qualquer backend Vulkan;
 - claim geral de FPS, energia ou maquinas antigas.
 
 ## 4. Contrato FluidLink v0.14
@@ -109,9 +113,9 @@ Com os tres updates legados, os totais nativos sao 70 forwarded no baseline e
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.15
+## 6. Evidencia local v0.16
 
-- managed tests: 133/133;
+- managed tests: 152/152;
 - FluidLink + autorizacao/process binding Gateway .NET: 54/54;
 - FluidGateway completo: 242/242;
 - FluidGateway FluidLink: 43/43 entre v1 e v2;
@@ -119,14 +123,29 @@ apagam os bytes retidos.
 - mesmo fluxo: 3.189 bytes v1 contra 1.880 bytes v2, -41,05%;
 - decisao v2 exata: 800 us e 67.108.864 bytes modelados;
 - package `FluidLink.0.2.1.nupkg` inspecionado com DLL, README, contratos e golden;
-- CTests Release: 9/9;
-- CTests Debug: 9/9;
+- CTests Release: 12/12;
+- CTests Debug: 12/12;
 - matriz negativa Release/Debug: 320/320;
 - contrato exato de CI executado localmente: passou;
 - contrato local de release: passou; CI remota e gate obrigatorio apos o push;
 - WARP: 4/4 raw runs, claim bloqueado;
 - RX 580: 22/22 raw runs, 1 warmup + 10 pares medidos;
 - smokes generic, manager, sustained, readback e staging-upload: passaram.
+
+D3D12 v0.16:
+
+- WARP Release: 5/5; WARP Debug Layer: 5/5; RX 580 Release: 10/10;
+- cada run: 4 MiB upload + 4 MiB readback logicos, um command list COPY, duas
+  copias, uma barreira, fence 1 concluida e `memcmp` exato;
+- DEFAULT nasce em COMMON, promove para COPY_DEST, transiciona para COPY_SOURCE
+  e tem decay esperado para COMMON apos execute;
+- Debug Layer: zero warnings e zero errors depois da correcao do initial state;
+- PID do JSON precisa ser o processo lancado; target SHA-256 fica travado e e
+  recalculado apos todos os runs;
+- schema faltando/sobrando, adapter/arquitetura variavel, hash/fence/state
+  divergente ou timestamp regressivo falha fechado;
+- `performance_claim_allowed=false`: nao existe baseline otimizado e bytes
+  logicos/DXGI budgets nao medem trafego fisico.
 
 Closed loop v0.15:
 
@@ -220,6 +239,9 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.16.0 D3D12 owned observation](evidence/v0.16.0-d3d12-observation.md)
+- [v0.16.0 RX 580 D3D12 trace](evidence/traces/d3d12-observation-rx580-v0.16.0.json)
+- [v0.16.0 WARP Debug trace](evidence/traces/d3d12-observation-warp-debug-v0.16.0.json)
 - [v0.15.0 closed loop Gateway-managed](evidence/v0.15.0-gateway-managed-update-upload.md)
 - [v0.15.0 RX 580 trace](evidence/traces/gateway-update-upload-rx580-v0.15.0.json)
 - [v0.15.0 WARP trace](evidence/traces/gateway-update-upload-warp-v0.15.0.json)
@@ -245,18 +267,21 @@ Depois, generalizar upload com seguranca: texturas e pitches canonicos, boxes pa
 contexts. O cache nao pode crescer sem limite e cada novo padrao precisa de
 equivalencia, regressao, budget, expiracao e rollback proprios.
 
-Na sequencia de backends, criar primeiro um laboratorio owned D3D12 para queues,
-heaps/resources, copies, barriers, fences e residency telemetry. So depois criar
-uma layer Vulkan opt-in separada para allocations/bindings, copies, layouts,
-queue-family ownership, semaphores/fences e present. Cada backend precisa de
-proveniencia, sincronizacao, equivalencia e rollback proprios.
+O primeiro caminho D3D12 owned ja existe e esta limpo no Debug Layer. Agora ele
+precisa crescer para map/unmap, texturas, copy regions, placed resources,
+aliases, multiplas queues e residency signals; depois vem proveniencia propria,
+baseline/optimized e somente entao uma action limitada. Nao reutilizar as
+suposicoes de geracao do D3D11 em estados/queues/fences explicitos.
+
+Depois criar uma layer Vulkan opt-in separada para allocations/bindings,
+copies, layouts, queue-family ownership, semaphores/fences e present. Cada
+backend precisa de proveniencia, sincronizacao, equivalencia e rollback proprios.
 
 External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.15 conecta decisoes live do Gateway ao budget nativo de um
-hook owned, mantendo geracao + `memcmp` como autoridade final e fallback baseline
-em erro/timeout. Funcionou em WARP e RX 580; o transporte ainda e lento demais
-para per-frame e o proprio report bloqueia claim end-to-end. Nenhum resultado
-prova RAM/VRAM fisica, PCIe, FPS ou suporte a jogos externos.
+Mensagem curta: v0.16 mantem o closed loop D3D11 da v0.15 e adiciona o primeiro
+mapa executavel D3D12 de RAM-intent -> recurso DEFAULT -> readback, com estados,
+fila, fence, conteudo e budgets observados em WARP/RX 580. Ainda nao ha atuacao
+D3D12 nem claim de trafego fisico, FPS ou suporte a jogos externos.

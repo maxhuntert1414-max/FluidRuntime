@@ -1,0 +1,1145 @@
+{
+  "mode": "fluidruntime-d3d12-observation-trace-v0.16.0",
+  "target_owned": true,
+  "cooperative_load": true,
+  "remote_injection": false,
+  "read_only_observation": true,
+  "actuation_enabled": false,
+  "physical_transfer_bytes_measured": false,
+  "target_file_name": "fluidruntime-d3d12-observation.exe",
+  "target_sha256": "42e2c8b0372c9825790275206f556b8b46137add179046c38c9bdd39a28efb9f",
+  "captured_at_unix_ms_start": 1785625985776,
+  "captured_at_unix_ms_end": 1785625987882,
+  "runs_requested": 10,
+  "completed_runs": 10,
+  "render_driver": "hardware",
+  "adapter_description": "AMD Radeon RX 580 2048SP",
+  "adapter_vendor_id": 4098,
+  "adapter_device_id": 28639,
+  "adapter_luid": "000000000000e28d",
+  "adapter_identity_stable": true,
+  "uma": false,
+  "cache_coherent_uma": false,
+  "resource_heap_tier": 2,
+  "queue_type": "copy",
+  "buffer_bytes": 4194304,
+  "logical_upload_bytes_per_run": 4194304,
+  "logical_readback_bytes_per_run": 4194304,
+  "content_equivalent_in_all_runs": true,
+  "fence_completed_in_all_runs": true,
+  "memory_budget_source": "idxgiadapter3-query-video-memory-info",
+  "local_memory_info_available_in_all_runs": true,
+  "non_local_memory_info_available_in_all_runs": true,
+  "cpu_record_microseconds": {
+    "count": 10,
+    "minimum": 50.9,
+    "p50": 52.85,
+    "p95": 59.595,
+    "maximum": 61.8,
+    "mean": 54.09
+  },
+  "submit_to_fence_microseconds": {
+    "count": 10,
+    "minimum": 2718.6,
+    "p50": 2763.05,
+    "p95": 2887.37,
+    "maximum": 2900.6,
+    "mean": 2790.42
+  },
+  "total_workload_microseconds": {
+    "count": 10,
+    "minimum": 2793.9,
+    "p50": 2848.8,
+    "p95": 2964.385,
+    "maximum": 2974.6,
+    "mean": 2873.77
+  },
+  "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+  "performance_claim_allowed": false,
+  "performance_claim_blockers": [
+    "observation-only-no-comparable-baseline",
+    "logical-copy-bytes-not-physical-traffic"
+  ],
+  "runs": [
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 14276,
+      "captured_at_unix_ms": 1785625985776,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 52.4,
+        "submit_to_fence_microseconds": 2762.9,
+        "total_workload_microseconds": 2844.7
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 2388,
+      "captured_at_unix_ms": 1785625986121,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 51.8,
+        "submit_to_fence_microseconds": 2900.6,
+        "total_workload_microseconds": 2974.6
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 16256,
+      "captured_at_unix_ms": 1785625986342,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 52.1,
+        "submit_to_fence_microseconds": 2871.2,
+        "total_workload_microseconds": 2951.9
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 1816,
+      "captured_at_unix_ms": 1785625986560,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 53.3,
+        "submit_to_fence_microseconds": 2734,
+        "total_workload_microseconds": 2850.6
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 14108,
+      "captured_at_unix_ms": 1785625986779,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 61.8,
+        "submit_to_fence_microseconds": 2753.1,
+        "total_workload_microseconds": 2841.4
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 2292,
+      "captured_at_unix_ms": 1785625986998,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 56.1,
+        "submit_to_fence_microseconds": 2763.2,
+        "total_workload_microseconds": 2847
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 13048,
+      "captured_at_unix_ms": 1785625987220,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 56.9,
+        "submit_to_fence_microseconds": 2734.5,
+        "total_workload_microseconds": 2815.6
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 17276,
+      "captured_at_unix_ms": 1785625987440,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 50.9,
+        "submit_to_fence_microseconds": 2814,
+        "total_workload_microseconds": 2889.6
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 10808,
+      "captured_at_unix_ms": 1785625987659,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 51.9,
+        "submit_to_fence_microseconds": 2718.6,
+        "total_workload_microseconds": 2793.9
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": false,
+      "debug_message_validation_available": false,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "hardware",
+      "process_id": 3304,
+      "captured_at_unix_ms": 1785625987882,
+      "adapter": {
+        "description": "AMD Radeon RX 580 2048SP",
+        "vendor_id": 4098,
+        "device_id": 28639,
+        "subsystem_id": 187764738,
+        "revision": 239,
+        "luid": "000000000000e28d",
+        "dedicated_video_memory_bytes": 8567902208,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": false,
+        "cache_coherent_uma": false,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 25000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 53.7,
+        "submit_to_fence_microseconds": 2852.1,
+        "total_workload_microseconds": 2928.4
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 393216,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7762595840,
+          "current_usage_bytes": 4587520,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4015515648
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 466944,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 9904128,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    }
+  ]
+}

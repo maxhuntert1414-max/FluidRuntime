@@ -1,0 +1,605 @@
+{
+  "mode": "fluidruntime-d3d12-observation-trace-v0.16.0",
+  "target_owned": true,
+  "cooperative_load": true,
+  "remote_injection": false,
+  "read_only_observation": true,
+  "actuation_enabled": false,
+  "physical_transfer_bytes_measured": false,
+  "target_file_name": "fluidruntime-d3d12-observation.exe",
+  "target_sha256": "6e82eb3717177bf1bf9008103e2a7518e82cc93f1fcdd93bf4acba671f8499f9",
+  "captured_at_unix_ms_start": 1785625983156,
+  "captured_at_unix_ms_end": 1785625983985,
+  "runs_requested": 5,
+  "completed_runs": 5,
+  "render_driver": "warp",
+  "adapter_description": "Microsoft Basic Render Driver",
+  "adapter_vendor_id": 5140,
+  "adapter_device_id": 140,
+  "adapter_luid": "00000000000105fa",
+  "adapter_identity_stable": true,
+  "uma": true,
+  "cache_coherent_uma": true,
+  "resource_heap_tier": 2,
+  "queue_type": "copy",
+  "buffer_bytes": 4194304,
+  "logical_upload_bytes_per_run": 4194304,
+  "logical_readback_bytes_per_run": 4194304,
+  "content_equivalent_in_all_runs": true,
+  "fence_completed_in_all_runs": true,
+  "memory_budget_source": "idxgiadapter3-query-video-memory-info",
+  "local_memory_info_available_in_all_runs": true,
+  "non_local_memory_info_available_in_all_runs": true,
+  "cpu_record_microseconds": {
+    "count": 5,
+    "minimum": 136.4,
+    "p50": 141.6,
+    "p95": 152.5,
+    "maximum": 152.9,
+    "mean": 144.02
+  },
+  "submit_to_fence_microseconds": {
+    "count": 5,
+    "minimum": 9676.2,
+    "p50": 9786,
+    "p95": 10055.82,
+    "maximum": 10090.1,
+    "mean": 9835.04
+  },
+  "total_workload_microseconds": {
+    "count": 5,
+    "minimum": 9850.8,
+    "p50": 9964.5,
+    "p95": 10243.92,
+    "maximum": 10281.3,
+    "mean": 10016.78
+  },
+  "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+  "performance_claim_allowed": false,
+  "performance_claim_blockers": [
+    "observation-only-no-comparable-baseline",
+    "logical-copy-bytes-not-physical-traffic"
+  ],
+  "runs": [
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": true,
+      "debug_message_validation_available": true,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "warp",
+      "process_id": 14024,
+      "captured_at_unix_ms": 1785625983156,
+      "adapter": {
+        "description": "Microsoft Basic Render Driver",
+        "vendor_id": 5140,
+        "device_id": 140,
+        "subsystem_id": 0,
+        "revision": 0,
+        "luid": "00000000000105fa",
+        "dedicated_video_memory_bytes": 0,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": true,
+        "cache_coherent_uma": true,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 10000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 136.4,
+        "submit_to_fence_microseconds": 9676.2,
+        "total_workload_microseconds": 9850.8
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 65536,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 12648448,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": true,
+      "debug_message_validation_available": true,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "warp",
+      "process_id": 17204,
+      "captured_at_unix_ms": 1785625983446,
+      "adapter": {
+        "description": "Microsoft Basic Render Driver",
+        "vendor_id": 5140,
+        "device_id": 140,
+        "subsystem_id": 0,
+        "revision": 0,
+        "luid": "00000000000105fa",
+        "dedicated_video_memory_bytes": 0,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": true,
+        "cache_coherent_uma": true,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 10000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 141.6,
+        "submit_to_fence_microseconds": 9786,
+        "total_workload_microseconds": 9964.5
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 65536,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 12648448,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": true,
+      "debug_message_validation_available": true,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "warp",
+      "process_id": 13756,
+      "captured_at_unix_ms": 1785625983646,
+      "adapter": {
+        "description": "Microsoft Basic Render Driver",
+        "vendor_id": 5140,
+        "device_id": 140,
+        "subsystem_id": 0,
+        "revision": 0,
+        "luid": "00000000000105fa",
+        "dedicated_video_memory_bytes": 0,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": true,
+        "cache_coherent_uma": true,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 10000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 138.3,
+        "submit_to_fence_microseconds": 9918.7,
+        "total_workload_microseconds": 10094.4
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 65536,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 12648448,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": true,
+      "debug_message_validation_available": true,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "warp",
+      "process_id": 10924,
+      "captured_at_unix_ms": 1785625983815,
+      "adapter": {
+        "description": "Microsoft Basic Render Driver",
+        "vendor_id": 5140,
+        "device_id": 140,
+        "subsystem_id": 0,
+        "revision": 0,
+        "luid": "00000000000105fa",
+        "dedicated_video_memory_bytes": 0,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": true,
+        "cache_coherent_uma": true,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 10000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 152.9,
+        "submit_to_fence_microseconds": 10090.1,
+        "total_workload_microseconds": 10281.3
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 65536,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 12648448,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    },
+    {
+      "mode": "fluidruntime-owned-d3d12-observation-v0.1.0",
+      "target_owned": true,
+      "cooperative_load": true,
+      "remote_injection": false,
+      "read_only_observation": true,
+      "actuation_enabled": false,
+      "physical_transfer_bytes_measured": false,
+      "debug_layer_enabled": true,
+      "debug_message_validation_available": true,
+      "debug_warning_count": 0,
+      "debug_error_count": 0,
+      "render_driver": "warp",
+      "process_id": 13536,
+      "captured_at_unix_ms": 1785625983985,
+      "adapter": {
+        "description": "Microsoft Basic Render Driver",
+        "vendor_id": 5140,
+        "device_id": 140,
+        "subsystem_id": 0,
+        "revision": 0,
+        "luid": "00000000000105fa",
+        "dedicated_video_memory_bytes": 0,
+        "dedicated_system_memory_bytes": 0,
+        "shared_system_memory_bytes": 8557697024
+      },
+      "architecture": {
+        "available": true,
+        "node_count": 1,
+        "tile_based_renderer": false,
+        "uma": true,
+        "cache_coherent_uma": true,
+        "resource_heap_tier": 2
+      },
+      "queue": {
+        "type": "copy",
+        "priority": "normal",
+        "timestamp_frequency_supported": true,
+        "timestamp_frequency_hz": 10000000
+      },
+      "transfer": {
+        "buffer_bytes": 4194304,
+        "logical_upload_bytes": 4194304,
+        "logical_readback_bytes": 4194304,
+        "logical_total_copy_bytes": 8388608,
+        "upload_heap_type": "upload",
+        "default_heap_type": "default",
+        "readback_heap_type": "readback",
+        "upload_initial_state": "generic-read",
+        "default_initial_state": "common",
+        "default_first_access_promotion": "copy-dest",
+        "default_state_before_readback_copy": "copy-source",
+        "expected_default_post_execute_state": "common-via-buffer-decay",
+        "readback_initial_state": "copy-dest",
+        "command_list_type": "copy",
+        "command_list_count": 1,
+        "copy_command_count": 2,
+        "resource_barrier_count": 1,
+        "submitted_command_list_count": 1,
+        "fence_signaled_value": 1,
+        "fence_completed_value": 1,
+        "wait_completed": true,
+        "hash_algorithm": "fnv1a64",
+        "source_hash": "6b35601f05442325",
+        "readback_hash": "6b35601f05442325",
+        "content_equivalent": true,
+        "cpu_record_microseconds": 150.9,
+        "submit_to_fence_microseconds": 9704.2,
+        "total_workload_microseconds": 9892.9
+      },
+      "memory": {
+        "source": "idxgiadapter3-query-video-memory-info",
+        "local_before": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 65536,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "local_after": {
+          "available": true,
+          "budget_bytes": 7861376717,
+          "current_usage_bytes": 12648448,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 4064906086
+        },
+        "non_local_before": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        },
+        "non_local_after": {
+          "available": true,
+          "budget_bytes": 0,
+          "current_usage_bytes": 0,
+          "current_reservation_bytes": 0,
+          "available_for_reservation_bytes": 0
+        }
+      },
+      "claim_scope": "owned-d3d12-upload-default-readback-observation-only",
+      "limitations": [
+        "DXGI budgets and usage are snapshots, not physical transfer counters.",
+        "Logical bytes describe commands issued by this owned workload only.",
+        "This probe does not hook, inject, schedule, or alter external applications."
+      ]
+    }
+  ]
+}
