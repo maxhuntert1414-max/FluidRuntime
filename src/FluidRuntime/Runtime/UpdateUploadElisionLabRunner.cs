@@ -13,9 +13,46 @@ public sealed class UpdateUploadElisionLabRunner
     private const long LegacyUpdateCount = 3;
     private const ulong LegacyUpdateBytes = 9_216;
 
-    public async Task<UpdateUploadElisionLabReport> RunAsync(
+    public Task<UpdateUploadElisionLabReport> RunAsync(
         UpdateUploadElisionLabOptions options,
+        CancellationToken cancellationToken = default) =>
+        RunCoreAsync(
+            options,
+            authorizer: null,
+            binaryBinding: null,
+            cancellationToken);
+
+    public async Task<GatewayUpdateUploadLabReport> RunGatewayManagedAsync(
+        UpdateUploadElisionLabOptions options,
+        IGatewayUpdateUploadAuthorizer authorizer,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(authorizer);
+        ArgumentNullException.ThrowIfNull(options);
+        using var binaryBinding = OwnedBinaryBinding.Open(
+            options.TargetPath,
+            options.HookPath);
+        var boundOptions = options with
+        {
+            TargetPath = binaryBinding.TargetPath,
+            HookPath = binaryBinding.HookPath
+        };
+        var nativeEvidence = await RunCoreAsync(
+            boundOptions,
+            authorizer,
+            binaryBinding,
+            cancellationToken);
+        return GatewayUpdateUploadLabReport.Build(
+            nativeEvidence,
+            binaryBinding.TargetSha256,
+            binaryBinding.HookSha256);
+    }
+
+    private async Task<UpdateUploadElisionLabReport> RunCoreAsync(
+        UpdateUploadElisionLabOptions options,
+        IGatewayUpdateUploadAuthorizer? authorizer,
+        OwnedBinaryBinding? binaryBinding,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
         var targetPath = RequireFile(options.TargetPath, "Hook target executable");
@@ -30,6 +67,8 @@ public sealed class UpdateUploadElisionLabRunner
                 pair,
                 "warmup",
                 includedInStatistics: false,
+                authorizer,
+                binaryBinding,
                 cancellationToken));
         }
         for (var pair = 0; pair < options.TrialPairs; ++pair)
@@ -41,6 +80,8 @@ public sealed class UpdateUploadElisionLabRunner
                 pair,
                 "measured",
                 includedInStatistics: true,
+                authorizer,
+                binaryBinding,
                 cancellationToken));
         }
         return BuildReport(trials, options);
@@ -53,6 +94,8 @@ public sealed class UpdateUploadElisionLabRunner
         int pairIndex,
         string phase,
         bool includedInStatistics,
+        IGatewayUpdateUploadAuthorizer? authorizer,
+        OwnedBinaryBinding? binaryBinding,
         CancellationToken cancellationToken)
     {
         UpdateUploadElisionRunReport baseline;
@@ -61,16 +104,48 @@ public sealed class UpdateUploadElisionLabRunner
         if (baselineFirst)
         {
             baseline = await RunOneAsync(
-                options, targetPath, hookPath, optimized: false, cancellationToken);
+                options,
+                targetPath,
+                hookPath,
+                optimized: false,
+                pairIndex,
+                phase,
+                authorizer,
+                binaryBinding,
+                cancellationToken);
             optimized = await RunOneAsync(
-                options, targetPath, hookPath, optimized: true, cancellationToken);
+                options,
+                targetPath,
+                hookPath,
+                optimized: true,
+                pairIndex,
+                phase,
+                authorizer,
+                binaryBinding,
+                cancellationToken);
         }
         else
         {
             optimized = await RunOneAsync(
-                options, targetPath, hookPath, optimized: true, cancellationToken);
+                options,
+                targetPath,
+                hookPath,
+                optimized: true,
+                pairIndex,
+                phase,
+                authorizer,
+                binaryBinding,
+                cancellationToken);
             baseline = await RunOneAsync(
-                options, targetPath, hookPath, optimized: false, cancellationToken);
+                options,
+                targetPath,
+                hookPath,
+                optimized: false,
+                pairIndex,
+                phase,
+                authorizer,
+                binaryBinding,
+                cancellationToken);
         }
 
         return new UpdateUploadElisionTrialReport(
@@ -95,8 +170,69 @@ public sealed class UpdateUploadElisionLabRunner
         string targetPath,
         string hookPath,
         bool optimized,
+        int pairIndex,
+        string phase,
+        IGatewayUpdateUploadAuthorizer? authorizer,
+        OwnedBinaryBinding? binaryBinding,
         CancellationToken cancellationToken)
     {
+        GatewayUpdateUploadAuthorization? gatewayAuthorization = null;
+        if (optimized && authorizer is not null)
+        {
+            if (binaryBinding is null)
+            {
+                throw new InvalidOperationException(
+                    "Gateway-managed actuation requires frozen owned binaries.");
+            }
+            try
+            {
+                gatewayAuthorization = await authorizer.AuthorizeAsync(
+                    new GatewayUpdateUploadAuthorizationRequest(
+                        pairIndex,
+                        phase,
+                        UpdateUploadElisionLabOptions.BufferBytes,
+                        UpdateUploadElisionLabOptions.RedundantUpdateCount,
+                        binaryBinding.TargetSha256,
+                        binaryBinding.HookSha256),
+                    cancellationToken);
+                gatewayAuthorization.EnsureMatchesNativePolicy(
+                    UpdateUploadElisionLabOptions.BufferBytes,
+                    UpdateUploadElisionLabOptions.RedundantUpdateCount,
+                    pairIndex,
+                    phase,
+                    binaryBinding.TargetSha256,
+                    binaryBinding.HookSha256);
+            }
+            catch (Exception exception) when (
+                exception is not OperationCanceledException ||
+                !cancellationToken.IsCancellationRequested)
+            {
+                var authorizationFailure = exception is OperationCanceledException
+                    ? new TimeoutException(
+                        "FluidGateway authorization timed out before target launch.",
+                        exception)
+                    : exception;
+                var baselineFallback = await RunOneAsync(
+                    options,
+                    targetPath,
+                    hookPath,
+                    optimized: false,
+                    pairIndex,
+                    phase,
+                    authorizer: null,
+                    binaryBinding,
+                    cancellationToken);
+                var failClosedReport = GatewayUpdateUploadFailClosedReport.Build(
+                    authorizationFailure,
+                    baselineFallback,
+                    binaryBinding.TargetSha256,
+                    binaryBinding.HookSha256);
+                throw new GatewayUpdateUploadAuthorizationDeniedException(
+                    authorizationFailure,
+                    failClosedReport);
+            }
+        }
+
         var startInfo = new ProcessStartInfo
         {
             FileName = targetPath,
@@ -134,12 +270,19 @@ public sealed class UpdateUploadElisionLabRunner
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
             using var reader = await HookLabRunner.OpenRingAsync(process, cancellationToken);
+            if (reader.ProcessId != (ulong)process.Id)
+            {
+                throw new InvalidDataException(
+                    "Hook ring process identity did not match the owned target.");
+            }
+            binaryBinding?.ValidateLaunchedProcess(process);
             HookControlPolicy? policy = null;
             if (optimized)
             {
                 policy = reader.PublishUpdateSubresourceElisionPolicy(
                     TimeSpan.FromSeconds(4),
-                    UpdateUploadElisionLabOptions.RedundantUpdateCount);
+                    gatewayAuthorization?.NativeActionBudget ??
+                        UpdateUploadElisionLabOptions.RedundantUpdateCount);
                 await reader.WaitForControlAcknowledgmentAsync(
                     policy.Epoch,
                     TimeSpan.FromSeconds(5),
@@ -172,7 +315,8 @@ public sealed class UpdateUploadElisionLabRunner
                 reader.ControlSnapshot,
                 reader,
                 events,
-                document.RootElement.Clone());
+                document.RootElement.Clone(),
+                gatewayAuthorization);
         }
         finally
         {
@@ -192,7 +336,8 @@ public sealed class UpdateUploadElisionLabRunner
         HookControlSnapshot control,
         HookRingReader reader,
         IReadOnlyList<HookIpcEvent> events,
-        JsonElement report)
+        JsonElement report,
+        GatewayUpdateUploadAuthorization? gatewayAuthorization)
     {
         var resources = report.GetProperty("resources");
         var timing = report.GetProperty("timing");
@@ -388,7 +533,13 @@ public sealed class UpdateUploadElisionLabRunner
             destinationHash,
             cpuMicroseconds,
             gpuMicroseconds,
-            report);
+            report)
+        {
+            GatewayAuthorization = gatewayAuthorization,
+            PublishedPolicyExpiresAtQpc = policy?.ExpiresAtQpc ?? 0,
+            PublishedPolicyActionMask = policy?.ActionMask ?? 0,
+            PublishedPolicyActionBudget = policy?.ActionBudget ?? 0
+        };
     }
 
     private static bool DirectEventPatternMatches(

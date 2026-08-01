@@ -72,10 +72,27 @@ coordinate the interfaces the operating system and graphics APIs expose.
   fail-closed typed clients with recoverable/fatal peer-error separation, and a
   measured same-flow reduction from 3,189 to 1,880 frame bytes while retaining
   v1 compatibility.
+- **v0.15.0:** first live FluidGateway-to-native closed loop for one owned
+  D3D11 path. Sixty-four exact FluidLink v2 duplicate-upload decisions authorize
+  a short-lived action-8 budget, while destination generation and full-content
+  comparison remain the native final gate. The exact loopback tuple is bound to
+  the expected Gateway PID/executable through Windows, target/hook binaries are
+  frozen and revalidated, and a context SHA-256 binds authorization to that
+  evidence. Malformed, stalled, and cumulatively slow peers fail under one total
+  deadline. WARP and RX 580 evidence are recorded. Performance remains blocked
+  because Gateway authorization is outside the native timing window; process
+  binding is not cryptographic peer authentication.
 
 ## Next Milestones
 
-### v0.15: Upload Generalization and Synchronization Hardening
+### v0.16: Low-Latency Decisions and Upload Generalization
+
+- Replace 74 serial pre-authorization round trips with a bounded batch decision
+  packet or another measured transport shape before considering per-frame use.
+- Include authorization and fallback in an end-to-end latency benchmark; retain
+  the current performance blocker until the complete loop passes.
+- Add backpressure, cancellation, peer-restart, stale-session, and partial-batch
+  tests before any shared-memory FluidLink proposal can become active.
 
 - Extend upload evidence to textures, pitch-aware data, partial boxes,
   `UpdateSubresource1`, dynamic-buffer, reuse, and batching patterns without an
@@ -88,10 +105,30 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Replace the lab-specific repeated-generation heuristic with conservative
   provenance and synchronization rules.
 - Add longer stress, race, and fault-injection tests.
-- Derive bounded policies from live FluidGateway evidence instead of a fixed
-  lab action, with explicit regression rollback.
+- Generalize live FluidGateway authorization only after each new native pattern
+  has equivalence, provenance, budget, expiration, and rollback evidence.
 
-### v0.16+: Controlled External Observation
+### v0.17: Owned D3D12 Backend
+
+- Add an opt-in owned-app observation layer for devices, command queues,
+  resources/heaps, map/unmap, copy commands, resource barriers, queue submits,
+  fences, and residency signals.
+- Build a D3D12-specific provenance and synchronization model. Do not reuse
+  D3D11 generation assumptions where explicit states, queues, and fences differ.
+- Keep actuation disabled until an owned deterministic workload proves final
+  content, resource-state correctness, queue ordering, budget, and rollback.
+
+### v0.18: Owned Vulkan Backend
+
+- Add an explicit opt-in Vulkan layer for the owned lab, observing allocations,
+  memory binding, buffers/images, copy commands, barriers, queue submit/present,
+  semaphores, fences, and available memory-budget telemetry.
+- Model layouts, queue-family ownership, suballocation lifetime, and explicit
+  synchronization independently from D3D11/D3D12.
+- Promote one bounded action only after deterministic equivalence, validation-
+  layer cleanliness, fault controls, timing, and complete layer removal pass.
+
+### v0.19+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized
@@ -101,8 +138,6 @@ coordinate the interfaces the operating system and graphics APIs expose.
 
 ### Later: Broader Runtime Management
 
-- D3D12 command queues, heaps, barriers, copies, and residency telemetry.
-- Vulkan queues, memory allocations, barriers, and presentation telemetry.
 - CPU scheduling and frame-critical thread classification.
 - RAM/VRAM residency, upload staging reuse, and memory-pressure policies.
 - Closed-loop decisions fed by measured frame pacing, latency, power, and

@@ -21,11 +21,12 @@ Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.m
 [v0.11 upload-elision evidence](docs/evidence/v0.11.0-upload-elision.md) |
 [v0.12 direct-update evidence](docs/evidence/v0.12.0-update-upload-elision.md) |
 [v0.14 FluidLink v2 evidence](docs/evidence/v0.14.0-fluidlink-v2.md) |
+[v0.15 Gateway-managed actuation evidence](docs/evidence/v0.15.0-gateway-managed-update-upload.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.14.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.15.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -48,11 +49,31 @@ framing, or correlation drift.
 The Python/.NET probe opens one real v1 session and one real v2 session for the
 same 11 round trips. V1 used 3,189 FluidLink frame bytes and v2 used 1,880,
 saving 1,309 bytes or 41.05%. Those counters exclude TCP/IP overhead and do not
-measure physical RAM/VRAM, PCIe, FPS, power, or game performance. Gateway
-decisions remain advisory and cannot authorize the native hook. Delta snapshots
-and a generic shared-memory FluidLink transport are explicitly deferred until
-they have real payloads, synchronization semantics, stress tests, and a
-sustained benchmark.
+measure physical RAM/VRAM, PCIe, FPS, power, or game performance. General
+Gateway decisions remain advisory. Version 0.15.0 adds one explicit exception:
+`gateway-update-upload-lab` accepts an exact set of live duplicate-upload
+decisions before launching each optimized owned target, then publishes action
+bit 8 with a 64-action budget. The hook still requires exact bytes and
+destination generation for every skip. FluidLink package 0.2.1 exposes
+read-only connected endpoints so Runtime can bind the exact loopback tuple to
+the expected Gateway PID and executable SHA-256 through Windows. Delta
+snapshots and a generic
+shared-memory FluidLink transport
+remain deferred until they have real payloads, synchronization semantics,
+stress tests, and a sustained benchmark.
+
+The v0.15 closed loop fails before native policy publication on wrong expected
+peer PID/executable binding, contract/capability drift, malformed decisions,
+malformed framing, or total-deadline expiry. Its integration gate proves a
+malformed response, a connection that never responds, and a valid peer whose
+small per-message delays exceed the single authorization deadline. Each case
+launches a fresh baseline, forwards all 70 native updates, skips zero, and
+publishes no policy. Target/hook files are held without write/delete sharing
+from before authorization through every run; their hashes, process/ring
+identity, policy fields, content equivalence, and rollback are recorded. This
+is OS-verified process binding, not cryptographic peer authentication. Gateway
+authorization remains outside the native timing interval, so closed-loop
+performance claims are always blocked.
 
 It also contains deliberately narrow actuation experiments. The original
 `copy-elision-lab` command runs repeated baseline/optimized pairs of the owned
@@ -197,6 +218,12 @@ dotnet build FluidRuntime.slnx -c Release
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File tools/Test-FluidLinkIntegration.ps1 `
   -GatewayPath ..\FluidGateway
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/Test-GatewayManagedUpdateUpload.ps1 `
+  -GatewayPath ..\FluidGateway `
+  -TrialPairs 2 `
+  -WarmupPairs 0 `
+  -Hardware $false
 dotnet pack src/FluidLink/FluidLink.csproj -c Release `
   -o artifacts/packages
 ```
@@ -361,6 +388,26 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
   --out artifacts/update-upload-elision-hardware.json
 ```
 
+Run the same action only after live FluidGateway authorization:
+
+```powershell
+# Start FluidGateway's event server separately on 127.0.0.1:8765.
+# Capture the PID and SHA-256 of the exact executable used to launch it.
+dotnet run --project src/FluidRuntime -c Release -- gateway-update-upload-lab `
+  --target native/build/Release/fluidruntime-hook-target.exe `
+  --hook native/build/Release/fluidruntime-present-hook.dll `
+  --host 127.0.0.1 `
+  --port 8765 `
+  --gateway-pid $gatewayPid `
+  --gateway-executable-sha256 $gatewayExecutableSha256 `
+  --trial-pairs 10 `
+  --warmup-pairs 1 `
+  --hold-ms 50 `
+  --gpu-timeout-ms 5000 `
+  --hardware true `
+  --out artifacts/gateway-update-upload-hardware.json
+```
+
 Each pair contains a baseline and optimized process, and pair order alternates
 to reduce first/second-run bias. Warmups remain in the trace but are excluded
 from statistics. Baselines forward all six copies; optimized runs observe the
@@ -393,6 +440,17 @@ Baseline runs forward all 67 direct updates; optimized runs forward three and
 skip 64, avoiding 268,435,456 logical source bytes. The skip proof is exact
 `memcmp`; hashes only label evidence. The cache is opt-in, one resource, and
 4 MiB. A content mutation and an unrelated API write both force forwarding.
+
+`gateway-update-upload-lab` performs the same native workload but obtains the
+budget from 64 exact live FluidGateway decisions over FluidLink v2. The Gateway
+classifies duplicate source/target/size intent; it does not prove equality.
+Only the native exact-content and generation guards can consume an authorized
+action. Runtime binds the connected tuple to the caller-supplied expected PID
+and executable SHA-256, freezes the target and hook binaries, and places a
+unique context SHA-256 in the session and every operation. The current flow
+uses 74 round trips under one total deadline per optimized run and is not a
+per-frame production transport. The process binding does not authenticate a
+hostile or compromised peer cryptographically.
 
 Version 0.6 measures the workload with CPU QPC and D3D11 GPU timestamp queries
 guarded by `TIMESTAMP_DISJOINT`. It reports paired p50/p95 distributions,

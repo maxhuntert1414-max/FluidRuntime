@@ -46,17 +46,35 @@ jobs:
       - name: Restore .NET projects
         run: dotnet restore FluidRuntime.slnx
 
-      - name: Test FluidLink client
+      - name: Build managed runtime
+        run: dotnet build FluidRuntime.slnx -c Release --no-restore
+
+      - name: Test FluidLink client and Gateway authorization
         run: >-
           dotnet test tests/FluidRuntime.Tests/FluidRuntime.Tests.csproj
           --no-restore
-          --filter FullyQualifiedName~FluidLink
+          --filter "FullyQualifiedName~FluidLink|FullyQualifiedName~GatewayUpdateUpload|FullyQualifiedName~OwnedBinaryBinding|FullyQualifiedName~WindowsLoopbackPeerVerifier"
 
       - name: Test Python and .NET intercommunication
         shell: powershell
         run: >-
           ./tools/Test-FluidLinkIntegration.ps1
           -GatewayPath "$PWD/FluidGateway"
+
+      - name: Configure native owned target
+        run: cmake -S native -B native/build -A x64
+
+      - name: Build native owned target
+        run: cmake --build native/build --config Release
+
+      - name: Test Gateway-authorized native actuation and fallback
+        shell: powershell
+        run: >-
+          ./tools/Test-GatewayManagedUpdateUpload.ps1
+          -GatewayPath "$PWD/FluidGateway"
+          -TrialPairs 2
+          -WarmupPairs 0
+          -Hardware $false
 
       - name: Pack FluidLink
         run: >-
@@ -70,5 +88,9 @@ jobs:
         with:
           name: fluidlink-v2
           path: |
-            artifacts/packages/FluidLink.0.2.0.nupkg
+            artifacts/packages/FluidLink.0.2.1.nupkg
             artifacts/fluidlink-cross-process.json
+            artifacts/gateway-update-upload-control.json
+            artifacts/gateway-update-upload-invalid-response-fail-closed.json
+            artifacts/gateway-update-upload-fail-closed.json
+            artifacts/gateway-update-upload-slow-response-fail-closed.json

@@ -9,7 +9,7 @@ memory, GPU, and graphics API telemetry.
 flowchart LR
     PM[PresentMon trace] --> FG[FluidGateway]
     FG --> L[Operational ledger]
-    FG <--> FL[FluidLink binary advisory transport]
+    FG <--> FL[FluidLink binary transport]
     FL <--> MR[Managed runtime]
     L --> MR
     NP[Native process and GPU probe] --> MR
@@ -61,10 +61,11 @@ gate opens real v1 and v2 sessions for the same semantic flow and verifies
 3,189 versus 1,880 frame bytes. These are transport frame bytes, not physical
 memory movement.
 
-This transport is advisory. It does not share the native hook ABI and does not
-write the shared-memory control block. A FluidLink decision still needs a
-separate owned-target policy with provenance, action, budget, expiration,
-equivalence, evidence, and rollback before native actuation can occur.
+FluidLink does not share the native hook ABI and does not write the shared-memory
+control block. Most decisions remain advisory. Version 0.15 adds one explicit
+managed bridge that may translate an exact set of live decisions into an
+owned-target policy with provenance, action, budget, expiration, equivalence,
+evidence, and rollback.
 
 Delta snapshots are deferred because the current state event carries only a
 snapshot request, not a repeated state body. A generic shared-memory FluidLink
@@ -73,6 +74,49 @@ semantics, and a new transport first needs record framing, atomics,
 backpressure, identity/ACL, peer-crash recovery, fallback, stress tests, and a
 sustained benchmark. Software transport changes do not create physical unified
 memory.
+
+## Gateway-Managed Actuation Bridge
+
+`gateway-update-upload-lab` is the first closed loop across both repositories.
+Before authorization, the managed runtime opens the target and hook binaries
+without write/delete sharing and records their SHA-256 values. It then opens a
+fresh FluidLink v2 session, binds the exact IPv4 loopback tuple through the
+Windows TCP owner table to the caller-supplied Gateway PID, executable SHA-256,
+and process start time, and sends one seed upload plus 64 same-resource
+candidate uploads. The advertised server name/version remain protocol metadata,
+not peer authentication. The exact contract, required capabilities, heartbeat,
+one executed seed, and 64 accepted `deduplicate-identical-transfer` decisions
+with `executed=false` are all mandatory.
+
+A unique context SHA-256 binds the authorization nonce, peer process evidence,
+frozen target/hook hashes, pair/phase, resource size/count, action mask, and
+budget. Runtime carries that digest in the session ID and every operation
+reason, then recomputes it before accepting the authorization.
+
+Successful authorization is converted locally to action bit 8 and budget 64.
+It does not bypass the native proof. After the owned target and per-PID ring are
+opened, Runtime verifies the ring PID, launched executable path/hash, and loaded
+hook path/hash against the held binary binding before publishing one policy
+expiring within four seconds. Each candidate still requires trusted resource
+provenance, a matching destination generation, and exact full-buffer comparison
+before an atomic action reservation can skip the call.
+
+Authorization failures happen before optimized target launch. Malformed frames,
+process/contract/capability drift, rejected decisions, and internal timeout
+produce a new baseline run with no policy fields. One linked deadline covers
+connect, OS peer verification, and all 74 round trips, so individually valid but
+cumulatively slow responses also fail closed. Caller cancellation propagates
+instead of being converted into a fallback. Binary drift after launch aborts
+before policy publication. Failures after policy publication remain native-lab
+failures and are never reported as "no policy published."
+
+The current flow uses 74 serial round trips per optimized run. Authorization is
+recorded separately and lies outside the native workload interval. The wrapper
+therefore blocks every performance claim until the complete decision-to-effect
+path has a bounded end-to-end measurement. This is a functional authority bridge
+for one owned action, not a production scheduler or generic RAM/VRAM manager.
+The OS process binding narrows accidental/wrong-peer risk but is explicitly not
+cryptographic authentication against a hostile or compromised same-user peer.
 
 ## Hook Event Transport
 

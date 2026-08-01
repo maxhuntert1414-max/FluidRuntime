@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>FluidLink</AssemblyName>
     <RootNamespace>FluidLink</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <PackageId>FluidLink</PackageId>
     <Title>FluidLink binary transport</Title>
     <Authors>Fluid project contributors</Authors>
@@ -18,7 +18,7 @@
     <PackageProjectUrl>https://github.com/maxhuntert1414-max/FluidRuntime</PackageProjectUrl>
     <RepositoryUrl>https://github.com/maxhuntert1414-max/FluidRuntime</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageReleaseNotes>FluidLink v2 adds opcode-specific positional binary payloads, integer microsecond/byte units, bitmask capabilities, golden cross-language vectors, and a typed fail-closed client while retaining v1 compatibility.</PackageReleaseNotes>
+    <PackageReleaseNotes>FluidLink 0.2.1 exposes read-only local and remote IP endpoints after connection so consumers can verify loopback process ownership without exposing the underlying socket.</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

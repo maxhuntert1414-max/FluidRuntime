@@ -39,7 +39,16 @@ public sealed record UpdateUploadElisionRunReport(
     string PostDetachDestinationHash,
     double CpuWorkloadMicroseconds,
     double? GpuWorkloadMicroseconds,
-    JsonElement TargetReport);
+    JsonElement TargetReport)
+{
+    public GatewayUpdateUploadAuthorization? GatewayAuthorization { get; init; }
+
+    public long PublishedPolicyExpiresAtQpc { get; init; }
+
+    public ulong PublishedPolicyActionMask { get; init; }
+
+    public ulong PublishedPolicyActionBudget { get; init; }
+}
 
 public sealed record UpdateUploadElisionTrialReport(
     int PairIndex,

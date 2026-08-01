@@ -1,7 +1,7 @@
 # FluidLink
 
 FluidLink is the versioned local transport library between FluidRuntime and
-FluidGateway. Package 0.2.0 has no third-party dependencies and keeps both wire
+FluidGateway. Package 0.2.1 has no third-party dependencies and keeps both wire
 generations available:
 
 | Protocol | Payload | Units | Status |
@@ -39,7 +39,7 @@ contract edit requires a new fingerprint and matching Python/.NET vectors.
 
 ```csharp
 await using var client = new FluidLinkV2Client("127.0.0.1", 8765);
-var welcome = await client.HandshakeAsync("my-runtime-adapter", "0.2.0");
+var welcome = await client.HandshakeAsync("my-runtime-adapter", "0.2.1");
 
 await client.SendSessionEventAsync(new FluidLinkV2SessionEvent(
     FluidLinkV2LifecycleAction.Begin,
@@ -75,6 +75,11 @@ and fails closed on malformed or truncated frames. A typed peer rejection is
 surfaced to the caller. Only `RuntimeEventRejected` preserves an otherwise valid
 session; fatal typed peer errors, framing, or correlation drift invalidate the
 connection and require a new handshake.
+
+Package 0.2.1 also exposes read-only `LocalEndPoint` and `RemoteEndPoint`
+properties while connected. A Windows consumer can correlate that exact TCP
+tuple with the OS owner table without receiving the underlying socket. Endpoint
+inspection is transport evidence, not cryptographic peer authentication.
 
 `BytesSent` and `BytesReceived` count complete FluidLink frames handed to TCP.
 They exclude TCP/IP overhead. In the v0.14 cross-process probe, the same 11

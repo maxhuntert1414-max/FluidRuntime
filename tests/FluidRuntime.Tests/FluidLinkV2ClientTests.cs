@@ -10,6 +10,70 @@ public sealed class FluidLinkV2ClientTests
         Enumerable.Range(101, 16).Select(value => (byte)value).ToArray();
 
     [Fact]
+    public async Task Client_exposes_endpoints_only_while_connected()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var listenerEndPoint = (IPEndPoint)listener.LocalEndpoint;
+        var acceptTask = listener.AcceptTcpClientAsync();
+
+        await using var client = new FluidLinkV2Client(
+            "127.0.0.1",
+            listenerEndPoint.Port,
+            TimeSpan.FromSeconds(5));
+        Assert.Null(client.LocalEndPoint);
+        Assert.Null(client.RemoteEndPoint);
+
+        await client.ConnectAsync();
+        using var server = await acceptTask;
+        var localEndPoint = Assert.IsType<IPEndPoint>(client.LocalEndPoint);
+        var remoteEndPoint = Assert.IsType<IPEndPoint>(client.RemoteEndPoint);
+        var serverRemoteEndPoint = Assert.IsType<IPEndPoint>(
+            server.Client.RemoteEndPoint);
+
+        Assert.Equal(serverRemoteEndPoint, localEndPoint);
+        Assert.Equal(listenerEndPoint, remoteEndPoint);
+
+        await client.DisposeAsync();
+        Assert.Null(client.LocalEndPoint);
+        Assert.Null(client.RemoteEndPoint);
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1", AddressFamily.InterNetwork)]
+    [InlineData("::1", AddressFamily.InterNetworkV6)]
+    public async Task Client_preserves_literal_loopback_address_family(
+        string host,
+        AddressFamily expectedAddressFamily)
+    {
+        if (expectedAddressFamily == AddressFamily.InterNetworkV6 &&
+            !Socket.OSSupportsIPv6)
+        {
+            return;
+        }
+
+        var address = IPAddress.Parse(host);
+        using var listener = new TcpListener(address, 0);
+        listener.Start();
+        var listenerEndPoint = (IPEndPoint)listener.LocalEndpoint;
+        var acceptTask = listener.AcceptTcpClientAsync();
+        await using var client = new FluidLinkV2Client(
+            host,
+            listenerEndPoint.Port,
+            TimeSpan.FromSeconds(5));
+
+        await client.ConnectAsync();
+        using var server = await acceptTask;
+
+        Assert.Equal(
+            expectedAddressFamily,
+            client.LocalEndPoint?.AddressFamily);
+        Assert.Equal(
+            expectedAddressFamily,
+            client.RemoteEndPoint?.AddressFamily);
+    }
+
+    [Fact]
     public async Task Client_rejects_non_loopback_hosts_and_invalid_capabilities()
     {
         Assert.Throws<ArgumentException>(

@@ -20,6 +20,15 @@ public static class RuntimeApplication
         if (args.Length > 0 &&
             string.Equals(
                 args[0],
+                "gateway-update-upload-lab",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return await GatewayUpdateUploadLabCommand.RunAsync(args);
+        }
+
+        if (args.Length > 0 &&
+            string.Equals(
+                args[0],
                 "update-upload-elision-lab",
                 StringComparison.OrdinalIgnoreCase))
         {
@@ -88,6 +97,7 @@ public static class RuntimeApplication
             Console.WriteLine(ReadbackElisionLabOptions.Usage);
             Console.WriteLine(UploadElisionLabOptions.Usage);
             Console.WriteLine(UpdateUploadElisionLabOptions.Usage);
+            Console.WriteLine(GatewayUpdateUploadLabOptions.Usage);
             Console.WriteLine(FluidLinkProbeOptions.Usage);
             return 0;
         }

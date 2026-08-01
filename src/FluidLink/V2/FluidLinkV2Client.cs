@@ -11,6 +11,8 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
     private readonly SemaphoreSlim operationGate = new(1, 1);
     private TcpClient? tcpClient;
     private NetworkStream? stream;
+    private IPEndPoint? localEndPoint;
+    private IPEndPoint? remoteEndPoint;
     private ulong nextSequence = 1;
     private bool negotiated;
     private bool disposed;
@@ -49,6 +51,10 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
     public FluidLinkV2Capability AcceptedCapabilities => acceptedCapabilities;
 
     public bool IsNegotiated => negotiated;
+
+    public IPEndPoint? LocalEndPoint => localEndPoint;
+
+    public IPEndPoint? RemoteEndPoint => remoteEndPoint;
 
     public long BytesSent { get; private set; }
 
@@ -246,13 +252,24 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
             return;
         }
 
-        var client = new TcpClient { NoDelay = true };
+        var client = IPAddress.TryParse(host, out var literalAddress)
+            ? new TcpClient(literalAddress.AddressFamily)
+            : new TcpClient();
+        client.NoDelay = true;
         using var timeoutSource = CreateTimeoutSource(cancellationToken);
         try
         {
             await client.ConnectAsync(host, port, timeoutSource.Token);
+            var connectedLocalEndPoint = client.Client.LocalEndPoint as IPEndPoint ??
+                throw new InvalidDataException(
+                    "FluidLink v2 connection has no local IP endpoint.");
+            var connectedRemoteEndPoint = client.Client.RemoteEndPoint as IPEndPoint ??
+                throw new InvalidDataException(
+                    "FluidLink v2 connection has no remote IP endpoint.");
             tcpClient = client;
             stream = client.GetStream();
+            localEndPoint = connectedLocalEndPoint;
+            remoteEndPoint = connectedRemoteEndPoint;
         }
         catch
         {
@@ -603,6 +620,8 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
 
     private void InvalidateConnection()
     {
+        localEndPoint = null;
+        remoteEndPoint = null;
         stream?.Dispose();
         tcpClient?.Dispose();
         stream = null;

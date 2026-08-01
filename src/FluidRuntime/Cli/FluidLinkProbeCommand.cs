@@ -8,7 +8,7 @@ namespace FluidRuntime.Cli;
 public static class FluidLinkProbeCommand
 {
     private const string ClientName = "fluidruntime";
-    private const string ClientVersion = "0.14.0";
+    private const string ClientVersion = "0.15.0";
     private const string ProbeSessionId = "fluidruntime-link-probe";
     private const string ProbeNonce = "fluidruntime-link-probe";
     private const string RamResourceId = "fluidlink-ram-buffer";
