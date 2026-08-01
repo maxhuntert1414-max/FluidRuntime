@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: maxhuntert1414-max/FluidGateway
-          ref: v0.63.0
+          ref: v0.64.0
           path: FluidGateway
 
       - name: Set up Python
@@ -37,7 +37,11 @@ jobs:
 
       - name: Test Gateway FluidLink endpoint
         working-directory: FluidGateway
-        run: python -m unittest tests.test_fluidlink -v
+        run: >-
+          python -m unittest
+          tests.test_fluidlink
+          tests.test_fluidlink_v2
+          -v
 
       - name: Restore .NET projects
         run: dotnet restore FluidRuntime.slnx
@@ -46,7 +50,7 @@ jobs:
         run: >-
           dotnet test tests/FluidRuntime.Tests/FluidRuntime.Tests.csproj
           --no-restore
-          --filter FullyQualifiedName~FluidLinkClientTests
+          --filter FullyQualifiedName~FluidLink
 
       - name: Test Python and .NET intercommunication
         shell: powershell
@@ -64,7 +68,7 @@ jobs:
       - name: Upload FluidLink package and probe report
         uses: actions/upload-artifact@v7
         with:
-          name: fluidlink-v1
+          name: fluidlink-v2
           path: |
-            artifacts/packages/FluidLink.0.1.0.nupkg
+            artifacts/packages/FluidLink.0.2.0.nupkg
             artifacts/fluidlink-cross-process.json

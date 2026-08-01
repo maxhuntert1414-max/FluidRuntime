@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>FluidLink</AssemblyName>
     <RootNamespace>FluidLink</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <PackageId>FluidLink</PackageId>
     <Title>FluidLink binary transport</Title>
     <Authors>Fluid project contributors</Authors>
@@ -18,13 +18,23 @@
     <PackageProjectUrl>https://github.com/maxhuntert1414-max/FluidRuntime</PackageProjectUrl>
     <RepositoryUrl>https://github.com/maxhuntert1414-max/FluidRuntime</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageReleaseNotes>FluidLink v1 binary framing, numeric opcodes, exact contract negotiation, bounded JSON payloads, and correlated loopback transport.</PackageReleaseNotes>
+    <PackageReleaseNotes>FluidLink v2 adds opcode-specific positional binary payloads, integer microsecond/byte units, bitmask capabilities, golden cross-language vectors, and a typed fail-closed client while retaining v1 compatibility.</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\contracts\fluidlink-v1.contract.json"
           Link="contracts\fluidlink-v1.contract.json"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="true"
+          PackagePath="contentFiles\any\any\contracts" />
+    <None Include="..\..\contracts\fluidlink-v2.contract.json"
+          Link="contracts\fluidlink-v2.contract.json"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="true"
+          PackagePath="contentFiles\any\any\contracts" />
+    <None Include="..\..\contracts\fluidlink-v2.golden.json"
+          Link="contracts\fluidlink-v2.golden.json"
           CopyToOutputDirectory="PreserveNewest"
           Pack="true"
           PackagePath="contentFiles\any\any\contracts" />

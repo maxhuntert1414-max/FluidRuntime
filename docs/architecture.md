@@ -40,24 +40,39 @@ flowchart LR
 
 ## FluidLink Control Transport
 
-Version 0.13.0 adds a separate user-space path between the Gateway policy plane
-and the managed runtime. FluidLink v1 uses a fixed 56-byte little-endian header:
-magic/version, frame kind, message/event/decision opcodes, flags, sequence,
-16-byte message and session identities, and a 32-bit payload length. Dynamic
-event fields remain a strict UTF-8 JSON object bounded to 1 MiB, 64 nesting
-levels, and finite numbers.
+Version 0.14.0 promotes FluidLink v2 on the separate user-space path between the
+Gateway policy plane and the managed runtime. The fixed 56-byte little-endian
+header still carries magic/version, frame kind, message/event/decision opcodes,
+flags, sequence, 16-byte message and session identities, and payload length.
+V2 replaces the JSON body with opcode-specific positional binary schemas,
+presence masks, a 64-bit capability mask, integer microseconds, and integer
+bytes. Payloads are capped at 65,535 bytes. V1 remains compatible on wire
+version 1 and raw JSONL remains a separate non-FluidLink mode.
 
 The first request negotiates the exact contract SHA-256, required capabilities,
 limits, and a new session. Later requests must advance sequence exactly once and
 responses must match message, sequence, session, and subject. The .NET client
 permits loopback hosts only, serializes concurrent calls, verifies heartbeat
-nonces, and invalidates its connection on framing or correlation drift. The
-Gateway retains its raw JSONL endpoint as a per-connection legacy mode.
+nonces, and invalidates its connection on framing or correlation drift. Python
+and .NET also validate the same 17 full-frame golden vectors. Only a typed
+runtime-event rejection preserves the client session; fatal peer errors require
+a new handshake. The cross-process
+gate opens real v1 and v2 sessions for the same semantic flow and verifies
+3,189 versus 1,880 frame bytes. These are transport frame bytes, not physical
+memory movement.
 
 This transport is advisory. It does not share the native hook ABI and does not
 write the shared-memory control block. A FluidLink decision still needs a
 separate owned-target policy with provenance, action, budget, expiration,
 equivalence, evidence, and rollback before native actuation can occur.
+
+Delta snapshots are deferred because the current state event carries only a
+snapshot request, not a repeated state body. A generic shared-memory FluidLink
+transport is also deferred: the hook ring has different ownership and ABI
+semantics, and a new transport first needs record framing, atomics,
+backpressure, identity/ACL, peer-crash recovery, fallback, stress tests, and a
+sustained benchmark. Software transport changes do not create physical unified
+memory.
 
 ## Hook Event Transport
 

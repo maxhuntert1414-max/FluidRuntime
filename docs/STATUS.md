@@ -1,27 +1,29 @@
 # Project Status
 
-FluidRuntime v0.13.0 is verified locally and remotely as of 2026-07-29.
+FluidRuntime v0.14.0 is verified locally as of 2026-08-01.
 The v0.12.0 native actuation evidence remains unchanged.
 
 ## Public Release
 
-- Release branch/tag: `main` / `v0.13.0`
-- FluidLink interop: [run 30511854168](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30511854168)
-- Runtime validation: [run 30511854153](https://github.com/maxhuntert1414-max/FluidRuntime/actions/runs/30511854153)
-- Canonical Gateway contract: [FluidGateway v0.63.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.63.0)
-- Public release: [FluidRuntime v0.13.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.13.0)
+- Release branch/tag: `main` / `v0.14.0`
+- Canonical Gateway contract: [FluidGateway v0.64.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.64.0)
+- Public release: [FluidRuntime v0.14.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.14.0)
+- FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
+- Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 93/93 passed.
-- FluidLink .NET tests: 14/14 passed.
-- FluidGateway complete suite: 222/222 passed.
-- FluidGateway FluidLink tests: 23/23 passed.
-- Cross-process Python/.NET probe: 11/11 round trips passed.
+- Managed tests: 113/113 passed.
+- FluidLink .NET tests: 34/34 passed across v1 and v2.
+- FluidGateway complete suite: 242/242 passed.
+- FluidGateway FluidLink tests: 43/43 passed across v1 and v2.
+- Cross-process Python/.NET probe: 11/11 v1 and 11/11 v2 round trips passed.
 - Contract file and negotiated SHA-256:
-  `10b46685472d13d2d49cc81aa1f7df2d654c1ec53fdc666e086e0d062ad114fa`.
-- FluidLink frame bytes: 3,189 versus 6,570 equivalent JSON-envelope bytes,
-  a 51.46% reduction for the same synthetic semantics.
+  `0d24d96aec32d74e123f9e198e51adde74ddf190e8c40b0ac18bddf5c4108b2f`.
+- FluidLink frame bytes: 3,189 for v1 versus 1,880 for v2, saving 1,309
+  bytes or 41.05% for the same cross-process semantic flow.
+- `FluidLink.0.2.0.nupkg` inspected with the DLL, README, v1/v2 contracts,
+  and v2 golden vectors present.
 - Native tests: 9/9 Release and 9/9 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
@@ -32,8 +34,33 @@ The v0.12.0 native actuation evidence remains unchanged.
   passed after ABI and hook changes.
 - Raw WARP, RX 580, and policy-matrix traces are committed with the source.
 
-The native lines above are the unchanged v0.12.0 release gate. Version 0.13.0
+The native lines above are the unchanged v0.12.0 release gate. Version 0.14.0
 does not modify native source, ABI, hook policy, or hardware claims.
+
+## New In v0.14.0
+
+- `FluidLink` 0.2.0 adds the preferred `fluidlink-v2` wire protocol while
+  retaining all v1 public types and server compatibility.
+- V2 payloads are opcode-specific positional binary; the wire carries no JSON.
+- Presence and capability registries use numeric bitmasks rather than repeated
+  field names or capability strings.
+- Time is encoded as integer microseconds and memory as integer bytes.
+- Python and .NET validate the same contract SHA-256 and full-frame golden
+  vectors. The 17-frame fixture covers every message/runtime-event opcode, all
+  optional masks, lifecycle endings, execute/deduplicate decisions, one numeric
+  `InvalidPayload` error, and heartbeat.
+- The typed .NET client serializes concurrent calls, checks exact response
+  correlation, preserves valid sessions only across recoverable runtime-event
+  rejection, and invalidates on fatal typed peer errors or protocol drift.
+- Python rejects implicit identifier coercion, rejects registration fields on
+  resource release, and classifies malformed binary separately from adapter
+  rejection.
+- The probe runs real v1 and v2 connections for the same event flow and records
+  frame bytes, exact fixed-point decision values, and application RTT.
+- Delta snapshots are deferred because no repeated snapshot body crosses v2.
+- A generic shared-memory FluidLink transport is deferred pending a separate
+  record/atomic/backpressure/ACL/crash-recovery contract and sustained benchmark.
+- FluidLink remains advisory and separate from the native hook ring/control ABI.
 
 ## New In v0.13.0
 
@@ -109,6 +136,7 @@ physical RAM/VRAM residency, actuate presentation, or support D3D12/Vulkan.
 
 ## Read Next
 
+- [v0.14.0 FluidLink v2 evidence](evidence/v0.14.0-fluidlink-v2.md)
 - [v0.13.0 FluidLink evidence](evidence/v0.13.0-fluidlink-binary-interop.md)
 - [v0.12.0 evidence](evidence/v0.12.0-update-upload-elision.md)
 - [Architecture](architecture.md)

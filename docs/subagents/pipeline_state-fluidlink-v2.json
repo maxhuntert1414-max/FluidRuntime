@@ -1,0 +1,29 @@
+{
+  "pipeline": "stark-productions-fluidlink-v2",
+  "stage": "publication",
+  "status": "ready_for_release",
+  "fallback_mode": "debugger_quota_only",
+  "active_blockers": [],
+  "completed": [
+    "research",
+    "planning",
+    "implementation",
+    "initial_review",
+    "review_fixes",
+    "golden_vector_expansion",
+    "documentation",
+    "cross_process_gate",
+    "package_gate",
+    "final_review"
+  ],
+  "pending": [
+    "gateway_release",
+    "runtime_release",
+    "remote_ci_verification"
+  ],
+  "verified_counts": {
+    "gateway_tests": 242,
+    "runtime_tests": 113,
+    "shared_golden_vectors": 17
+  }
+}

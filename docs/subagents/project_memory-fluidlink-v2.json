@@ -1,0 +1,35 @@
+{
+  "project": "FluidLink v2",
+  "contract_sha256": "0d24d96aec32d74e123f9e198e51adde74ddf190e8c40b0ac18bddf5c4108b2f",
+  "golden_sha256": "3afb2a04373b1a21bd36fe9580c2adc95b38a619d1c4d8864205eaf45bcf6216",
+  "decisions": [
+    "Use opcode-specific positional binary payloads in wire v2.",
+    "Use integer microseconds and bytes at the transport boundary.",
+    "Retain wire v1 and raw JSONL as isolated compatibility modes.",
+    "Preserve a client session only after recoverable runtime-event rejection.",
+    "Keep the native hook ring ABI separate from FluidLink.",
+    "Defer delta state until repeated snapshot bodies exist.",
+    "Defer generic shared memory until synchronization and benchmark gates pass."
+  ],
+  "evidence_scope": "loopback-positional-binary-control-transport",
+  "same_flow_bytes": {
+    "v1": 3189,
+    "v2": 1880,
+    "saved": 1309,
+    "reduction_percent": 41.05
+  },
+  "verification": {
+    "gateway_tests": 242,
+    "runtime_tests": 113,
+    "native_release_tests": 9,
+    "native_debug_tests": 9,
+    "shared_golden_vectors": 17,
+    "final_review": "approved"
+  },
+  "non_claims": [
+    "physical RAM or VRAM placement",
+    "PCIe traffic reduction",
+    "FPS or power improvement",
+    "external-game actuation"
+  ]
+}

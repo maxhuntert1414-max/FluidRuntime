@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-07-29 para o release v0.13.0.
+Handoff atualizado em 2026-08-01 para o release v0.14.0.
 
 ## 1. Objetivo geral
 
@@ -43,7 +43,7 @@ Real e verificado em software owned:
 - upload direto full-buffer por `UpdateSubresource`, com comparacao exata;
 - baseline/optimized pareado, hashes, adapter identity, timing e rollback.
 - FluidLink loopback com header binario, opcodes numericos, fingerprint exato,
-  sequencia/correlacao, heartbeat e payload dinamico JSON limitado.
+  sequencia/correlacao, heartbeat e payload posicional binario sem JSON.
 
 Ainda nao e real:
 
@@ -55,22 +55,31 @@ Ainda nao e real:
 - atuacao no presentation path, D3D12 ou Vulkan;
 - claim geral de FPS, energia ou maquinas antigas.
 
-## 4. Contrato FluidLink v0.13
+## 4. Contrato FluidLink v0.14
 
 - header little-endian fixo de 56 bytes;
 - opcodes de mensagem, evento e decisao em um byte cada;
-- payload dinamico como objeto JSON UTF-8 de ate 1 MiB e depth 64;
-- somente numeros finitos e strings de controle com limites UTF-8;
+- payload posicional por opcode, sem nomes de campos ou JSON no wire;
+- presence/capability masks numericas e payload maximo de 65.535 bytes;
+- tempo como microssegundos inteiros e memoria como bytes inteiros;
+- UTF-8 estrito e limitado apenas nos campos realmente textuais;
 - Hello/Welcome com SHA-256 exato do manifesto e capabilities obrigatorias;
 - sequencia monotona, message ID, session ID e subject correlacionados;
 - cliente .NET loopback-only com round trips concorrentes serializados;
-- framing/correlacao invalida fecha a sessao;
+- somente `runtime_event_rejected` preserva uma sessao valida;
+- erro fatal do peer, framing ou correlacao invalida fecha a sessao;
+- 17 frames dourados cobrem todos os opcodes de mensagem/evento, masks,
+  endings, execute/deduplicate e um erro `invalid_payload`;
 - endpoint JSONL legado fica em modo separado por conexao;
 - decisao Gateway e consultiva, sem autoridade sobre o ABI nativo.
 
-Fingerprint:
+Fingerprint do contrato:
 
-`10b46685472d13d2d49cc81aa1f7df2d654c1ec53fdc666e086e0d062ad114fa`
+`0d24d96aec32d74e123f9e198e51adde74ddf190e8c40b0ac18bddf5c4108b2f`
+
+Fingerprint dos 17 golden vectors:
+
+`3afb2a04373b1a21bd36fe9580c2adc95b38a619d1c4d8864205eaf45bcf6216`
 
 ## 5. Contrato nativo v0.12
 
@@ -97,13 +106,16 @@ Com os tres updates legados, os totais nativos sao 70 forwarded no baseline e
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.13
+## 6. Evidencia local v0.14
 
-- managed tests: 93/93;
-- FluidLink .NET: 14/14;
-- FluidGateway FluidLink: 23/23;
-- interop Python/.NET: 11/11 round trips;
-- frame bytes: 3.189 contra 6.570 em envelopes JSON equivalentes, -51,46%;
+- managed tests: 113/113;
+- FluidLink .NET: 34/34 entre v1 e v2;
+- FluidGateway completo: 242/242;
+- FluidGateway FluidLink: 43/43 entre v1 e v2;
+- interop Python/.NET: 11/11 round trips v1 e 11/11 v2;
+- mesmo fluxo: 3.189 bytes v1 contra 1.880 bytes v2, -41,05%;
+- decisao v2 exata: 800 us e 67.108.864 bytes modelados;
+- package `FluidLink.0.2.0.nupkg` inspecionado com DLL, README, contratos e golden;
 - CTests Release: 9/9;
 - CTests Debug: 9/9;
 - matriz negativa Release/Debug: 320/320;
@@ -131,7 +143,7 @@ Base do claim:
 
 `gpu-interval-improvement-with-bounded-cpu-content-comparison-overhead`
 
-As linhas nativas continuam sendo a evidencia publicada da v0.12; a v0.13 nao
+As linhas nativas continuam sendo a evidencia publicada da v0.12; a v0.14 nao
 altera fonte nativa, ABI, policy de hook ou claim de hardware.
 
 ## 7. Contratos ABI
@@ -181,6 +193,8 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.14.0 FluidLink v2 report](evidence/v0.14.0-fluidlink-v2.md)
+- [v0.14.0 FluidLink v2 trace](evidence/traces/fluidlink-cross-process-v0.14.0.json)
 - [v0.13.0 FluidLink report](evidence/v0.13.0-fluidlink-binary-interop.md)
 - [v0.13.0 FluidLink trace](evidence/traces/fluidlink-cross-process-v0.13.0.json)
 - [v0.12.0 report](evidence/v0.12.0-update-upload-elision.md)
@@ -201,7 +215,8 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.13 entrega um transporte binario versionado, limitado e
-interoperavel para ligar Gateway e Runtime. A v0.12 continua sendo a prova de
-interferencia especifica e reversivel em `UpdateSubresource` owned. Nenhum dos
-dois resultados prova RAM/VRAM fisica, PCIe, FPS ou suporte a jogos externos.
+Mensagem curta: v0.14 remove JSON do FluidLink, usa schemas posicionais,
+opcodes/masks numericos e unidades inteiras, com 17 vetores cross-language e
+41,05% menos bytes neste fluxo exato. A v0.12 continua sendo a prova de
+interferencia especifica e reversivel em `UpdateSubresource` owned. Nenhum
+desses resultados prova RAM/VRAM fisica, PCIe, FPS ou suporte a jogos externos.

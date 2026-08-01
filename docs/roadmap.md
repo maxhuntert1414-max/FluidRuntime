@@ -66,10 +66,16 @@ coordinate the interfaces the operating system and graphics APIs expose.
   capability negotiation, bounded strict JSON payloads, serialized correlated
   .NET round trips, legacy JSONL isolation, Python/.NET interoperability CI,
   and a reproducible envelope-size report.
+- **v0.14.0:** FluidLink 0.2.0 and wire v2 with opcode-specific positional
+  binary payloads, capability and presence bitmasks, integer microsecond/byte
+  units, strict bounded UTF-8, 17 shared Python/.NET full-frame vectors,
+  fail-closed typed clients with recoverable/fatal peer-error separation, and a
+  measured same-flow reduction from 3,189 to 1,880 frame bytes while retaining
+  v1 compatibility.
 
 ## Next Milestones
 
-### v0.14: Upload Generalization and Synchronization Hardening
+### v0.15: Upload Generalization and Synchronization Hardening
 
 - Extend upload evidence to textures, pitch-aware data, partial boxes,
   `UpdateSubresource1`, dynamic-buffer, reuse, and batching patterns without an
@@ -85,7 +91,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Derive bounded policies from live FluidGateway evidence instead of a fixed
   lab action, with explicit regression rollback.
 
-### v0.15+: Controlled External Observation
+### v0.16+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized
@@ -101,6 +107,11 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - RAM/VRAM residency, upload staging reuse, and memory-pressure policies.
 - Closed-loop decisions fed by measured frame pacing, latency, power, and
   regression guards.
+- Delta-encoded state only after repeated snapshot payloads exist and exact
+  baseline/resynchronization tests demonstrate useful compression.
+- A generic shared-memory FluidLink transport only after a sustained TCP
+  benchmark and an explicit record, atomic, backpressure, ACL, crash-recovery,
+  fallback, and stress-test contract.
 
 ## Evidence Standard
 

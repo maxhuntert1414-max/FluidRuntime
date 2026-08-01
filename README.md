@@ -20,12 +20,12 @@ Documentation: [status](docs/STATUS.md) | [briefing](docs/BRIEFING-CLAUDE-CODE.m
 [v0.10 readback-elision evidence](docs/evidence/v0.10.0-readback-elision.md) |
 [v0.11 upload-elision evidence](docs/evidence/v0.11.0-upload-elision.md) |
 [v0.12 direct-update evidence](docs/evidence/v0.12.0-update-upload-elision.md) |
-[v0.13 FluidLink evidence](docs/evidence/v0.13.0-fluidlink-binary-interop.md) |
+[v0.14 FluidLink v2 evidence](docs/evidence/v0.14.0-fluidlink-v2.md) |
 [FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway)
 
 ## Current boundary
 
-Version 0.13.0 keeps normal inspection and external-process behavior advisory-only:
+Version 0.14.0 keeps normal inspection and external-process behavior advisory-only:
 
 - reads a FluidGateway operational ledger;
 - samples process CPU, working set, private memory, thread count, and host RAM;
@@ -35,19 +35,24 @@ Version 0.13.0 keeps normal inspection and external-process behavior advisory-on
 - never changes process priority, affinity, RAM/VRAM residency, GPU queues,
   drivers, games, or OS state.
 
-Version 0.13.0 also introduces `FluidLink` package 0.1.0, the versioned local
-transport between FluidRuntime and FluidGateway. Its control envelope uses a
-fixed 56-byte binary header with one-byte message, event, and decision opcodes;
-only bounded dynamic event fields remain JSON. The loopback-only .NET client
-negotiates the exact contract fingerprint, capabilities, 1 MiB payload limit,
-and JSON depth, then serializes correlated request/response round trips and
-invalidates the session on framing or correlation drift.
+Version 0.14.0 adds `FluidLink` package 0.2.0 and the preferred `fluidlink-v2`
+wire protocol without removing v1. The 56-byte binary header remains stable,
+while the JSON body is replaced by opcode-specific positional binary schemas,
+presence masks, a 64-bit capability mask, integer microseconds, and integer
+bytes. The loopback-only .NET client negotiates the exact contract fingerprint
+and 65,535-byte payload limit, serializes correlated request/response round
+trips, and validates 17 shared full-frame golden vectors. It preserves a session
+only for recoverable runtime-event rejection and invalidates it on fatal peer,
+framing, or correlation drift.
 
-The Python/.NET probe completed 11 round trips using 3,189 FluidLink frame
-bytes versus 6,570 bytes for equivalent JSON envelopes, a 51.46% reduction.
-Those counters exclude TCP/IP overhead and do not measure RAM/VRAM, PCIe,
-latency, FPS, or power. Gateway decisions remain advisory and cannot authorize
-the native hook.
+The Python/.NET probe opens one real v1 session and one real v2 session for the
+same 11 round trips. V1 used 3,189 FluidLink frame bytes and v2 used 1,880,
+saving 1,309 bytes or 41.05%. Those counters exclude TCP/IP overhead and do not
+measure physical RAM/VRAM, PCIe, FPS, power, or game performance. Gateway
+decisions remain advisory and cannot authorize the native hook. Delta snapshots
+and a generic shared-memory FluidLink transport are explicitly deferred until
+they have real payloads, synchronization semantics, stress tests, and a
+sustained benchmark.
 
 It also contains deliberately narrow actuation experiments. The original
 `copy-elision-lab` command runs repeated baseline/optimized pairs of the owned
