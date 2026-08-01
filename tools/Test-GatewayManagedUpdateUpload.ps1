@@ -354,3 +354,5 @@ if ($slowFallback.completed_round_trip_count -le 0) {
     fail_closed_report = $FailClosedOutputPath
     slow_response_report = $SlowResponseOutputPath
 }
+
+exit 0
