@@ -32,7 +32,8 @@ public enum FluidLinkV2EventOpcode : byte
     Frame = 101,
     Resource = 102,
     Operation = 103,
-    State = 104
+    State = 104,
+    OperationBatch = 105
 }
 
 public enum FluidLinkV2DecisionOpcode : byte
@@ -44,6 +45,7 @@ public enum FluidLinkV2DecisionOpcode : byte
     RemoveOrphanSync = 4,
     RemoveEmptySync = 5,
     ReuseTransientBuffer = 6,
+    BatchVector = 7,
     Unknown = 255
 }
 
@@ -57,7 +59,8 @@ public enum FluidLinkV2Capability : ulong
     RuntimeEvents = 1UL << 3,
     RuntimeDecisions = 1UL << 4,
     MemoryTransit = 1UL << 5,
-    SessionLifecycle = 1UL << 6
+    SessionLifecycle = 1UL << 6,
+    BatchedRuntimeEvents = 1UL << 7
 }
 
 public enum FluidLinkV2LifecycleAction : byte
@@ -183,6 +186,10 @@ public static class FluidLinkV2Protocol
         FluidLinkV2Capability.RuntimeEvents |
         FluidLinkV2Capability.RuntimeDecisions;
 
+    public const FluidLinkV2Capability SupportedCapabilities =
+        AllCapabilities |
+        FluidLinkV2Capability.BatchedRuntimeEvents;
+
     private static readonly byte[] ContractHashBytes =
         Convert.FromHexString(ContractSha256);
 
@@ -200,8 +207,30 @@ public static class FluidLinkV2Protocol
             FluidLinkV2DecisionOpcode.RemoveOrphanSync => "remove-orphan-sync",
             FluidLinkV2DecisionOpcode.RemoveEmptySync => "remove-empty-sync",
             FluidLinkV2DecisionOpcode.ReuseTransientBuffer => "reuse-transient-buffer",
+            FluidLinkV2DecisionOpcode.BatchVector => "batch-vector",
             _ => "unknown"
         };
+}
+
+public static class FluidLinkV2BatchProtocol
+{
+    public const string Profile = "fluidlink-v2-batched-runtime-events-v1";
+    public const int MaxOperations = 256;
+    public const string ContractSha256 =
+        "bf8727c22ac878ceff6dd0f462d6db5e81174737e839ecdf2e263a6f55268542";
+
+    public const FluidLinkV2Capability AllCapabilities =
+        FluidLinkV2Protocol.AllCapabilities |
+        FluidLinkV2Capability.BatchedRuntimeEvents;
+
+    public const FluidLinkV2Capability RequiredCapabilities =
+        FluidLinkV2Protocol.RequiredCapabilities |
+        FluidLinkV2Capability.BatchedRuntimeEvents;
+
+    private static readonly byte[] ContractHashBytes =
+        Convert.FromHexString(ContractSha256);
+
+    public static ReadOnlyMemory<byte> ContractHash => ContractHashBytes;
 }
 
 public sealed record FluidLinkV2HelloPayload(
@@ -299,6 +328,23 @@ public sealed record FluidLinkV2OperationEvent(
 {
     public FluidLinkV2EventOpcode EventOpcode => FluidLinkV2EventOpcode.Operation;
 }
+
+public sealed record FluidLinkV2OperationBatchEvent(
+    string BatchId,
+    int OperationCount,
+    FluidLinkV2OperationType OperationType,
+    FluidLinkV2Queue Queue,
+    uint CostMicroseconds,
+    ulong SizeBytes,
+    string? Source = null,
+    string? Target = null,
+    string? Reason = null,
+    ulong? Frame = null,
+    IReadOnlyList<string>? Dependencies = null);
+
+public sealed record FluidLinkV2OperationBatchDecision(
+    string BatchId,
+    IReadOnlyList<FluidLinkV2RuntimeDecision> Decisions);
 
 public sealed record FluidLinkV2StateEvent(
     FluidLinkV2StateAction Action = FluidLinkV2StateAction.Snapshot)

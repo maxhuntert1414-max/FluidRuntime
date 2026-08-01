@@ -216,6 +216,165 @@ public static class FluidLinkV2PayloadCodec
             savedBytes);
     }
 
+    public static byte[] EncodeOperationBatchEvent(
+        FluidLinkV2OperationBatchEvent payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var batchId = ParseBatchId(payload.BatchId);
+        ValidateBatchCount(payload.OperationCount);
+        ValidateEnum(payload.OperationType, "operation_type");
+        ValidateEnum(payload.Queue, "queue");
+
+        byte presence = 0;
+        presence |= payload.Source is not null ? OperationSource : (byte)0;
+        presence |= payload.Target is not null ? OperationTarget : (byte)0;
+        presence |= payload.Reason is not null ? OperationReason : (byte)0;
+        presence |= payload.Frame.HasValue ? OperationFrame : (byte)0;
+        var dependencies = payload.Dependencies ?? [];
+        ValidateCount(
+            dependencies.Count,
+            FluidLinkV2Protocol.MaxDependencies,
+            "dependencies");
+
+        var writer = new PayloadWriter();
+        writer.WriteBytes(batchId);
+        writer.WriteUInt16(checked((ushort)payload.OperationCount));
+        writer.WriteByte((byte)payload.OperationType);
+        writer.WriteByte((byte)payload.Queue);
+        writer.WriteByte(presence);
+        WriteOperationOptionalFields(writer, payload.Source, payload.Target, payload.Reason);
+        writer.WriteUInt32(payload.CostMicroseconds);
+        writer.WriteUInt64(payload.SizeBytes);
+        if (payload.Frame is { } frame)
+        {
+            writer.WriteUInt64(frame);
+        }
+        writer.WriteByte(checked((byte)dependencies.Count));
+        foreach (var dependency in dependencies)
+        {
+            writer.WriteText16(
+                dependency,
+                FluidLinkV2Protocol.MaxIdentifierUtf8Bytes,
+                "dependency",
+                requireNonEmpty: true);
+        }
+        return writer.ToArray();
+    }
+
+    public static FluidLinkV2OperationBatchEvent DecodeOperationBatchEvent(
+        ReadOnlySpan<byte> payload)
+    {
+        var reader = new PayloadReader(payload);
+        var batchIdBytes = reader.ReadBytes(16, "batch_id");
+        ValidateBatchId(batchIdBytes);
+        var operationCount = reader.ReadUInt16("operation_count");
+        ValidateBatchCount(operationCount);
+        var operationType = reader.ReadEnum<FluidLinkV2OperationType>(
+            "operation_type");
+        var queue = reader.ReadEnum<FluidLinkV2Queue>("queue");
+        var presence = reader.ReadByte("presence_mask");
+        ValidatePresence(presence, OperationAllowedFields, "operation_batch");
+        var source = Has(presence, OperationSource)
+            ? reader.ReadText16(
+                FluidLinkV2Protocol.MaxIdentifierUtf8Bytes,
+                "source",
+                requireNonEmpty: true)
+            : null;
+        var target = Has(presence, OperationTarget)
+            ? reader.ReadText16(
+                FluidLinkV2Protocol.MaxIdentifierUtf8Bytes,
+                "target",
+                requireNonEmpty: true)
+            : null;
+        var reason = Has(presence, OperationReason)
+            ? reader.ReadText16(
+                FluidLinkV2Protocol.MaxReasonUtf8Bytes,
+                "reason",
+                requireNonEmpty: true)
+            : null;
+        var costMicroseconds = reader.ReadUInt32("cost_microseconds");
+        var sizeBytes = reader.ReadUInt64("size_bytes");
+        ulong? frame = Has(presence, OperationFrame)
+            ? reader.ReadUInt64("frame")
+            : null;
+        var dependencyCount = reader.ReadByte("dependency_count");
+        ValidateCount(
+            dependencyCount,
+            FluidLinkV2Protocol.MaxDependencies,
+            "dependencies");
+        var dependencies = new string[dependencyCount];
+        for (var index = 0; index < dependencies.Length; index += 1)
+        {
+            dependencies[index] = reader.ReadText16(
+                FluidLinkV2Protocol.MaxIdentifierUtf8Bytes,
+                "dependency",
+                requireNonEmpty: true);
+        }
+        reader.EnsureComplete();
+        return new FluidLinkV2OperationBatchEvent(
+            Convert.ToHexString(batchIdBytes).ToLowerInvariant(),
+            operationCount,
+            operationType,
+            queue,
+            costMicroseconds,
+            sizeBytes,
+            source,
+            target,
+            reason,
+            frame,
+            Array.AsReadOnly(dependencies));
+    }
+
+    public static byte[] EncodeOperationBatchDecision(
+        FluidLinkV2OperationBatchDecision payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var batchId = ParseBatchId(payload.BatchId);
+        ArgumentNullException.ThrowIfNull(payload.Decisions);
+        ValidateBatchCount(payload.Decisions.Count);
+        var writer = new PayloadWriter();
+        writer.WriteBytes(batchId);
+        writer.WriteUInt16(checked((ushort)payload.Decisions.Count));
+        foreach (var decision in payload.Decisions)
+        {
+            ValidateBatchDecision(decision);
+            writer.WriteByte((byte)decision.DecisionOpcode);
+            writer.WriteByte((byte)decision.Status);
+            writer.WriteUInt64(decision.SavedMicroseconds);
+            writer.WriteUInt64(decision.SavedBytes);
+        }
+        return writer.ToArray();
+    }
+
+    public static FluidLinkV2OperationBatchDecision DecodeOperationBatchDecision(
+        ReadOnlySpan<byte> payload)
+    {
+        var reader = new PayloadReader(payload);
+        var batchIdBytes = reader.ReadBytes(16, "batch_id");
+        ValidateBatchId(batchIdBytes);
+        var decisionCount = reader.ReadUInt16("decision_count");
+        ValidateBatchCount(decisionCount);
+        var decisions = new FluidLinkV2RuntimeDecision[decisionCount];
+        for (var index = 0; index < decisions.Length; index += 1)
+        {
+            var decisionOpcode = reader.ReadEnum<FluidLinkV2DecisionOpcode>(
+                "decision_opcode");
+            var status = (FluidLinkV2DecisionStatus)reader.ReadByte("status_flags");
+            var decision = new FluidLinkV2RuntimeDecision(
+                FluidLinkV2EventOpcode.Operation,
+                decisionOpcode,
+                status,
+                reader.ReadUInt64("saved_microseconds"),
+                reader.ReadUInt64("saved_bytes"));
+            ValidateBatchDecision(decision);
+            decisions[index] = decision;
+        }
+        reader.EnsureComplete();
+        return new FluidLinkV2OperationBatchDecision(
+            Convert.ToHexString(batchIdBytes).ToLowerInvariant(),
+            Array.AsReadOnly(decisions));
+    }
+
     public static byte[] EncodeRuntimeEvent(IFluidLinkV2RuntimeEvent runtimeEvent)
     {
         ArgumentNullException.ThrowIfNull(runtimeEvent);
@@ -653,6 +812,90 @@ public static class FluidLinkV2PayloadCodec
 
     private static bool Has(byte value, byte flag) => (value & flag) != 0;
 
+    private static void WriteOperationOptionalFields(
+        PayloadWriter writer,
+        string? source,
+        string? target,
+        string? reason)
+    {
+        if (source is not null)
+        {
+            writer.WriteText16(
+                source,
+                FluidLinkV2Protocol.MaxIdentifierUtf8Bytes,
+                "source",
+                requireNonEmpty: true);
+        }
+        if (target is not null)
+        {
+            writer.WriteText16(
+                target,
+                FluidLinkV2Protocol.MaxIdentifierUtf8Bytes,
+                "target",
+                requireNonEmpty: true);
+        }
+        if (reason is not null)
+        {
+            writer.WriteText16(
+                reason,
+                FluidLinkV2Protocol.MaxReasonUtf8Bytes,
+                "reason",
+                requireNonEmpty: true);
+        }
+    }
+
+    private static byte[] ParseBatchId(string value)
+    {
+        if (value is null || value.Length != 32 ||
+            value.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw InvalidPayload("batch_id must contain exactly 16 hexadecimal bytes.");
+        }
+        var bytes = Convert.FromHexString(value);
+        ValidateBatchId(bytes);
+        return bytes;
+    }
+
+    private static void ValidateBatchId(ReadOnlySpan<byte> value)
+    {
+        if (value.Length != 16 || value.IndexOfAnyExcept((byte)0) < 0)
+        {
+            throw InvalidPayload("batch_id must contain 16 nonzero-identity bytes.");
+        }
+    }
+
+    private static void ValidateBatchCount(int value)
+    {
+        if (value is < 1 or > FluidLinkV2BatchProtocol.MaxOperations)
+        {
+            throw InvalidPayload(
+                $"operation batch count must be between 1 and " +
+                $"{FluidLinkV2BatchProtocol.MaxOperations}.");
+        }
+    }
+
+    private static void ValidateBatchDecision(FluidLinkV2RuntimeDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        if (decision.EventOpcode != FluidLinkV2EventOpcode.Operation ||
+            !Enum.IsDefined(decision.DecisionOpcode) ||
+            decision.DecisionOpcode is FluidLinkV2DecisionOpcode.Unknown or
+                FluidLinkV2DecisionOpcode.BatchVector)
+        {
+            throw InvalidPayload("operation batch contains an invalid decision opcode.");
+        }
+        ValidateDecisionStatus(decision.Status);
+        if (!decision.Executed.HasValue ||
+            (decision.Executed.Value &&
+             decision.DecisionOpcode != FluidLinkV2DecisionOpcode.Execute) ||
+            (!decision.Executed.Value &&
+             decision.DecisionOpcode == FluidLinkV2DecisionOpcode.Execute))
+        {
+            throw InvalidPayload(
+                "operation batch decision execution state and opcode disagree.");
+        }
+    }
+
     private static void ValidateHash(ReadOnlySpan<byte> value)
     {
         if (value.Length != 32)
@@ -665,7 +908,7 @@ public static class FluidLinkV2PayloadCodec
         FluidLinkV2Capability value,
         string field)
     {
-        if ((value & ~FluidLinkV2Protocol.AllCapabilities) != 0)
+        if ((value & ~FluidLinkV2Protocol.SupportedCapabilities) != 0)
         {
             throw InvalidPayload($"{field} contains unknown capability bits.");
         }
