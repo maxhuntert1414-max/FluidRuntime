@@ -89,13 +89,17 @@ coordinate the interfaces the operating system and graphics APIs expose.
   snapshots. Managed evidence binds the launched PID and frozen target SHA-256,
   rejects schema or adapter drift, and remains explicitly non-actuating. WARP,
   Debug Layer, and RX 580 traces are recorded with no performance claim.
+- **v0.17.0:** FluidLink 0.3.0 adds an exact optional operation-batch profile
+  while preserving the original v2 wire contract. One bounded template carries
+  the seed plus 64 duplicate-upload candidates and returns an ordered explicit
+  decision vector. The controlled authorization flow falls from 74 to 10 round
+  trips; profile drift, partial adapter failure, malformed vectors, stalls, and
+  cumulative deadline expiry remain fail closed.
 
 ## Next Milestones
 
-### v0.17: Low-Latency Decisions and Upload Generalization
+### Authorization Benchmark and Upload Generalization
 
-- Replace 74 serial pre-authorization round trips with a bounded batch decision
-  packet or another measured transport shape before considering per-frame use.
 - Include authorization and fallback in an end-to-end latency benchmark; retain
   the current performance blocker until the complete loop passes.
 - Add backpressure, cancellation, peer-restart, stale-session, and partial-batch

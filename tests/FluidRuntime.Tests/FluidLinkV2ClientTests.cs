@@ -159,6 +159,110 @@ public sealed class FluidLinkV2ClientTests
     }
 
     [Fact]
+    public async Task Client_negotiates_batch_profile_and_validates_decision_vector()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        const string batchId = "0102030405060708090a0b0c0d0e0f10";
+        var serverTask = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptTcpClientAsync();
+            await using var stream = socket.GetStream();
+            var helloFrame = await FluidLinkV2FrameCodec.ReadAsync(stream);
+            var hello = FluidLinkV2PayloadCodec.DecodeHello(helloFrame.Payload.Span);
+            Assert.Equal(
+                FluidLinkV2BatchProtocol.ContractHash.ToArray(),
+                hello.ContractHash.ToArray());
+            Assert.Equal(
+                FluidLinkV2BatchProtocol.AllCapabilities,
+                hello.RequestedCapabilities);
+            Assert.Equal(
+                FluidLinkV2BatchProtocol.RequiredCapabilities,
+                hello.RequiredCapabilities);
+            await FluidLinkV2FrameCodec.WriteAsync(
+                stream,
+                ResponseFrame(
+                    helloFrame,
+                    FluidLinkV2Opcode.Welcome,
+                    WelcomePayload(
+                        contractHash:
+                            FluidLinkV2BatchProtocol.ContractHash.ToArray(),
+                        availableCapabilities:
+                            FluidLinkV2BatchProtocol.AllCapabilities)));
+
+            var batchFrame = await FluidLinkV2FrameCodec.ReadAsync(stream);
+            Assert.Equal(
+                (byte)FluidLinkV2EventOpcode.OperationBatch,
+                batchFrame.SubjectOpcode);
+            var batch = FluidLinkV2PayloadCodec.DecodeOperationBatchEvent(
+                batchFrame.Payload.Span);
+            Assert.Equal(batchId, batch.BatchId);
+            Assert.Equal(2, batch.OperationCount);
+            Assert.Equal(800U, batch.CostMicroseconds);
+            var decisions = new FluidLinkV2OperationBatchDecision(
+                batchId,
+                [
+                    new FluidLinkV2RuntimeDecision(
+                        FluidLinkV2EventOpcode.Operation,
+                        FluidLinkV2DecisionOpcode.Execute,
+                        FluidLinkV2DecisionStatus.Accepted |
+                        FluidLinkV2DecisionStatus.HasExecutionState |
+                        FluidLinkV2DecisionStatus.Executed,
+                        0,
+                        0),
+                    new FluidLinkV2RuntimeDecision(
+                        FluidLinkV2EventOpcode.Operation,
+                        FluidLinkV2DecisionOpcode.DeduplicateIdenticalTransfer,
+                        FluidLinkV2DecisionStatus.Accepted |
+                        FluidLinkV2DecisionStatus.HasExecutionState,
+                        800,
+                        64UL * 1024 * 1024)
+                ]);
+            await FluidLinkV2FrameCodec.WriteAsync(
+                stream,
+                ResponseFrame(
+                    batchFrame,
+                    FluidLinkV2Opcode.RuntimeDecision,
+                    FluidLinkV2PayloadCodec.EncodeOperationBatchDecision(decisions),
+                    decisionOpcode:
+                        (byte)FluidLinkV2DecisionOpcode.BatchVector));
+        });
+
+        await using var client = new FluidLinkV2Client(
+            "127.0.0.1",
+            port,
+            TimeSpan.FromSeconds(5));
+        var welcome = await client.HandshakeBatchAsync("runtime-test", "0.2");
+        var decision = await client.SendOperationBatchAsync(
+            new FluidLinkV2OperationBatchEvent(
+                batchId,
+                2,
+                FluidLinkV2OperationType.Upload,
+                FluidLinkV2Queue.Copy,
+                800,
+                64UL * 1024 * 1024,
+                Source: "ram-buffer",
+                Target: "vram-texture",
+                Frame: 42));
+        await serverTask;
+
+        Assert.Equal(
+            FluidLinkV2BatchProtocol.ContractSha256,
+            welcome.ContractSha256);
+        Assert.Equal(
+            FluidLinkV2BatchProtocol.AllCapabilities,
+            welcome.AcceptedCapabilities);
+        Assert.Equal(batchId, decision.BatchId);
+        Assert.Equal(2, decision.Decisions.Count);
+        Assert.True(decision.Decisions[0].Executed);
+        Assert.False(decision.Decisions[1].Executed);
+        Assert.Equal(
+            FluidLinkV2DecisionOpcode.DeduplicateIdenticalTransfer,
+            decision.Decisions[1].DecisionOpcode);
+    }
+
+    [Fact]
     public async Task Client_serializes_concurrent_round_trips_and_sequences()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

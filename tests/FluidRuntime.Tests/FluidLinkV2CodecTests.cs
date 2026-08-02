@@ -13,6 +13,231 @@ public sealed class FluidLinkV2CodecTests
         Enumerable.Range(17, 16).Select(value => (byte)value).ToArray();
 
     [Fact]
+    public void Bundled_batch_contract_has_the_exact_extension_fingerprint()
+    {
+        var contract = File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory,
+            "contracts",
+            "fluidlink-v2-batch.contract.json"));
+
+        Assert.Equal(
+            FluidLinkV2BatchProtocol.ContractSha256,
+            Convert.ToHexString(SHA256.HashData(contract)).ToLowerInvariant());
+        Assert.Equal(
+            FluidLinkV2Protocol.AllCapabilities |
+            FluidLinkV2Capability.BatchedRuntimeEvents,
+            FluidLinkV2BatchProtocol.AllCapabilities);
+        Assert.Equal(256, FluidLinkV2BatchProtocol.MaxOperations);
+    }
+
+    [Fact]
+    public void Batch_golden_vectors_match_the_gateway_encoder_byte_for_byte()
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory,
+            "contracts",
+            "fluidlink-v2-batch.golden.json")));
+        var root = fixture.RootElement;
+        var messageId = Convert.FromHexString(
+            root.GetProperty("message_id_hex").GetString()!);
+        var sessionId = Convert.FromHexString(
+            root.GetProperty("session_id_hex").GetString()!);
+        var batchId = root.GetProperty("batch_id_hex").GetString()!;
+        var hello = new FluidLinkV2Frame(
+            FluidLinkV2FrameKind.Request,
+            FluidLinkV2Opcode.Hello,
+            0,
+            0,
+            FluidLinkV2FrameFlags.None,
+            1,
+            messageId,
+            ReadOnlyMemory<byte>.Empty,
+            FluidLinkV2PayloadCodec.EncodeHello(
+                new FluidLinkV2HelloPayload(
+                    FluidLinkV2BatchProtocol.ContractHash,
+                    FluidLinkV2BatchProtocol.AllCapabilities,
+                    FluidLinkV2BatchProtocol.RequiredCapabilities,
+                    "fluidruntime",
+                    "0.17.0")));
+        var batch = new FluidLinkV2Frame(
+            FluidLinkV2FrameKind.Request,
+            FluidLinkV2Opcode.RuntimeEvent,
+            (byte)FluidLinkV2EventOpcode.OperationBatch,
+            0,
+            FluidLinkV2FrameFlags.HasSession,
+            2,
+            messageId,
+            sessionId,
+            FluidLinkV2PayloadCodec.EncodeOperationBatchEvent(
+                new FluidLinkV2OperationBatchEvent(
+                    batchId,
+                    2,
+                    FluidLinkV2OperationType.Upload,
+                    FluidLinkV2Queue.Copy,
+                    800,
+                    64UL * 1024 * 1024,
+                    Source: "ram-buffer",
+                    Target: "vram-texture",
+                    Reason: "duplicate upload",
+                    Frame: 42,
+                    Dependencies: ["allocate-1"])));
+        var frames = new Dictionary<string, FluidLinkV2Frame>
+        {
+            ["batch_hello_request"] = hello,
+            ["batch_welcome_response"] = new(
+                FluidLinkV2FrameKind.Response,
+                FluidLinkV2Opcode.Welcome,
+                0,
+                0,
+                FluidLinkV2FrameFlags.Ok | FluidLinkV2FrameFlags.HasSession,
+                1,
+                messageId,
+                sessionId,
+                FluidLinkV2PayloadCodec.EncodeWelcome(
+                    new FluidLinkV2WelcomePayload(
+                        FluidLinkV2BatchProtocol.ContractHash,
+                        FluidLinkV2BatchProtocol.AllCapabilities,
+                        FluidLinkV2BatchProtocol.AllCapabilities,
+                        FluidLinkV2Protocol.MaxPayloadBytes,
+                        "fluidgateway",
+                        "0.65.0"))),
+            ["operation_batch_request"] = batch,
+            ["operation_batch_decision_response"] = new(
+                FluidLinkV2FrameKind.Response,
+                FluidLinkV2Opcode.RuntimeDecision,
+                (byte)FluidLinkV2EventOpcode.OperationBatch,
+                (byte)FluidLinkV2DecisionOpcode.BatchVector,
+                FluidLinkV2FrameFlags.Ok | FluidLinkV2FrameFlags.HasSession,
+                2,
+                messageId,
+                sessionId,
+                FluidLinkV2PayloadCodec.EncodeOperationBatchDecision(
+                    new FluidLinkV2OperationBatchDecision(
+                        batchId,
+                        [
+                            new FluidLinkV2RuntimeDecision(
+                                FluidLinkV2EventOpcode.Operation,
+                                FluidLinkV2DecisionOpcode.Execute,
+                                FluidLinkV2DecisionStatus.Accepted |
+                                FluidLinkV2DecisionStatus.HasExecutionState |
+                                FluidLinkV2DecisionStatus.Executed,
+                                0,
+                                0),
+                            new FluidLinkV2RuntimeDecision(
+                                FluidLinkV2EventOpcode.Operation,
+                                FluidLinkV2DecisionOpcode
+                                    .DeduplicateIdenticalTransfer,
+                                FluidLinkV2DecisionStatus.Accepted |
+                                FluidLinkV2DecisionStatus.HasExecutionState,
+                                800,
+                                64UL * 1024 * 1024)
+                        ])))
+        };
+
+        Assert.Equal(
+            FluidLinkV2BatchProtocol.ContractSha256,
+            root.GetProperty("contract_sha256").GetString());
+        foreach (var vector in root.GetProperty("vectors").EnumerateArray())
+        {
+            var name = vector.GetProperty("name").GetString()!;
+            var wire = FluidLinkV2FrameCodec.Encode(frames[name]);
+            Assert.Equal(vector.GetProperty("wire_bytes").GetInt32(), wire.Length);
+            Assert.Equal(
+                vector.GetProperty("wire_hex").GetString(),
+                Convert.ToHexString(wire).ToLowerInvariant());
+        }
+    }
+
+    [Fact]
+    public void Operation_batch_payloads_have_exact_layout_and_round_trip()
+    {
+        const string batchId = "0102030405060708090a0b0c0d0e0f10";
+        var batch = new FluidLinkV2OperationBatchEvent(
+            batchId,
+            2,
+            FluidLinkV2OperationType.Upload,
+            FluidLinkV2Queue.Copy,
+            0x01020304,
+            0x0102030405060708,
+            Source: "s",
+            Target: "t",
+            Reason: "r",
+            Frame: 0x1112131415161718,
+            Dependencies: ["d"]);
+        var encoded = FluidLinkV2PayloadCodec.EncodeOperationBatchEvent(batch);
+
+        Assert.Equal(
+            Convert.FromHexString(
+                "0102030405060708090a0b0c0d0e0f10" +
+                "020004020f01007301007401007204030201" +
+                "0807060504030201181716151413121101010064"),
+            encoded);
+        var decoded = FluidLinkV2PayloadCodec.DecodeOperationBatchEvent(encoded);
+        Assert.Equal(batchId, decoded.BatchId);
+        Assert.Equal(2, decoded.OperationCount);
+        Assert.Equal(FluidLinkV2OperationType.Upload, decoded.OperationType);
+        Assert.Equal(FluidLinkV2Queue.Copy, decoded.Queue);
+        Assert.Equal(0x01020304U, decoded.CostMicroseconds);
+        Assert.Equal(0x0102030405060708UL, decoded.SizeBytes);
+        Assert.Equal(0x1112131415161718UL, decoded.Frame);
+        Assert.Equal(["d"], decoded.Dependencies);
+
+        var decision = new FluidLinkV2OperationBatchDecision(
+            batchId,
+            [
+                new FluidLinkV2RuntimeDecision(
+                    FluidLinkV2EventOpcode.Operation,
+                    FluidLinkV2DecisionOpcode.Execute,
+                    FluidLinkV2DecisionStatus.Accepted |
+                    FluidLinkV2DecisionStatus.HasExecutionState |
+                    FluidLinkV2DecisionStatus.Executed,
+                    0,
+                    0),
+                new FluidLinkV2RuntimeDecision(
+                    FluidLinkV2EventOpcode.Operation,
+                    FluidLinkV2DecisionOpcode.DeduplicateIdenticalTransfer,
+                    FluidLinkV2DecisionStatus.Accepted |
+                    FluidLinkV2DecisionStatus.HasExecutionState,
+                    800,
+                    64UL * 1024 * 1024)
+            ]);
+        var decodedDecision = FluidLinkV2PayloadCodec.DecodeOperationBatchDecision(
+            FluidLinkV2PayloadCodec.EncodeOperationBatchDecision(decision));
+        Assert.Equal(batchId, decodedDecision.BatchId);
+        Assert.Equal(2, decodedDecision.Decisions.Count);
+        Assert.True(decodedDecision.Decisions[0].Executed);
+        Assert.False(decodedDecision.Decisions[1].Executed);
+        Assert.Equal(800UL, decodedDecision.Decisions[1].SavedMicroseconds);
+    }
+
+    [Fact]
+    public void Operation_batch_codec_rejects_invalid_identity_count_and_decisions()
+    {
+        Assert.Throws<FluidLinkV2ProtocolException>(
+            () => FluidLinkV2PayloadCodec.EncodeOperationBatchEvent(
+                BatchEvent("00000000000000000000000000000000", 1)));
+        Assert.Throws<FluidLinkV2ProtocolException>(
+            () => FluidLinkV2PayloadCodec.EncodeOperationBatchEvent(
+                BatchEvent("0102030405060708090a0b0c0d0e0f10", 0)));
+        Assert.Throws<FluidLinkV2ProtocolException>(
+            () => FluidLinkV2PayloadCodec.EncodeOperationBatchEvent(
+                BatchEvent("0102030405060708090a0b0c0d0e0f10", 257)));
+        Assert.Throws<FluidLinkV2ProtocolException>(
+            () => FluidLinkV2PayloadCodec.EncodeOperationBatchDecision(
+                new FluidLinkV2OperationBatchDecision(
+                    "0102030405060708090a0b0c0d0e0f10",
+                    [
+                        new FluidLinkV2RuntimeDecision(
+                            FluidLinkV2EventOpcode.Operation,
+                            FluidLinkV2DecisionOpcode.Execute,
+                            FluidLinkV2DecisionStatus.Accepted |
+                            FluidLinkV2DecisionStatus.HasExecutionState,
+                            0,
+                            0)
+                    ])));
+    }
+
+    [Fact]
     public void Operation_payload_has_exact_positional_little_endian_layout()
     {
         var payload = FluidLinkV2PayloadCodec.EncodeOperationEvent(
@@ -739,6 +964,17 @@ public sealed class FluidLinkV2CodecTests
             async () => await FluidLinkV2FrameCodec.ReadAsync(truncated));
         Assert.Equal("truncated_frame", exception.Code);
     }
+
+    private static FluidLinkV2OperationBatchEvent BatchEvent(
+        string batchId,
+        int operationCount) =>
+        new(
+            batchId,
+            operationCount,
+            FluidLinkV2OperationType.Copy,
+            FluidLinkV2Queue.Copy,
+            10,
+            64);
 
     private static FluidLinkV2Frame RequestFrame(
         FluidLinkV2Opcode opcode,

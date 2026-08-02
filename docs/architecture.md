@@ -86,9 +86,11 @@ Before authorization, the managed runtime opens the target and hook binaries
 without write/delete sharing and records their SHA-256 values. It then opens a
 fresh FluidLink v2 session, binds the exact IPv4 loopback tuple through the
 Windows TCP owner table to the caller-supplied Gateway PID, executable SHA-256,
-and process start time, and sends one seed upload plus 64 same-resource
-candidate uploads. The advertised server name/version remain protocol metadata,
-not peer authentication. The exact contract, required capabilities, heartbeat,
+and process start time, and sends one homogeneous operation batch containing
+one seed upload plus 64 same-resource candidate uploads. The Gateway expands
+the template in order and returns one explicit decision per operation. The
+advertised server name/version remain protocol metadata, not peer
+authentication. The exact batch contract, required capabilities, heartbeat,
 one executed seed, and 64 accepted `deduplicate-identical-transfer` decisions
 with `executed=false` are all mandatory.
 
@@ -108,19 +110,24 @@ before an atomic action reservation can skip the call.
 Authorization failures happen before optimized target launch. Malformed frames,
 process/contract/capability drift, rejected decisions, and internal timeout
 produce a new baseline run with no policy fields. One linked deadline covers
-connect, OS peer verification, and all 74 round trips, so individually valid but
-cumulatively slow responses also fail closed. Caller cancellation propagates
-instead of being converted into a fallback. Binary drift after launch aborts
-before policy publication. Failures after policy publication remain native-lab
-failures and are never reported as "no policy published."
+connect, OS peer verification, and all 10 round trips, so individually valid but
+cumulatively slow responses also fail closed. A rejected, malformed, truncated,
+or incomplete batch closes the session and yields no partial decision vector.
+Caller cancellation propagates instead of being converted into a fallback.
+Binary drift after launch aborts before policy publication. Failures after
+policy publication remain native-lab failures and are never reported as "no
+policy published."
 
-The current flow uses 74 serial round trips per optimized run. Authorization is
+The current flow uses 10 round trips per optimized run; the equivalent v0.15
+flow used 74. Sixty-five logical operation decisions now cross the wire in one
+request/vector pair and every entry is still validated. Authorization is
 recorded separately and lies outside the native workload interval. The wrapper
 therefore blocks every performance claim until the complete decision-to-effect
-path has a bounded end-to-end measurement. This is a functional authority bridge
-for one owned action, not a production scheduler or generic RAM/VRAM manager.
-The OS process binding narrows accidental/wrong-peer risk but is explicitly not
-cryptographic authentication against a hostile or compromised same-user peer.
+path has a bounded end-to-end measurement. This is a functional authority
+bridge for one owned action, not a production scheduler or generic RAM/VRAM
+manager. The OS process binding narrows accidental/wrong-peer risk but is
+explicitly not cryptographic authentication against a hostile or compromised
+same-user peer.
 
 ## Owned D3D12 Observation
 

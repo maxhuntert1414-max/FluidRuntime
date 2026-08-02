@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-01 para o release v0.16.0.
+Handoff atualizado em 2026-08-02 para o release v0.17.0.
 
 ## 1. Objetivo geral
 
@@ -45,6 +45,9 @@ Real e verificado em software owned:
 - baseline/optimized pareado, hashes, adapter identity, timing e rollback.
 - FluidLink loopback com header binario, opcodes numericos, fingerprint exato,
   sequencia/correlacao, heartbeat e payload posicional binario sem JSON.
+- perfil batch opcional do FluidLink com 65 operacoes homogeneas em um request
+  e vetor explicito ordenado, reduzindo a autorizacao controlada de 74 para 10
+  round trips sem alterar o contrato v2 base.
 - bridge fail-closed que transforma 64 decisoes live exatas do FluidGateway em
   budget nativo de action 8 somente no workload owned de `UpdateSubresource`.
 - observacao D3D12 owned de UPLOAD -> DEFAULT -> READBACK com COPY queue,
@@ -88,6 +91,16 @@ Fingerprint dos 17 golden vectors:
 
 `3afb2a04373b1a21bd36fe9580c2adc95b38a619d1c4d8864205eaf45bcf6216`
 
+Perfil batch opcional da v0.17:
+
+- contrato SHA-256:
+  `bf8727c22ac878ceff6dd0f462d6db5e81174737e839ecdf2e263a6f55268542`;
+- capability bit 7, evento 105, decisao 7 e limite de 1..256 operacoes;
+- batch ID de 16 bytes nao nulos, template posicional e vetor de mesma
+  cardinalidade;
+- falha parcial fecha a sessao sem retornar vetor parcial;
+- quatro frames dourados compartilhados entre Python e .NET.
+
 ## 5. Contrato nativo v0.12
 
 Action bit 8 e exclusiva para um upload direto elegivel:
@@ -113,22 +126,26 @@ Com os tres updates legados, os totais nativos sao 70 forwarded no baseline e
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.16
+## 6. Evidencia local v0.17
 
-- managed tests: 152/152;
-- FluidLink + autorizacao/process binding Gateway .NET: 54/54;
-- FluidGateway completo: 242/242;
-- FluidGateway FluidLink: 43/43 entre v1 e v2;
+- managed tests: 157/157;
+- FluidLink + autorizacao/process binding Gateway .NET: 59/59;
+- FluidGateway completo: 249/249;
+- FluidGateway FluidLink: 50/50 entre v1, v2 base e perfil batch;
 - interop Python/.NET: 11/11 round trips v1 e 11/11 v2;
 - mesmo fluxo: 3.189 bytes v1 contra 1.880 bytes v2, -41,05%;
 - decisao v2 exata: 800 us e 67.108.864 bytes modelados;
-- package `FluidLink.0.2.1.nupkg` inspecionado com DLL, README, contratos e golden;
+- perfil batch: 65 operacoes em um request/vetor, 10 RTTs contra 74 na v0.15;
+- por autorizacao: 1.168 bytes enviados e 1.970 recebidos, 3.138 total;
+- package `FluidLink.0.3.0.nupkg` inspecionado com DLL, README, contratos e goldens;
 - CTests Release: 12/12;
 - CTests Debug: 12/12;
 - matriz negativa Release/Debug: 320/320;
 - contrato exato de CI executado localmente: passou;
 - contrato local de release: passou; CI remota e gate obrigatorio apos o push;
-- WARP: 4/4 raw runs, claim bloqueado;
+- WARP batch: 2/2 autorizacoes, 64 skips e 268.435.456 bytes logicos por run;
+- resposta batch malformada, stall e peer cumulativamente lento: baseline
+  verificado, 70 forwarded, zero skips e nenhuma policy;
 - RX 580: 22/22 raw runs, 1 warmup + 10 pares medidos;
 - smokes generic, manager, sustained, readback e staging-upload: passaram.
 
@@ -239,6 +256,7 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.17.0 FluidLink operation batch](evidence/v0.17.0-fluidlink-operation-batch.md)
 - [v0.16.0 D3D12 owned observation](evidence/v0.16.0-d3d12-observation.md)
 - [v0.16.0 RX 580 D3D12 trace](evidence/traces/d3d12-observation-rx580-v0.16.0.json)
 - [v0.16.0 WARP Debug trace](evidence/traces/d3d12-observation-warp-debug-v0.16.0.json)
@@ -258,9 +276,10 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 10. Proximo passo recomendado
 
-Reduzir as 74 viagens seriais de pre-autorizacao com um batch binario limitado
-e medir o loop completo antes de qualquer decisao por frame. Shared memory so
-entra depois de contrato de backpressure, identidade, crash recovery e benchmark.
+O batch binario limitado ja reduziu a autorizacao controlada de 74 para 10
+viagens. O proximo passo e medir o loop completo antes de qualquer decisao por
+frame. Shared memory so entra depois de contrato de backpressure, identidade,
+crash recovery e benchmark.
 
 Depois, generalizar upload com seguranca: texturas e pitches canonicos, boxes parciais,
 `UpdateSubresource1`, buffers dynamic, aliases, batching, fences e deferred
@@ -281,7 +300,7 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.16 mantem o closed loop D3D11 da v0.15 e adiciona o primeiro
-mapa executavel D3D12 de RAM-intent -> recurso DEFAULT -> readback, com estados,
-fila, fence, conteudo e budgets observados em WARP/RX 580. Ainda nao ha atuacao
-D3D12 nem claim de trafego fisico, FPS ou suporte a jogos externos.
+Mensagem curta: v0.17 mantem o closed loop D3D11 e o observador D3D12, mas troca
+65 operacoes seriais por um batch binario estrito e reduz a autorizacao de 74
+para 10 RTTs. Ainda nao ha atuacao D3D12/Vulkan nem claim de trafego fisico, FPS
+ou suporte a jogos externos.

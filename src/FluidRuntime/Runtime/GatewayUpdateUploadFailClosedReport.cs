@@ -66,7 +66,7 @@ public sealed record GatewayUpdateUploadFailClosedReport(
         var details = authorizationFailure as
             GatewayUpdateUploadAuthorizationFailureException;
         return new GatewayUpdateUploadFailClosedReport(
-            Mode: "fluidruntime-gateway-update-upload-fail-closed-v0.15.0",
+            Mode: "fluidruntime-gateway-update-upload-fail-closed-v0.17.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,

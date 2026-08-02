@@ -145,13 +145,13 @@ function Invoke-FaultCase {
 
     $fallback = Get-Content -LiteralPath $CaseOutputPath -Raw | ConvertFrom-Json
     if ($fallback.mode -ne
-            "fluidruntime-gateway-update-upload-fail-closed-v0.15.0" -or
+            "fluidruntime-gateway-update-upload-fail-closed-v0.17.0" -or
         $fallback.failure_stage -ne "gateway-authorization-before-target-launch" -or
         $fallback.authorization_failure_type -ne $ExpectedFailureType -or
         $fallback.authorization_deadline_milliseconds -ne 500 -or
         $fallback.authorization_elapsed_microseconds -le 0 -or
         $fallback.completed_round_trip_count -lt 0 -or
-        $fallback.completed_round_trip_count -ge 74 -or
+        $fallback.completed_round_trip_count -ge 10 -or
         $fallback.authorization_accepted -or
         $fallback.native_policy_published -or
         -not $fallback.baseline_fallback_completed -or
@@ -238,7 +238,7 @@ finally {
 
 $report = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 $expectedAuthorizationRuns = $TrialPairs + $WarmupPairs
-if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.15.0" -or
+if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.17.0" -or
     -not $report.target_owned -or
     -not $report.cooperative_load -or
     $report.remote_injection -or
@@ -288,7 +288,7 @@ if ($report.authorizations | Where-Object {
     $_.native_action_mask -ne 8 -or
     $_.native_action_budget -ne 64 -or
     $_.runtime_event_count -ne 71 -or
-    $_.round_trip_count -ne 74
+    $_.round_trip_count -ne 10
 }) {
     throw "A FluidGateway authorization drifted from the exact decision contract."
 }

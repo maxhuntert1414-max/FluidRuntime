@@ -66,7 +66,8 @@ public sealed record GatewayUpdateUploadAuthorization(
         var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
             FluidLinkV2Capability.Heartbeat |
             FluidLinkV2Capability.MemoryTransit |
-            FluidLinkV2Capability.SessionLifecycle;
+            FluidLinkV2Capability.SessionLifecycle |
+            FluidLinkV2Capability.BatchedRuntimeEvents;
         var expectedLogicalBytes = checked(expectedResourceBytes * expectedActionCount);
         var request = new GatewayUpdateUploadAuthorizationRequest(
             expectedPairIndex,
@@ -86,7 +87,7 @@ public sealed record GatewayUpdateUploadAuthorization(
                 expectedActionCount);
         if (!Authorized ||
             Protocol != FluidLinkV2Protocol.Version ||
-            ContractSha256 != FluidLinkV2Protocol.ContractSha256 ||
+            ContractSha256 != FluidLinkV2BatchProtocol.ContractSha256 ||
             WireSessionId.Length != 32 ||
             WireSessionId.Any(character => !Uri.IsHexDigit(character)) ||
             RuntimeSessionId != $"gateway-update-{expectedContext}" ||
@@ -120,7 +121,7 @@ public sealed record GatewayUpdateUploadAuthorization(
             NativeActionMask != HookRingReader.SkipRedundantUpdateSubresourceAction ||
             NativeActionBudget != expectedActionCount ||
             RuntimeEventCount != checked((int)expectedActionCount + 7) ||
-            RoundTripCount != checked((int)expectedActionCount + 10) ||
+            RoundTripCount != 10 ||
             BytesSent <= 0 ||
             BytesReceived <= 0 ||
             AuthorizationLatencyMicroseconds <= 0 ||
@@ -147,11 +148,11 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     IGatewayUpdateUploadAuthorizer
 {
     private const string ClientName = "fluidruntime-gateway-manager";
-    private const string ClientVersion = "0.16.0";
+    private const string ClientVersion = "0.17.0";
     private const string ExpectedAdvertisedServerName = "fluidgateway";
-    private const int FixedControlRoundTrips = 10;
+    private const int AuthorizationRoundTrips = 10;
     private const string ContextVersion =
-        "fluidruntime-gateway-update-upload-authorization-context-v1";
+        "fluidruntime-gateway-update-upload-authorization-context-v2";
 
     private readonly string host;
     private readonly int port;
@@ -239,9 +240,10 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
                 FluidLinkV2Capability.Heartbeat |
                 FluidLinkV2Capability.MemoryTransit |
-                FluidLinkV2Capability.SessionLifecycle;
+                FluidLinkV2Capability.SessionLifecycle |
+                FluidLinkV2Capability.BatchedRuntimeEvents;
 
-            var welcome = await client.HandshakeAsync(
+            var welcome = await client.HandshakeBatchAsync(
                 ClientName,
                 ClientVersion,
                 requiredCapabilities: requiredCapabilities,
@@ -287,29 +289,23 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 deadlineSource.Token);
             completedRoundTrips++;
 
-            var seedDecision = await client.SendOperationEventAsync(
-                UploadEvent(
-                    $"seed-{token}",
-                    ramResourceId,
-                    vramResourceId,
-                    request.ResourceBytes,
-                    contextSha256),
+            var batchDecision = await client.SendOperationBatchAsync(
+                new FluidLinkV2OperationBatchEvent(
+                    token,
+                    checked((int)request.CandidateActionCount + 1),
+                    FluidLinkV2OperationType.Upload,
+                    FluidLinkV2Queue.Copy,
+                    CostMicroseconds: 0,
+                    SizeBytes: request.ResourceBytes,
+                    Source: ramResourceId,
+                    Target: vramResourceId,
+                    Reason:
+                        $"authorization-context-sha256:{contextSha256}",
+                    Frame: 0),
                 deadlineSource.Token);
             completedRoundTrips++;
-            var candidateDecisions = new List<FluidLinkV2RuntimeDecision>(
-                checked((int)request.CandidateActionCount));
-            for (ulong index = 0; index < request.CandidateActionCount; ++index)
-            {
-                candidateDecisions.Add(await client.SendOperationEventAsync(
-                    UploadEvent(
-                        $"candidate-{index:D3}-{token}",
-                        ramResourceId,
-                        vramResourceId,
-                        request.ResourceBytes,
-                        contextSha256),
-                    deadlineSource.Token));
-                completedRoundTrips++;
-            }
+            var seedDecision = batchDecision.Decisions[0];
+            var candidateDecisions = batchDecision.Decisions.Skip(1).ToArray();
 
             await client.SendFrameEventAsync(
                 new FluidLinkV2FrameEvent(
@@ -392,7 +388,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
             FluidLinkV2Capability.Heartbeat |
             FluidLinkV2Capability.MemoryTransit |
-            FluidLinkV2Capability.SessionLifecycle;
+            FluidLinkV2Capability.SessionLifecycle |
+            FluidLinkV2Capability.BatchedRuntimeEvents;
         var expectedLogicalBytes = checked(
             request.ResourceBytes * request.CandidateActionCount);
         var expectedContext = ComputeAuthorizationContextSha256(
@@ -414,7 +411,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 decision.SavedMicroseconds == 0 &&
                 decision.SavedBytes == request.ResourceBytes);
         var authorized =
-            welcome.ContractSha256 == FluidLinkV2Protocol.ContractSha256 &&
+            welcome.ContractSha256 == FluidLinkV2BatchProtocol.ContractSha256 &&
             welcome.ServerName == ExpectedAdvertisedServerName &&
             welcome.MaxPayloadBytes == FluidLinkV2Protocol.MaxPayloadBytes &&
             (requiredCapabilities & ~welcome.AcceptedCapabilities) == 0 &&
@@ -434,8 +431,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             seedDecision.SavedMicroseconds == 0 &&
             seedDecision.SavedBytes == 0 &&
             decisionsMatch &&
-            roundTripCount == checked((int)request.CandidateActionCount +
-                FixedControlRoundTrips) &&
+            roundTripCount == AuthorizationRoundTrips &&
             bytesSent > 0 &&
             bytesReceived > 0 &&
             authorizationDeadlineMilliseconds > 0 &&
@@ -531,7 +527,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         [
             $"context_version={ContextVersion}",
             $"protocol={FluidLinkV2Protocol.Version}",
-            $"contract_sha256={FluidLinkV2Protocol.ContractSha256}",
+            $"contract_sha256={FluidLinkV2BatchProtocol.ContractSha256}",
             $"nonce={nonce}",
             $"peer_process_id={peerProcessId}",
             $"peer_executable_sha256={peerSha256}",
@@ -549,23 +545,6 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant();
     }
-
-    private static FluidLinkV2OperationEvent UploadEvent(
-        string operationId,
-        string source,
-        string target,
-        ulong resourceBytes,
-        string authorizationContextSha256) =>
-        new(
-            FluidLinkV2OperationType.Upload,
-            FluidLinkV2Queue.Copy,
-            operationId,
-            CostMicroseconds: 0,
-            SizeBytes: resourceBytes,
-            Source: source,
-            Target: target,
-            Reason: $"authorization-context-sha256:{authorizationContextSha256}",
-            Frame: 0);
 
     private static void ValidateRequest(
         GatewayUpdateUploadAuthorizationRequest request)

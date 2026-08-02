@@ -130,7 +130,7 @@ public sealed record GatewayUpdateUploadLabReport(
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         return new GatewayUpdateUploadLabReport(
-            Mode: "fluidruntime-gateway-update-upload-control-trace-v0.15.0",
+            Mode: "fluidruntime-gateway-update-upload-control-trace-v0.17.0",
             nativeEvidence.TargetOwned,
             nativeEvidence.CooperativeLoad,
             nativeEvidence.RemoteInjection,

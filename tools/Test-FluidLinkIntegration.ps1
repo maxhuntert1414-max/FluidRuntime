@@ -13,7 +13,9 @@ $gatewayRoot = (Resolve-Path -LiteralPath $GatewayPath).Path
 $sharedArtifacts = @(
     "fluidlink-v1.contract.json",
     "fluidlink-v2.contract.json",
-    "fluidlink-v2.golden.json"
+    "fluidlink-v2.golden.json",
+    "fluidlink-v2-batch.contract.json",
+    "fluidlink-v2-batch.golden.json"
 )
 $artifactHashes = @{}
 foreach ($artifact in $sharedArtifacts) {
@@ -156,6 +158,10 @@ try {
         rtt_p95_microseconds = $report.round_trip_p95_microseconds
         contract_sha256 = $artifactHashes["fluidlink-v2.contract.json"]
         golden_sha256 = $artifactHashes["fluidlink-v2.golden.json"]
+        batch_contract_sha256 =
+            $artifactHashes["fluidlink-v2-batch.contract.json"]
+        batch_golden_sha256 =
+            $artifactHashes["fluidlink-v2-batch.golden.json"]
         report = $reportPath
     }
 }

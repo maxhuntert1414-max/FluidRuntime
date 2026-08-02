@@ -1,12 +1,13 @@
 # FluidLink
 
 FluidLink is the versioned local transport library between FluidRuntime and
-FluidGateway. Package 0.2.1 has no third-party dependencies and keeps both wire
+FluidGateway. Package 0.3.0 has no third-party dependencies and keeps both wire
 generations available:
 
 | Protocol | Payload | Units | Status |
 | --- | --- | --- | --- |
 | `fluidlink-v2` | Opcode-specific positional binary | Integer microseconds and bytes | Preferred |
+| `fluidlink-v2-batched-runtime-events-v1` | One positional operation template plus ordered decision vector | Integer microseconds and bytes | Opt-in profile |
 | `fluidlink-v1` | Bounded UTF-8 JSON object | Legacy decimal milliseconds and MiB | Compatible |
 
 Version 2 is additive. Existing v1 callers do not change, and a connection may
@@ -35,11 +36,20 @@ decisions, heartbeat, one numeric `InvalidPayload` error, and goodbye. Other
 decision/error registry values are codec-tested without one vector each. A
 contract edit requires a new fingerprint and matching Python/.NET vectors.
 
+Package 0.3.0 also packages
+`contracts/fluidlink-v2-batch.contract.json` and
+`contracts/fluidlink-v2-batch.golden.json`. The batch profile adds capability
+bit 7, event opcode 105, and decision opcode 7 without changing the base v2
+contract hash. A batch carries one shared operation shape and a count from 1 to
+256. Its response carries one validated decision per expanded operation, in
+the same order. A partial server failure closes the session and returns no
+decision vector.
+
 ## Typed Client
 
 ```csharp
 await using var client = new FluidLinkV2Client("127.0.0.1", 8765);
-var welcome = await client.HandshakeAsync("my-runtime-adapter", "0.2.1");
+var welcome = await client.HandshakeAsync("my-runtime-adapter", "0.3.0");
 
 await client.SendSessionEventAsync(new FluidLinkV2SessionEvent(
     FluidLinkV2LifecycleAction.Begin,
@@ -68,6 +78,25 @@ if (decision.DecisionOpcode ==
 await client.GoodbyeAsync();
 ```
 
+Use the batch profile only when repeated operations have the same fields:
+
+```csharp
+var welcome = await client.HandshakeBatchAsync("my-runtime-adapter", "0.3.0");
+var decisions = await client.SendOperationBatchAsync(
+    new FluidLinkV2OperationBatchEvent(
+        Guid.NewGuid().ToString("N"),
+        65,
+        FluidLinkV2OperationType.Upload,
+        FluidLinkV2Queue.Copy,
+        CostMicroseconds: 0,
+        SizeBytes: 4UL * 1024 * 1024,
+        Source: "ram-buffer",
+        Target: "vram-buffer"));
+```
+
+The client verifies the negotiated profile, echoed batch ID, exact cardinality,
+accepted status, and execution/opcode consistency for every vector entry.
+
 The client permits loopback endpoints only, serializes concurrent round trips,
 negotiates the exact contract and required capabilities, validates every enum,
 mask, length, heartbeat, session, sequence, message ID, subject, and decision,
@@ -76,7 +105,7 @@ surfaced to the caller. Only `RuntimeEventRejected` preserves an otherwise valid
 session; fatal typed peer errors, framing, or correlation drift invalidate the
 connection and require a new handshake.
 
-Package 0.2.1 also exposes read-only `LocalEndPoint` and `RemoteEndPoint`
+Package 0.3.0 also exposes read-only `LocalEndPoint` and `RemoteEndPoint`
 properties while connected. A Windows consumer can correlate that exact TCP
 tuple with the OS owner table without receiving the underlying socket. Endpoint
 inspection is transport evidence, not cryptographic peer authentication.
@@ -90,7 +119,9 @@ reducing this control-flow byte count by 1,309 bytes, or 41.05%.
 
 FluidLink carries advisory control intent. It does not authorize the native
 hook, observe physical RAM/VRAM or PCIe traffic, or create unified memory.
-Version 2 does not claim delta snapshots or shared-memory transport: the current
+The batch profile reduces repeated serialization and request/response turns. It
+does not prove lower physical RAM/VRAM or PCIe traffic. Version 2 does not claim
+delta snapshots or shared-memory transport: the current
 state request has no state body to delta-encode, and shared memory needs a
 separate synchronization, backpressure, access-control, and crash-recovery
 contract before it can replace TCP.

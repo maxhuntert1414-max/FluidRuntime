@@ -19,6 +19,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
     private uint negotiatedMaxPayloadBytes = FluidLinkV2Protocol.MaxPayloadBytes;
     private ReadOnlyMemory<byte> sessionId = ReadOnlyMemory<byte>.Empty;
     private FluidLinkV2Capability acceptedCapabilities;
+    private string? negotiatedContractSha256;
 
     public FluidLinkV2Client(
         string host = "127.0.0.1",
@@ -65,46 +66,43 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         await RunSerializedAsync(ConnectCoreAsync, cancellationToken);
     }
 
-    public async Task<FluidLinkV2Welcome> HandshakeAsync(
+    public Task<FluidLinkV2Welcome> HandshakeAsync(
         string clientName,
         string clientVersion,
         FluidLinkV2Capability requestedCapabilities =
             FluidLinkV2Protocol.AllCapabilities,
         FluidLinkV2Capability requiredCapabilities =
             FluidLinkV2Protocol.RequiredCapabilities,
-        CancellationToken cancellationToken = default)
-    {
-        requiredCapabilities |= FluidLinkV2Protocol.RequiredCapabilities;
-        requestedCapabilities |= requiredCapabilities;
-        ValidateCapabilities(requestedCapabilities, nameof(requestedCapabilities));
-        ValidateCapabilities(requiredCapabilities, nameof(requiredCapabilities));
-        var helloPayload = FluidLinkV2PayloadCodec.EncodeHello(
-            new FluidLinkV2HelloPayload(
-                FluidLinkV2Protocol.ContractHash,
-                requestedCapabilities,
-                requiredCapabilities,
-                clientName,
-                clientVersion));
-
-        return await RunSerializedAsync(
-            async token =>
-            {
-                try
-                {
-                    return await HandshakeCoreAsync(
-                        helloPayload,
-                        requestedCapabilities,
-                        requiredCapabilities,
-                        token);
-                }
-                catch
-                {
-                    InvalidateConnection();
-                    throw;
-                }
-            },
+        CancellationToken cancellationToken = default) =>
+        HandshakeProfileAsync(
+            clientName,
+            clientVersion,
+            FluidLinkV2Protocol.ContractHash,
+            FluidLinkV2Protocol.ContractSha256,
+            FluidLinkV2Protocol.AllCapabilities,
+            FluidLinkV2Protocol.RequiredCapabilities,
+            requestedCapabilities,
+            requiredCapabilities,
             cancellationToken);
-    }
+
+    public Task<FluidLinkV2Welcome> HandshakeBatchAsync(
+        string clientName,
+        string clientVersion,
+        FluidLinkV2Capability requestedCapabilities =
+            FluidLinkV2BatchProtocol.AllCapabilities,
+        FluidLinkV2Capability requiredCapabilities =
+            FluidLinkV2BatchProtocol.RequiredCapabilities,
+        CancellationToken cancellationToken = default) =>
+        HandshakeProfileAsync(
+            clientName,
+            clientVersion,
+            FluidLinkV2BatchProtocol.ContractHash,
+            FluidLinkV2BatchProtocol.ContractSha256,
+            FluidLinkV2BatchProtocol.AllCapabilities,
+            FluidLinkV2BatchProtocol.RequiredCapabilities,
+            requestedCapabilities,
+            requiredCapabilities,
+            cancellationToken);
 
     public Task<FluidLinkV2RuntimeDecision> SendSessionEventAsync(
         FluidLinkV2SessionEvent runtimeEvent,
@@ -153,6 +151,82 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
                               FluidLinkV2ErrorCode.RuntimeEventRejected)
                 {
                     throw;
+                }
+                catch
+                {
+                    InvalidateConnection();
+                    throw;
+                }
+            },
+            cancellationToken);
+    }
+
+    public async Task<FluidLinkV2OperationBatchDecision> SendOperationBatchAsync(
+        FluidLinkV2OperationBatchEvent runtimeEvent,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeEvent);
+        var payload = FluidLinkV2PayloadCodec.EncodeOperationBatchEvent(runtimeEvent);
+        return await RunSerializedAsync(
+            async token =>
+            {
+                try
+                {
+                    RequireCapabilities(
+                        FluidLinkV2BatchProtocol.RequiredCapabilities);
+                    if (!string.Equals(
+                            negotiatedContractSha256,
+                            FluidLinkV2BatchProtocol.ContractSha256,
+                            StringComparison.Ordinal))
+                    {
+                        throw new FluidLinkV2ProtocolException(
+                            "contract_profile_mismatch",
+                            "FluidLink v2 operation batches require the batch profile.");
+                    }
+
+                    var response = await SendRequestCoreAsync(
+                        FluidLinkV2Opcode.RuntimeEvent,
+                        payload,
+                        subjectOpcode: (byte)FluidLinkV2EventOpcode.OperationBatch,
+                        expectedOpcode: FluidLinkV2Opcode.RuntimeDecision,
+                        expectedSubjectOpcode:
+                            (byte)FluidLinkV2EventOpcode.OperationBatch,
+                        includeSession: true,
+                        token);
+                    if (response.DecisionOpcode !=
+                        (byte)FluidLinkV2DecisionOpcode.BatchVector)
+                    {
+                        throw new FluidLinkV2ProtocolException(
+                            "invalid_runtime_decision",
+                            "FluidLink v2 operation batch requires a decision vector.");
+                    }
+
+                    var decision =
+                        FluidLinkV2PayloadCodec.DecodeOperationBatchDecision(
+                            response.Payload.Span);
+                    if (!string.Equals(
+                            decision.BatchId,
+                            runtimeEvent.BatchId,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new FluidLinkV2ProtocolException(
+                            "batch_correlation_mismatch",
+                            "FluidLink v2 batch response has a different batch_id.");
+                    }
+                    if (decision.Decisions.Count != runtimeEvent.OperationCount)
+                    {
+                        throw new FluidLinkV2ProtocolException(
+                            "batch_cardinality_mismatch",
+                            "FluidLink v2 batch response decision count does not " +
+                            "match the operation count.");
+                    }
+                    if (decision.Decisions.Any(item => !item.Accepted))
+                    {
+                        throw new FluidLinkV2ProtocolException(
+                            "runtime_event_rejected",
+                            "FluidLink v2 batch contains a rejected operation.");
+                    }
+                    return decision;
                 }
                 catch
                 {
@@ -278,8 +352,61 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         }
     }
 
+    private async Task<FluidLinkV2Welcome> HandshakeProfileAsync(
+        string clientName,
+        string clientVersion,
+        ReadOnlyMemory<byte> contractHash,
+        string contractSha256,
+        FluidLinkV2Capability availableCapabilities,
+        FluidLinkV2Capability profileRequiredCapabilities,
+        FluidLinkV2Capability requestedCapabilities,
+        FluidLinkV2Capability requiredCapabilities,
+        CancellationToken cancellationToken)
+    {
+        requiredCapabilities |= profileRequiredCapabilities;
+        requestedCapabilities |= requiredCapabilities;
+        ValidateCapabilities(
+            requestedCapabilities,
+            availableCapabilities,
+            nameof(requestedCapabilities));
+        ValidateCapabilities(
+            requiredCapabilities,
+            availableCapabilities,
+            nameof(requiredCapabilities));
+        var helloPayload = FluidLinkV2PayloadCodec.EncodeHello(
+            new FluidLinkV2HelloPayload(
+                contractHash,
+                requestedCapabilities,
+                requiredCapabilities,
+                clientName,
+                clientVersion));
+
+        return await RunSerializedAsync(
+            async token =>
+            {
+                try
+                {
+                    return await HandshakeCoreAsync(
+                        helloPayload,
+                        contractHash,
+                        contractSha256,
+                        requestedCapabilities,
+                        requiredCapabilities,
+                        token);
+                }
+                catch
+                {
+                    InvalidateConnection();
+                    throw;
+                }
+            },
+            cancellationToken);
+    }
+
     private async Task<FluidLinkV2Welcome> HandshakeCoreAsync(
         byte[] helloPayload,
+        ReadOnlyMemory<byte> contractHash,
+        string contractSha256,
         FluidLinkV2Capability requestedCapabilities,
         FluidLinkV2Capability requiredCapabilities,
         CancellationToken cancellationToken)
@@ -307,8 +434,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         }
 
         var welcome = FluidLinkV2PayloadCodec.DecodeWelcome(response.Payload.Span);
-        if (!welcome.ContractHash.Span.SequenceEqual(
-            FluidLinkV2Protocol.ContractHash.Span))
+        if (!welcome.ContractHash.Span.SequenceEqual(contractHash.Span))
         {
             throw new FluidLinkV2ProtocolException(
                 "contract_mismatch",
@@ -334,9 +460,10 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         sessionId = response.SessionId.ToArray();
         negotiatedMaxPayloadBytes = welcome.MaxPayloadBytes;
         acceptedCapabilities = welcome.AcceptedCapabilities;
+        negotiatedContractSha256 = contractSha256;
         negotiated = true;
         return new FluidLinkV2Welcome(
-            FluidLinkV2Protocol.ContractSha256,
+            contractSha256,
             SessionId!,
             welcome.ServerName,
             welcome.ServerVersion,
@@ -630,6 +757,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         sessionId = ReadOnlyMemory<byte>.Empty;
         negotiatedMaxPayloadBytes = FluidLinkV2Protocol.MaxPayloadBytes;
         acceptedCapabilities = FluidLinkV2Capability.None;
+        negotiatedContractSha256 = null;
         nextSequence = 1;
     }
 
@@ -653,9 +781,10 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
 
     private static void ValidateCapabilities(
         FluidLinkV2Capability capabilities,
+        FluidLinkV2Capability availableCapabilities,
         string parameterName)
     {
-        if ((capabilities & ~FluidLinkV2Protocol.AllCapabilities) != 0)
+        if ((capabilities & ~availableCapabilities) != 0)
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,

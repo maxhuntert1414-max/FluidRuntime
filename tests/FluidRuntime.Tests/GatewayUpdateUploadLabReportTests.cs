@@ -173,7 +173,7 @@ public sealed class GatewayUpdateUploadLabReportTests
                 CandidateCount);
         return new GatewayUpdateUploadAuthorization(
             Protocol: FluidLinkV2Protocol.Version,
-            ContractSha256: FluidLinkV2Protocol.ContractSha256,
+            ContractSha256: FluidLinkV2BatchProtocol.ContractSha256,
             WireSessionId: "00112233445566778899aabbccddeeff",
             RuntimeSessionId: $"gateway-update-{context}",
             PairIndex: 0,
@@ -191,7 +191,7 @@ public sealed class GatewayUpdateUploadLabReportTests
             AuthorizationDeadlineMilliseconds: 5000,
             TargetSha256: BinarySha256,
             HookSha256: BinarySha256,
-            NegotiatedCapabilities: (ulong)FluidLinkV2Protocol.AllCapabilities,
+            NegotiatedCapabilities: (ulong)FluidLinkV2BatchProtocol.AllCapabilities,
             HeartbeatVerified: true,
             SeedUploadExecuted: true,
             AllCandidateDecisionsAccepted: true,
@@ -204,7 +204,7 @@ public sealed class GatewayUpdateUploadLabReportTests
             NativeActionMask: HookRingReader.SkipRedundantUpdateSubresourceAction,
             NativeActionBudget: CandidateCount,
             RuntimeEventCount: 71,
-            RoundTripCount: 74,
+            RoundTripCount: 10,
             BytesSent: 4_096,
             BytesReceived: 4_096,
             AuthorizationLatencyMicroseconds: 1_000,

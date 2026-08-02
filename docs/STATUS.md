@@ -1,30 +1,41 @@
 # Project Status
 
-FluidRuntime v0.16.0 is verified locally as of 2026-08-01. It adds a strict
-owned D3D12 upload/default/readback observation path while preserving the v0.15
-Gateway-managed D3D11 control loop and the native hook ABI.
+FluidRuntime v0.17.0 is verified locally as of 2026-08-02. It adds a strict
+FluidLink v2 operation-batch profile to the Gateway-managed D3D11 control loop
+while preserving the base v2 contract, the v0.16 D3D12 observer, and the native
+hook ABI.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.16.0`
-- Canonical Gateway contract: [FluidGateway v0.64.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.64.0)
-- Target release: [FluidRuntime v0.16.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.16.0)
+- Target branch/tag: `main` / `v0.17.0`
+- Canonical Gateway contract: [FluidGateway v0.65.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.65.0)
+- Target release: [FluidRuntime v0.17.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.17.0)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 152/152 passed.
-- Focused FluidLink/Gateway/process-binding tests: 54/54 passed.
-- FluidGateway complete suite: 242/242 passed.
-- FluidGateway FluidLink tests: 43/43 passed across v1 and v2.
+- Managed tests: 157/157 passed.
+- Focused FluidLink/Gateway/process-binding tests: 59/59 passed.
+- FluidGateway complete suite: 249/249 passed.
+- FluidGateway FluidLink tests: 50/50 passed across v1, base v2, and the v2
+  batch profile.
 - Cross-process Python/.NET probe: 11/11 v1 and 11/11 v2 round trips passed.
-- Contract file and negotiated SHA-256:
+- Base contract file and negotiated SHA-256:
   `0d24d96aec32d74e123f9e198e51adde74ddf190e8c40b0ac18bddf5c4108b2f`.
+- Batch contract SHA-256:
+  `bf8727c22ac878ceff6dd0f462d6db5e81174737e839ecdf2e263a6f55268542`;
+  shared golden-vector SHA-256:
+  `9a626d9b257dd7341a090a49ca649bbc88c0c3ba32ba1edabbf18166a321aeea`.
 - FluidLink frame bytes: 3,189 for v1 versus 1,880 for v2, saving 1,309
   bytes or 41.05% for the same cross-process semantic flow.
-- `FluidLink.0.2.1.nupkg` inspected with the DLL, README, v1/v2 contracts,
-  and v2 golden vectors present.
+- Batch authorization gate: 2/2 runs, 20 total round trips, 128 candidate
+  decisions, exact content, policy accounting, process binding, and rollback.
+- Per authorization, v0.17 used 10 round trips and 3,138 FluidLink frame bytes;
+  the committed v0.15 WARP trace used 74 and 26,756 for the same 71 logical
+  events. This is a protocol comparison, not a latency claim.
+- `FluidLink.0.3.0.nupkg` inspected with the DLL, README, v1/base-v2/batch
+  contracts, and both v2 golden-vector files present.
 - Native tests: 12/12 Release and 12/12 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
@@ -71,6 +82,25 @@ The v0.15 closed-loop gate also passed:
 
 The v0.15 code does not modify native source or ABI. It adds a fail-closed bridge
 that may publish the existing action-8 policy only after exact live decisions.
+
+## New In v0.17.0
+
+- FluidLink 0.3.0 adds an optional operation-batch profile identified by the
+  exact contract SHA-256
+  `bf8727c22ac878ceff6dd0f462d6db5e81174737e839ecdf2e263a6f55268542`.
+- Capability bit 7, event opcode 105, decision opcode 7, and a strict 1..256
+  operation limit extend the protocol without changing the original v2 hash or
+  its accepted capability mask.
+- Gateway authorization sends one homogeneous 65-operation request and accepts
+  only an echoed batch identity plus an ordered 65-entry decision vector.
+- The complete controlled authorization uses 10 round trips instead of 74 while
+  retaining 71 logical runtime events and validating every operation decision.
+- A malformed, rejected, incomplete, or partially failed batch closes the
+  session and publishes no vector or native policy. Stall and cumulative slow-
+  response controls still launch a clean baseline.
+- FluidLink frame counters prove protocol-shape reduction only. Authorization
+  remains outside the native timing interval, so v0.17 makes no FPS, latency,
+  power, PCIe, or physical RAM/VRAM performance claim.
 
 ## New In v0.16.0
 

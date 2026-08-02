@@ -73,7 +73,9 @@ public sealed class GatewayUpdateUploadAuthorizerTests
 
         Assert.True(evidence.Authorized);
         Assert.Equal(FluidLinkV2Protocol.Version, evidence.Protocol);
-        Assert.Equal(FluidLinkV2Protocol.ContractSha256, evidence.ContractSha256);
+        Assert.Equal(
+            FluidLinkV2BatchProtocol.ContractSha256,
+            evidence.ContractSha256);
         Assert.Equal(64UL, evidence.CandidateDecisionCount);
         Assert.Equal(268_435_456UL, evidence.AuthorizedLogicalBytes);
         Assert.Equal(
@@ -81,7 +83,7 @@ public sealed class GatewayUpdateUploadAuthorizerTests
             evidence.NativeActionMask);
         Assert.Equal(64UL, evidence.NativeActionBudget);
         Assert.Equal(71, evidence.RuntimeEventCount);
-        Assert.Equal(74, evidence.RoundTripCount);
+        Assert.Equal(10, evidence.RoundTripCount);
         evidence.EnsureMatchesNativePolicy(
             ResourceBytes,
             CandidateCount,
@@ -218,7 +220,7 @@ public sealed class GatewayUpdateUploadAuthorizerTests
                 SavedMicroseconds: 0,
                 SavedBytes: 0),
             candidateDecisions: candidates ?? Candidates(),
-            roundTripCount: 74,
+            roundTripCount: 10,
             bytesSent: 4096,
             bytesReceived: 4096,
             authorizationLatencyMicroseconds: 1000);
@@ -256,12 +258,12 @@ public sealed class GatewayUpdateUploadAuthorizerTests
 
     private static FluidLinkV2Welcome Welcome() =>
         new(
-            FluidLinkV2Protocol.ContractSha256,
+            FluidLinkV2BatchProtocol.ContractSha256,
             SessionId: "00112233445566778899aabbccddeeff",
             ServerName: "fluidgateway",
             ServerVersion: "0.64.0",
-            FluidLinkV2Protocol.AllCapabilities,
-            FluidLinkV2Protocol.AllCapabilities,
+            FluidLinkV2BatchProtocol.AllCapabilities,
+            FluidLinkV2BatchProtocol.AllCapabilities,
             FluidLinkV2Protocol.MaxPayloadBytes);
 
     private static IReadOnlyList<FluidLinkV2RuntimeDecision> Candidates() =>
