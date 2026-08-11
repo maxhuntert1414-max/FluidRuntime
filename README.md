@@ -3,7 +3,7 @@
 **A Windows research runtime for finding and safely removing redundant work
 between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
 
-[![Version](https://img.shields.io/badge/version-0.18.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
+[![Version](https://img.shields.io/badge/version-0.19.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 [![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
@@ -24,22 +24,22 @@ action can be applied without changing the result.
 | Vulkan | Planned, not implemented |
 | External games | Unsupported; owned opt-in workloads only |
 
-## v0.18 Result
+## v0.19 Result
 
-The owned update-upload lab now uses the existing FluidLink batch profile for
-one seed and 128 exact duplicate candidates. The 64-candidate profile remains
-available as an explicit regression case. The new default:
+The owned RX 580 gate now times the complete managed path: live Gateway
+authorization, process startup, native policy, D3D11 work, evidence validation,
+and fallback. Across 10 measured pairs plus one warmup:
 
-- returns 129 explicit operation decisions in one request/vector pair;
-- spends the existing 128-action native ceiling without widening it;
-- skips exactly 128 verified 4 MiB repeats, or 512 MiB of logical API work;
-- keeps one owned resource, one 4 MiB cache, exact `memcmp`, expiration, and rollback;
-- malformed, partial, rejected, stalled, or cumulatively slow responses fail
-  closed to 134 forwarded calls and zero skips.
+- optimized end-to-end elapsed was lower in 10/10 pairs;
+- paired delta p50/p95/p99 was `-376.363 / -356.112 / -352.855 ms`;
+- concurrency 1/2/4/8 completed 128 measured authorizations with zero failures;
+- x8 authorization p99 was `215.338 ms`, inside the declared 250 ms
+  session-level budget;
+- malformed, stalled, and slow peers published no policy and completed a clean
+  baseline with 134 forwarded calls and zero skips.
 
-On the RX 580 gate, all 20 measured CPU and GPU pairs favored the optimized
-native workload. Gateway authorization remains outside that timing window, so
-the complete closed loop still blocks a performance claim.
+The report therefore retains TCP loopback for current session-level control.
+It does not establish TCP as a per-frame hot path.
 
 This is measured protocol and functional evidence. It is not yet a claim of
 lower game latency, higher FPS, reduced PCIe traffic, lower power, or physical
@@ -94,6 +94,7 @@ and verified rollback.
 - [Current status and release gate](docs/STATUS.md)
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [v0.19 end-to-end authorization evidence](docs/evidence/v0.19.0-end-to-end-authorization.md)
 - [v0.18 resilience and 128-action evidence](docs/evidence/v0.18.0-resilience-update-upload-128.md)
 - [FluidLink v0.17 batch evidence](docs/evidence/v0.17.0-fluidlink-operation-batch.md)
 - [D3D12 observation evidence](docs/evidence/v0.16.0-d3d12-observation.md)

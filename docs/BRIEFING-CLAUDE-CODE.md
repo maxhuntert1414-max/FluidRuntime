@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-11 para o release v0.18.0.
+Handoff atualizado em 2026-08-11 para o release v0.19.0.
 
 ## 1. Objetivo geral
 
@@ -52,6 +52,8 @@ Real e verificado em software owned:
   budget nativo de action 8 somente no workload owned de `UpdateSubresource`.
 - servidor Gateway loopback-only com oito workers, rejeicao por saturacao e
   deadlines absolutos para header, frame em progresso e sessao ociosa.
+- timing ponta a ponta com autorizacao, processo, policy, efeito nativo,
+  validacao e fallback; percentis p50/p95/p99 e stress concorrente 1/2/4/8.
 - observacao D3D12 owned de UPLOAD -> DEFAULT -> READBACK com COPY queue,
   promocao/barreira/decay, fence, conteudo exato, arquitetura e budgets DXGI.
 
@@ -129,20 +131,22 @@ O perfil historico de 64 candidatas continua selecionavel para regressao.
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.18
+## 6. Evidencia local v0.19
 
-- managed tests: 172/172;
-- FluidGateway completo: 257/257;
-- resiliencia do servidor: oito casos por dez repeticoes, 80/80;
+- managed tests: 178/178;
+- FluidGateway completo: 259/259;
+- resiliencia do servidor: dez casos por dez repeticoes, 100/100;
 - CTests Release: 13/13; CTests Debug: 13/13;
-- WARP 128: 2/2 pares medidos, 128 skips e 536.870.912 bytes logicos por run;
-- RX 580 128: 20/20 pares medidos mais um warmup, com conteudo, guards,
-  accounting e rollback exatos;
-- 21 autorizacoes hardware, 210 round trips e 2.688 decisoes candidatas;
+- WARP: 10/10 pares medidos mais um warmup; claim bloqueado apenas por adapter
+  de software;
+- RX 580: 10/10 pares medidos mais um warmup; delta ponta a ponta
+  p50/p95/p99 de -376.362,500 / -356.111,700 / -352.855,140 us;
+- stress 1/2/4/8: 128 autorizacoes medidas, 15 warmups, zero falhas e p99 x8
+  de 215.338,490 us contra budget de sessao de 250.000 us;
 - resposta malformada, stall e peer cumulativamente lento: baseline verificado,
   134 forwarded, zero skips e nenhuma policy;
-- claim nativo owned aprovado; claim closed-loop continua bloqueado porque a
-  autorizacao Gateway fica fora da janela de timing nativa;
+- claim ponta a ponta owned aprovado no RX 580; TCP mantido somente para
+  controle por sessao, sem conclusao para hot path por frame;
 - nenhum fingerprint FluidLink, ABI nativo, limite de cache ou teto de action
   foi ampliado.
 
@@ -256,7 +260,10 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -File tools/Test-GatewayManagedUpdateUpload.ps1 `
   -GatewayPath ..\FluidGateway `
   -CandidateActionCount 128 `
-  -TrialPairs 20 `
+  -AuthorizationMaxConcurrency 8 `
+  -AuthorizationSamplesPerLevel 32 `
+  -AuthorizationP99BudgetMs 250 `
+  -TrialPairs 10 `
   -WarmupPairs 1 `
   -Hardware $true
 dotnet pack src/FluidLink/FluidLink.csproj -c Release `
@@ -277,6 +284,7 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.19.0 timing ponta a ponta e concorrencia](evidence/v0.19.0-end-to-end-authorization.md)
 - [v0.18.0 resiliencia e perfil de 128 actions](evidence/v0.18.0-resilience-update-upload-128.md)
 - [v0.17.0 FluidLink operation batch](evidence/v0.17.0-fluidlink-operation-batch.md)
 - [v0.16.0 D3D12 owned observation](evidence/v0.16.0-d3d12-observation.md)
@@ -298,11 +306,11 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 10. Proximo passo recomendado
 
-O batch binario limitado agora carrega 129 operacoes em uma unica troca
-request/vector, e o servidor nao permite que uma conexao lenta bloqueie as
-demais. O proximo passo e incluir autorizacao e fallback no benchmark do loop
-completo antes de qualquer decisao por frame. Shared memory so entra depois de
-contrato de backpressure, identidade, crash recovery e benchmark.
+O loop completo ja inclui autorizacao e fallback, e o TCP passou o budget atual
+de controle por sessao. O proximo passo do control plane e testar lifecycle
+sustentado: cancelamento, restart do peer, sessao stale e partial batch. Shared
+memory so entra com um budget de hot path explicito, contrato de backpressure,
+identidade, crash recovery e benchmark que demonstre necessidade.
 
 Depois, generalizar upload com seguranca: texturas e pitches canonicos, boxes parciais,
 `UpdateSubresource1`, buffers dynamic, aliases, batching, fences e deferred
@@ -323,7 +331,7 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.18 endurece o servidor FluidLink e leva o workload owned ate
-128 candidatas sem ampliar o ABI, o cache ou a autoridade nativa. Ainda nao ha
-atuacao D3D12/Vulkan nem claim closed-loop de trafego fisico, FPS ou suporte a
-jogos externos.
+Mensagem curta: v0.19 prova uma melhora ponta a ponta em um workload D3D11
+owned, incluindo autorizacao e efeito nativo, sem ampliar ABI, cache ou
+autoridade. Ainda nao ha atuacao D3D12/Vulkan nem claim de trafego fisico, FPS
+ou suporte a jogos externos.

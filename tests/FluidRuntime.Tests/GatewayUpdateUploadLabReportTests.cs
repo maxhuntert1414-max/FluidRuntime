@@ -15,9 +15,9 @@ public sealed class GatewayUpdateUploadLabReportTests
         new(2026, 8, 1, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void Build_blocks_performance_when_native_evidence_allows_it()
+    public void Build_records_end_to_end_tail_and_waits_for_concurrency_gate()
     {
-        var nativeEvidence = NativeEvidence();
+        var nativeEvidence = CreateNativeEvidence();
 
         Assert.True(nativeEvidence.PerformanceClaimAllowed);
 
@@ -27,15 +27,51 @@ public sealed class GatewayUpdateUploadLabReportTests
             BinarySha256);
 
         Assert.False(report.PerformanceClaimAllowed);
+        Assert.Equal(2_000, report.ManagedEndToEndLatencyMicroseconds.Baseline.P99);
+        Assert.Equal(1_500, report.ManagedEndToEndLatencyMicroseconds.Optimized.P99);
+        Assert.Equal(-500, report.ManagedEndToEndLatencyMicroseconds.Delta.P99);
         Assert.Contains(
+            "concurrent-authorization-benchmark-missing",
+            report.PerformanceClaimBlockers);
+        Assert.DoesNotContain(
             "gateway-authorization-outside-native-timing-window",
+            report.PerformanceClaimBlockers);
+    }
+
+    [Fact]
+    public void Build_blocks_an_end_to_end_p99_regression()
+    {
+        var nativeEvidence = CreateNativeEvidence();
+        var trial = Assert.Single(nativeEvidence.Trials);
+        var regressed = nativeEvidence with
+        {
+            Trials =
+            [
+                trial with
+                {
+                    Optimized = trial.Optimized with
+                    {
+                        ManagedEndToEndElapsedMicroseconds = 2_500
+                    }
+                }
+            ]
+        };
+
+        var report = GatewayUpdateUploadLabReport.Build(
+            regressed,
+            BinarySha256,
+            BinarySha256);
+
+        Assert.False(report.PerformanceClaimAllowed);
+        Assert.Contains(
+            "managed-end-to-end-improvement-not-consistent",
             report.PerformanceClaimBlockers);
     }
 
     [Fact]
     public void Build_rejects_action_mask_or_budget_drift_from_authorization()
     {
-        var nativeEvidence = NativeEvidence();
+        var nativeEvidence = CreateNativeEvidence();
         var trial = Assert.Single(nativeEvidence.Trials);
         UpdateUploadElisionRunReport[] mismatchedRuns =
         [
@@ -61,7 +97,7 @@ public sealed class GatewayUpdateUploadLabReportTests
     [Fact]
     public void Build_rejects_baseline_with_any_published_policy_marker()
     {
-        var nativeEvidence = NativeEvidence();
+        var nativeEvidence = CreateNativeEvidence();
         var trial = Assert.Single(nativeEvidence.Trials);
         UpdateUploadElisionRunReport[] invalidBaselines =
         [
@@ -89,7 +125,7 @@ public sealed class GatewayUpdateUploadLabReportTests
         }
     }
 
-    private static UpdateUploadElisionLabReport NativeEvidence()
+    internal static UpdateUploadElisionLabReport CreateNativeEvidence()
     {
         var authorization = Authorization();
         var baseline = Run(optimized: false);
@@ -179,7 +215,7 @@ public sealed class GatewayUpdateUploadLabReportTests
             PairIndex: 0,
             Phase: "measured",
             AdvertisedServerName: "fluidgateway",
-            AdvertisedServerVersion: "0.64.0",
+            AdvertisedServerVersion: "0.67.0",
             PeerProcessBindingVerified: true,
             PeerCryptographicallyAuthenticated: false,
             PeerProcessId: 42,
@@ -257,7 +293,10 @@ public sealed class GatewayUpdateUploadLabReportTests
             PostDetachDestinationHash: "fedcba9876543210",
             CpuWorkloadMicroseconds: optimized ? 500 : 1_000,
             GpuWorkloadMicroseconds: optimized ? 450 : 900,
-            TargetReport: EmptyTargetReport());
+            TargetReport: EmptyTargetReport())
+        {
+            ManagedEndToEndElapsedMicroseconds = optimized ? 1_500 : 2_000
+        };
     }
 
     private static PairedMetricSummary Metrics(double baseline, double optimized) =>

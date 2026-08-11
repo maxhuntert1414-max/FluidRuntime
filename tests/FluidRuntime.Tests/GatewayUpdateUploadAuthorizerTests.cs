@@ -41,6 +41,9 @@ public sealed class GatewayUpdateUploadAuthorizerTests
         Assert.Equal(3, options.TrialPairs);
         Assert.Equal(0, options.WarmupPairs);
         Assert.Equal(128, options.CandidateActionCount);
+        Assert.Equal(8, options.AuthorizationMaxConcurrency);
+        Assert.Equal(32, options.AuthorizationSamplesPerLevel);
+        Assert.Equal(250, options.AuthorizationP99BudgetMs);
         Assert.True(options.UseHardware);
         var native = options.ToNativeOptions();
         Assert.Equal(3, native.TrialPairs);
@@ -226,7 +229,8 @@ public sealed class GatewayUpdateUploadAuthorizerTests
                 deadlineMilliseconds: 500),
             BaselineFallback(),
             BinarySha256,
-            BinarySha256);
+            BinarySha256,
+            managedEndToEndElapsedMicroseconds: 1_500_000);
 
         Assert.False(report.AuthorizationAccepted);
         Assert.False(report.NativePolicyPublished);
@@ -238,6 +242,7 @@ public sealed class GatewayUpdateUploadAuthorizerTests
         Assert.Equal("TimeoutException", report.AuthorizationFailureType);
         Assert.Equal(500, report.AuthorizationDeadlineMilliseconds);
         Assert.Equal(500_000, report.AuthorizationElapsedMicroseconds);
+        Assert.Equal(1_500_000, report.ManagedEndToEndElapsedMicroseconds);
         Assert.Equal(4, report.CompletedRoundTripCount);
     }
 
@@ -255,7 +260,8 @@ public sealed class GatewayUpdateUploadAuthorizerTests
                 new TimeoutException("gateway timeout"),
                 invalid,
                 BinarySha256,
-                BinarySha256));
+                BinarySha256,
+                managedEndToEndElapsedMicroseconds: 1_500_000));
     }
 
     [Fact]
@@ -265,7 +271,8 @@ public sealed class GatewayUpdateUploadAuthorizerTests
             new TimeoutException("gateway timeout"),
             BaselineFallback(candidateCount: 128),
             BinarySha256,
-            BinarySha256);
+            BinarySha256,
+            managedEndToEndElapsedMicroseconds: 1_500_000);
 
         Assert.Equal(134, report.ForwardedUpdateSubresourceCount);
         Assert.Equal(0, report.SkippedUpdateSubresourceCount);
@@ -403,6 +410,9 @@ public sealed class GatewayUpdateUploadAuthorizerTests
             PostDetachDestinationHash: "fedcba9876543210",
             CpuWorkloadMicroseconds: 1000,
             GpuWorkloadMicroseconds: 900,
-            TargetReport: document.RootElement.Clone());
+            TargetReport: document.RootElement.Clone())
+        {
+            ManagedEndToEndElapsedMicroseconds = 1_000_000
+        };
     }
 }

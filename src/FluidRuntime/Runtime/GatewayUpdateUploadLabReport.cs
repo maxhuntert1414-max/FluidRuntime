@@ -28,6 +28,7 @@ public sealed record GatewayUpdateUploadLabReport(
     long FluidLinkBytesSent,
     long FluidLinkBytesReceived,
     MetricDistribution AuthorizationLatencyMicroseconds,
+    PairedTailLatencySummary ManagedEndToEndLatencyMicroseconds,
     ulong NativeActionMask,
     ulong NativeActionBudgetPerOptimizedRun,
     bool NativeExactContentFinalGate,
@@ -39,9 +40,14 @@ public sealed record GatewayUpdateUploadLabReport(
     string PerformanceClaimBasis,
     bool PerformanceClaimAllowed,
     IReadOnlyList<string> PerformanceClaimBlockers,
+    GatewayAuthorizationConcurrencyBenchmarkReport? AuthorizationConcurrencyBenchmark,
     UpdateUploadElisionLabReport NativeEvidence,
     IReadOnlyList<GatewayUpdateUploadAuthorization> Authorizations)
 {
+    private const int RequiredAuthorizationConcurrency = 8;
+    private const int RequiredAuthorizationSamplesPerLevel = 32;
+    private const int MaximumAuthorizationP99BudgetMilliseconds = 250;
+
     public static GatewayUpdateUploadLabReport Build(
         UpdateUploadElisionLabReport nativeEvidence,
         string targetSha256,
@@ -122,15 +128,45 @@ public sealed record GatewayUpdateUploadLabReport(
             throw new InvalidDataException(
                 "Measured native runs and Gateway authorization runs do not match.");
         }
+        if (nativeEvidence.Trials.Any(item =>
+                item.Baseline.ManagedEndToEndElapsedMicroseconds <= 0 ||
+                item.Optimized.ManagedEndToEndElapsedMicroseconds <= 0 ||
+                item.Optimized.ManagedEndToEndElapsedMicroseconds <
+                    item.Optimized.GatewayAuthorization!
+                        .AuthorizationLatencyMicroseconds))
+        {
+            throw new InvalidDataException(
+                "Managed end-to-end timing does not contain Gateway authorization.");
+        }
 
         var latency = Distribution(
             verified.Select(item => (double)item.AuthorizationLatencyMicroseconds));
+        var measuredTrials = nativeEvidence.Trials
+            .Where(item => item.IncludedInStatistics)
+            .ToArray();
+        var managedEndToEnd = GatewayLatencyStatistics.SummarizePairs(
+            measuredTrials.Select(item =>
+                item.Baseline.ManagedEndToEndElapsedMicroseconds),
+            measuredTrials.Select(item =>
+                item.Optimized.ManagedEndToEndElapsedMicroseconds));
+        var requiredWins = (int)Math.Ceiling(measuredTrials.Length * 0.8);
         var performanceClaimBlockers = nativeEvidence.PerformanceClaimBlockers
-            .Append("gateway-authorization-outside-native-timing-window")
+            .ToList();
+        if (managedEndToEnd.Delta.P50 >= 0 ||
+            managedEndToEnd.Delta.P95 >= 0 ||
+            managedEndToEnd.Delta.P99 >= 0 ||
+            managedEndToEnd.OptimizedLowerCount < requiredWins)
+        {
+            performanceClaimBlockers.Add(
+                "managed-end-to-end-improvement-not-consistent");
+        }
+        performanceClaimBlockers.Add(
+            "concurrent-authorization-benchmark-missing");
+        var distinctBlockers = performanceClaimBlockers
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         return new GatewayUpdateUploadLabReport(
-            Mode: "fluidruntime-gateway-update-upload-control-trace-v0.18.0",
+            Mode: "fluidruntime-gateway-update-upload-control-trace-v0.19.0",
             nativeEvidence.TargetOwned,
             nativeEvidence.CooperativeLoad,
             nativeEvidence.RemoteInjection,
@@ -159,6 +195,7 @@ public sealed record GatewayUpdateUploadLabReport(
             FluidLinkBytesSent: verified.Sum(item => item.BytesSent),
             FluidLinkBytesReceived: verified.Sum(item => item.BytesReceived),
             AuthorizationLatencyMicroseconds: latency,
+            ManagedEndToEndLatencyMicroseconds: managedEndToEnd,
             NativeActionMask: verified[0].NativeActionMask,
             NativeActionBudgetPerOptimizedRun: verified[0].NativeActionBudget,
             NativeExactContentFinalGate: true,
@@ -169,11 +206,81 @@ public sealed record GatewayUpdateUploadLabReport(
             ClaimScope:
                 "owned-d3d11-process-bound-fluidgateway-authorized-full-buffer-update-subresource-only",
             PerformanceClaimBasis:
-                "functional-closed-loop-only-gateway-authorization-not-end-to-end-timed",
+                "paired-managed-end-to-end-tail-awaiting-concurrent-authorization",
             PerformanceClaimAllowed: false,
-            performanceClaimBlockers,
+            PerformanceClaimBlockers: distinctBlockers,
+            AuthorizationConcurrencyBenchmark: null,
             nativeEvidence,
             verified);
+    }
+
+    public GatewayUpdateUploadLabReport AttachAuthorizationConcurrencyBenchmark(
+        GatewayAuthorizationConcurrencyBenchmarkReport benchmark)
+    {
+        ArgumentNullException.ThrowIfNull(benchmark);
+        if (AuthorizationConcurrencyBenchmark is not null)
+        {
+            throw new InvalidOperationException(
+                "An authorization concurrency benchmark is already attached.");
+        }
+        if (benchmark.TargetSha256 != TargetSha256 ||
+            benchmark.HookSha256 != HookSha256 ||
+            benchmark.CandidateActionCount !=
+                NativeEvidence.RedundantUpdateCountPerOptimizedRun)
+        {
+            throw new InvalidDataException(
+                "Authorization concurrency evidence does not match the native run.");
+        }
+        if ((benchmark.ReliabilityGatePassed && benchmark.PeerProcessId == 0) ||
+            (benchmark.PeerProcessId != 0 &&
+                (benchmark.Protocol != Protocol ||
+                 benchmark.ContractSha256 != ContractSha256 ||
+                 benchmark.AdvertisedServerName != AdvertisedServerName ||
+                 benchmark.AdvertisedServerVersion != AdvertisedServerVersion ||
+                 benchmark.PeerProcessId != PeerProcessId ||
+                 !string.Equals(
+                     benchmark.PeerExecutablePath,
+                     PeerExecutablePath,
+                     StringComparison.OrdinalIgnoreCase) ||
+                 benchmark.PeerExecutableSha256 != PeerExecutableSha256 ||
+                 benchmark.PeerProcessStartedAtUtc != PeerProcessStartedAtUtc)))
+        {
+            throw new InvalidDataException(
+                "Authorization concurrency peer does not match the native run.");
+        }
+
+        var blockers = PerformanceClaimBlockers
+            .Where(item => item != "concurrent-authorization-benchmark-missing")
+            .ToList();
+        if (benchmark.MaxConcurrency < RequiredAuthorizationConcurrency)
+        {
+            blockers.Add("authorization-concurrency-below-required-level");
+        }
+        if (benchmark.SamplesPerLevel < RequiredAuthorizationSamplesPerLevel)
+        {
+            blockers.Add("authorization-sample-count-below-required");
+        }
+        if (benchmark.P99BudgetMilliseconds >
+            MaximumAuthorizationP99BudgetMilliseconds)
+        {
+            blockers.Add("authorization-p99-budget-too-permissive");
+        }
+        if (!benchmark.ReliabilityGatePassed)
+        {
+            blockers.AddRange(benchmark.ReliabilityBlockers.Select(item =>
+                $"concurrent-authorization-{item}"));
+        }
+        var distinctBlockers = blockers
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return this with
+        {
+            PerformanceClaimBasis =
+                "paired-managed-end-to-end-and-concurrent-authorization-tail",
+            PerformanceClaimAllowed = distinctBlockers.Length == 0,
+            PerformanceClaimBlockers = distinctBlockers,
+            AuthorizationConcurrencyBenchmark = benchmark
+        };
     }
 
     private static void RequireSha256(string value, string name)

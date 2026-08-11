@@ -1,24 +1,24 @@
 # Project Status
 
-FluidRuntime v0.18.0 is verified locally as of 2026-08-11. It hardens the
-FluidGateway server and promotes 128 exact duplicate candidates as the owned
-update-upload default while preserving both FluidLink v2 fingerprints, the
-native hook ABI, one-resource/4 MiB cache, and 128-action ceiling.
+FluidRuntime v0.19.0 is verified locally as of 2026-08-11. It measures live
+Gateway authorization, process startup, native action, validation, and fallback
+inside one end-to-end window while preserving both FluidLink v2 fingerprints,
+the native hook ABI, one-resource/4 MiB cache, and 128-action ceiling.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.18.0`
-- Canonical Gateway contract: [FluidGateway v0.66.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.66.0)
-- Target release: [FluidRuntime v0.18.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.18.0)
+- Target branch/tag: `main` / `v0.19.0`
+- Canonical Gateway contract: [FluidGateway v0.67.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.0)
+- Target release: [FluidRuntime v0.19.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.19.0)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 172/172 passed.
-- FluidGateway complete suite: 257/257 passed.
-- FluidGateway resilience suite: eight adversarial cases passed ten consecutive
-  runs, for 80/80 total.
+- Managed tests: 178/178 passed.
+- FluidGateway complete suite: 259/259 passed.
+- FluidGateway resilience suite: ten adversarial cases passed ten consecutive
+  runs, for 100/100 total.
 - Cross-process Python/.NET probe: 11/11 v1 and 11/11 v2 round trips passed.
 - Base contract file and negotiated SHA-256:
   `0d24d96aec32d74e123f9e198e51adde74ddf190e8c40b0ac18bddf5c4108b2f`.
@@ -28,10 +28,13 @@ native hook ABI, one-resource/4 MiB cache, and 128-action ceiling.
   `9a626d9b257dd7341a090a49ca649bbc88c0c3ba32ba1edabbf18166a321aeea`.
 - FluidLink frame bytes: 3,189 for v1 versus 1,880 for v2, saving 1,309
   bytes or 41.05% for the same cross-process semantic flow.
-- The 128-candidate WARP gate passed 2/2 measured pairs. The historical
-  64-candidate profile also passed its regression gate.
-- The RX 580 gate passed 20/20 measured pairs plus one excluded warmup: 21
-  authorizations, 210 round trips, and 2,688 ordered candidate decisions.
+- The final WARP gate passed 10/10 measured pairs plus one warmup; its performance
+  claim remains blocked because WARP is a software adapter.
+- The final RX 580 gate passed 10/10 measured pairs plus one warmup: end-to-end
+  delta p50/p95/p99 was -376,362.500 / -356,111.700 / -352,855.140 us.
+- Concurrent authorization completed 128 measured requests plus 15 warmups with
+  zero failures. Concurrency-8 p99 was 215,338.490 us against a 250,000 us
+  session-level budget.
 - Each optimized 128-candidate run skipped 128 exact 4 MiB duplicates and
   accounted for 536,870,912 logical API bytes. This is not a physical-transfer
   counter.
@@ -83,6 +86,27 @@ The v0.15 closed-loop gate also passed:
 
 The v0.15 code does not modify native source or ABI. It adds a fail-closed bridge
 that may publish the existing action-8 policy only after exact live decisions.
+
+## New In v0.19.0
+
+- Every baseline and optimized run records managed end-to-end elapsed time.
+  Optimized timing must contain its own live Gateway authorization latency.
+- The RX 580 performance gate now requires negative paired p50, p95, and p99
+  complete-window deltas plus at least 80% optimized wins and the existing
+  native CPU/GPU checks.
+- A separate authorization benchmark runs 32 measured requests at concurrency
+  1, 2, 4, and 8, validating all decisions, unique contexts, stable peer
+  identity, failures, throughput, bytes, round trips, and p50/p95/p99.
+- FluidGateway 0.67 releases a bounded worker slot before writing the final
+  `GOODBYE` acknowledgement. Cleanup is idempotent and genuine saturation still
+  rejects excess active sessions.
+- Fail-closed reports time the authorization failure and verified baseline
+  fallback in one outer window.
+- The current transport decision is to retain loopback TCP for session-level
+  control. No per-frame, FPS, power, PCIe, physical RAM/VRAM, external-game, or
+  general-scheduler claim follows from this result.
+- Full methodology and raw hashes are in
+  [the v0.19 evidence report](evidence/v0.19.0-end-to-end-authorization.md).
 
 ## New In v0.18.0
 

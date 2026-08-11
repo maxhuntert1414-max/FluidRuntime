@@ -16,6 +16,7 @@ public sealed record GatewayUpdateUploadFailClosedReport(
     string AuthorizationFailureMessage,
     int AuthorizationDeadlineMilliseconds,
     long AuthorizationElapsedMicroseconds,
+    long ManagedEndToEndElapsedMicroseconds,
     int CompletedRoundTripCount,
     string TargetSha256,
     string HookSha256,
@@ -33,7 +34,8 @@ public sealed record GatewayUpdateUploadFailClosedReport(
         Exception authorizationFailure,
         UpdateUploadElisionRunReport baselineFallback,
         string targetSha256,
-        string hookSha256)
+        string hookSha256,
+        long managedEndToEndElapsedMicroseconds)
     {
         ArgumentNullException.ThrowIfNull(authorizationFailure);
         ArgumentNullException.ThrowIfNull(baselineFallback);
@@ -76,8 +78,17 @@ public sealed record GatewayUpdateUploadFailClosedReport(
 
         var details = authorizationFailure as
             GatewayUpdateUploadAuthorizationFailureException;
+        var authorizationElapsedMicroseconds = details?.ElapsedMicroseconds ?? 0;
+        if (baselineFallback.ManagedEndToEndElapsedMicroseconds <= 0 ||
+            managedEndToEndElapsedMicroseconds <
+                baselineFallback.ManagedEndToEndElapsedMicroseconds ||
+            managedEndToEndElapsedMicroseconds < authorizationElapsedMicroseconds)
+        {
+            throw new InvalidDataException(
+                "Fail-closed timing does not contain authorization and fallback.");
+        }
         return new GatewayUpdateUploadFailClosedReport(
-            Mode: "fluidruntime-gateway-update-upload-fail-closed-v0.18.0",
+            Mode: "fluidruntime-gateway-update-upload-fail-closed-v0.19.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -91,7 +102,8 @@ public sealed record GatewayUpdateUploadFailClosedReport(
                     : authorizationFailure.GetType().Name),
             AuthorizationFailureMessage: authorizationFailure.Message,
             AuthorizationDeadlineMilliseconds: details?.DeadlineMilliseconds ?? 0,
-            AuthorizationElapsedMicroseconds: details?.ElapsedMicroseconds ?? 0,
+            AuthorizationElapsedMicroseconds: authorizationElapsedMicroseconds,
+            managedEndToEndElapsedMicroseconds,
             CompletedRoundTripCount: details?.CompletedRoundTrips ?? 0,
             targetSha256,
             hookSha256,

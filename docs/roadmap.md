@@ -102,15 +102,19 @@ coordinate the interfaces the operating system and graphics APIs expose.
   128-action ceiling. WARP, fault controls, and 20 measured RX 580 pairs pass;
   end-to-end performance remains blocked because authorization is outside the
   measured native interval.
+- **v0.19.0:** complete managed timing now contains Gateway authorization,
+  process startup, native policy/action, validation, and fallback. The owned RX
+  580 gate passes negative paired p50/p95/p99 deltas and 10/10 wins. A separate
+  concurrency 1/2/4/8 benchmark validates exact decisions, unique contexts,
+  peer stability, and transport tails. Gateway 0.67 removes a bounded-slot
+  turnover race while preserving saturation rejection.
 
 ## Next Milestones
 
-### Authorization Benchmark and Upload Generalization
+### Authorization Lifecycle and Upload Generalization
 
-- Include authorization and fallback in an end-to-end latency benchmark; retain
-  the current performance blocker until the complete loop passes.
-- Add backpressure, cancellation, peer-restart, stale-session, and partial-batch
-  tests before any shared-memory FluidLink proposal can become active.
+- Add sustained cancellation, peer-restart, stale-session, and partial-batch
+  lifecycle tests before any shared-memory FluidLink proposal can become active.
 
 - Extend upload evidence to textures, pitch-aware data, partial boxes,
   `UpdateSubresource1`, dynamic-buffer, reuse, and batching patterns without an
@@ -126,7 +130,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Generalize live FluidGateway authorization only after each new native pattern
   has equivalence, provenance, budget, expiration, and rollback evidence.
 
-### v0.19: Bounded D3D12 Actuation
+### v0.20: Bounded D3D12 Actuation
 
 - Extend the owned observer to map/unmap, placed resources, textures, copy
   regions, multiple command lists/queues, aliases, and residency signals.
@@ -137,7 +141,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
   resource-state correctness, queue ordering, bounded authority, and rollback
   all pass on WARP and hardware.
 
-### v0.20: Owned Vulkan Backend
+### v0.21: Owned Vulkan Backend
 
 - Add an explicit opt-in Vulkan layer for the owned lab, observing allocations,
   memory binding, buffers/images, copy commands, barriers, queue submit/present,
@@ -147,7 +151,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Promote one bounded action only after deterministic equivalence, validation-
   layer cleanliness, fault controls, timing, and complete layer removal pass.
 
-### v0.21+: Controlled External Observation
+### v0.22+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

@@ -19,11 +19,22 @@ public static class GatewayUpdateUploadLabCommand
         try
         {
             var options = GatewayUpdateUploadLabOptions.Parse(args);
+            var authorizer = options.CreateAuthorizer();
             var report = await new UpdateUploadElisionLabRunner()
                 .RunGatewayManagedAsync(
                     options.ToNativeOptions(),
-                    options.CreateAuthorizer(),
+                    authorizer,
                     cancellationToken);
+            var concurrencyBenchmark =
+                await new GatewayAuthorizationConcurrencyBenchmarkRunner()
+                    .RunAsync(
+                        options.ToAuthorizationBenchmarkConfiguration(),
+                        authorizer,
+                        report.TargetSha256,
+                        report.HookSha256,
+                        cancellationToken);
+            report = report.AttachAuthorizationConcurrencyBenchmark(
+                concurrencyBenchmark);
             var outputPath = Path.GetFullPath(options.OutputPath);
             var directory = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(directory))
@@ -50,12 +61,23 @@ public static class GatewayUpdateUploadLabCommand
             Console.WriteLine(
                 $"Authorization latency p50={report.AuthorizationLatencyMicroseconds.P50:0.###} us; " +
                 $"p95={report.AuthorizationLatencyMicroseconds.P95:0.###} us.");
+            Console.WriteLine(
+                "Managed end-to-end delta " +
+                $"p50={report.ManagedEndToEndLatencyMicroseconds.Delta.P50:0.###} us; " +
+                $"p95={report.ManagedEndToEndLatencyMicroseconds.Delta.P95:0.###} us; " +
+                $"p99={report.ManagedEndToEndLatencyMicroseconds.Delta.P99:0.###} us.");
+            var peakConcurrency = concurrencyBenchmark.Levels[^1];
+            Console.WriteLine(
+                $"Concurrent authorization x{peakConcurrency.Concurrency}: " +
+                $"p99={peakConcurrency.LatencyMicroseconds.P99:0.###} us; " +
+                $"failures={concurrencyBenchmark.TotalFailureCount}; " +
+                $"transport={concurrencyBenchmark.TransportDecision}.");
             Console.WriteLine(report.PerformanceClaimAllowed
                 ? $"Performance evidence gate: passed for {report.ClaimScope}."
                 : "Performance evidence gate: blocked by " +
                     string.Join(", ", report.PerformanceClaimBlockers) + ".");
             Console.WriteLine($"Report: {outputPath}");
-            return 0;
+            return concurrencyBenchmark.ReliabilityGatePassed ? 0 : 4;
         }
         catch (GatewayUpdateUploadAuthorizationDeniedException exception)
         {

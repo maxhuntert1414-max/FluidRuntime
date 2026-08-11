@@ -43,6 +43,8 @@ public sealed record UpdateUploadElisionRunReport(
 {
     public GatewayUpdateUploadAuthorization? GatewayAuthorization { get; init; }
 
+    public long ManagedEndToEndElapsedMicroseconds { get; init; }
+
     public long PublishedPolicyExpiresAtQpc { get; init; }
 
     public ulong PublishedPolicyActionMask { get; init; }

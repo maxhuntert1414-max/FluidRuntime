@@ -183,6 +183,7 @@ public sealed class UpdateUploadElisionLabRunner
         OwnedBinaryBinding? binaryBinding,
         CancellationToken cancellationToken)
     {
+        var managedStartedAt = Stopwatch.GetTimestamp();
         GatewayUpdateUploadAuthorization? gatewayAuthorization = null;
         if (optimized && authorizer is not null)
         {
@@ -233,7 +234,8 @@ public sealed class UpdateUploadElisionLabRunner
                     authorizationFailure,
                     baselineFallback,
                     binaryBinding.TargetSha256,
-                    binaryBinding.HookSha256);
+                    binaryBinding.HookSha256,
+                    ElapsedMicroseconds(managedStartedAt));
                 throw new GatewayUpdateUploadAuthorizationDeniedException(
                     authorizationFailure,
                     failClosedReport);
@@ -313,7 +315,7 @@ public sealed class UpdateUploadElisionLabRunner
             }
 
             using var document = JsonDocument.Parse(stdout);
-            return BuildRunReport(
+            var runReport = BuildRunReport(
                 options,
                 optimized,
                 process.Id,
@@ -323,6 +325,11 @@ public sealed class UpdateUploadElisionLabRunner
                 events,
                 document.RootElement.Clone(),
                 gatewayAuthorization);
+            return runReport with
+            {
+                ManagedEndToEndElapsedMicroseconds =
+                    ElapsedMicroseconds(managedStartedAt)
+            };
         }
         finally
         {
@@ -749,6 +756,12 @@ public sealed class UpdateUploadElisionLabRunner
         first.AdapterVendorId == second.AdapterVendorId &&
         first.AdapterDeviceId == second.AdapterDeviceId &&
         first.AdapterDescription == second.AdapterDescription;
+
+    private static long ElapsedMicroseconds(long startedAt) =>
+        Math.Max(
+            1,
+            checked((long)Math.Ceiling(
+                Stopwatch.GetElapsedTime(startedAt).TotalMicroseconds)));
 
     private static string RequireFile(string path, string label)
     {

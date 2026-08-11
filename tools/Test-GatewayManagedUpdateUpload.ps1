@@ -11,6 +11,12 @@ param(
     [int]$WarmupPairs = 0,
     [ValidateRange(1, 128)]
     [int]$CandidateActionCount = 128,
+    [ValidateSet(1, 2, 4, 8)]
+    [int]$AuthorizationMaxConcurrency = 8,
+    [ValidateRange(1, 256)]
+    [int]$AuthorizationSamplesPerLevel = 32,
+    [ValidateRange(1, 30000)]
+    [int]$AuthorizationP99BudgetMs = 250,
     [object]$Hardware = $false
 )
 
@@ -154,11 +160,15 @@ function Invoke-FaultCase {
 
     $fallback = Get-Content -LiteralPath $CaseOutputPath -Raw | ConvertFrom-Json
     if ($fallback.mode -ne
-            "fluidruntime-gateway-update-upload-fail-closed-v0.18.0" -or
+            "fluidruntime-gateway-update-upload-fail-closed-v0.19.0" -or
         $fallback.failure_stage -ne "gateway-authorization-before-target-launch" -or
         $fallback.authorization_failure_type -ne $ExpectedFailureType -or
         $fallback.authorization_deadline_milliseconds -ne 500 -or
         $fallback.authorization_elapsed_microseconds -le 0 -or
+        $fallback.managed_end_to_end_elapsed_microseconds -lt
+            $fallback.authorization_elapsed_microseconds -or
+        $fallback.managed_end_to_end_elapsed_microseconds -lt
+            $fallback.baseline_fallback.managed_end_to_end_elapsed_microseconds -or
         $fallback.completed_round_trip_count -lt 0 -or
         $fallback.completed_round_trip_count -ge 10 -or
         $fallback.authorization_accepted -or
@@ -234,6 +244,9 @@ try {
         --hold-ms 50 `
         --gpu-timeout-ms 5000 `
         --candidate-action-count $CandidateActionCount `
+        --authorization-max-concurrency $AuthorizationMaxConcurrency `
+        --authorization-samples-per-level $AuthorizationSamplesPerLevel `
+        --authorization-p99-budget-ms $AuthorizationP99BudgetMs `
         --hardware $hardwareEnabled `
         --out $OutputPath
     if ($LASTEXITCODE -ne 0) {
@@ -249,7 +262,7 @@ finally {
 
 $report = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 $expectedAuthorizationRuns = $TrialPairs + $WarmupPairs
-if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.18.0" -or
+if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.19.0" -or
     -not $report.target_owned -or
     -not $report.cooperative_load -or
     $report.remote_injection -or
@@ -272,13 +285,78 @@ if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.18.0" 
         $expectedAuthorizedBytes -or
     $report.native_action_mask -ne 8 -or
     $report.native_action_budget_per_optimized_run -ne $CandidateActionCount -or
-    $report.performance_claim_allowed -or
-    $report.performance_claim_blockers -notcontains
+    $report.performance_claim_blockers -contains
         "gateway-authorization-outside-native-timing-window" -or
+    $report.performance_claim_blockers -contains
+        "concurrent-authorization-benchmark-missing" -or
+    $report.managed_end_to_end_latency_microseconds.baseline.count -ne
+        $TrialPairs -or
+    $report.managed_end_to_end_latency_microseconds.optimized.count -ne
+        $TrialPairs -or
+    $report.managed_end_to_end_latency_microseconds.delta.count -ne
+        $TrialPairs -or
     -not $report.native_exact_content_final_gate -or
     -not $report.content_equivalent -or
     -not $report.rollback_restored_in_all_runs) {
-    throw "Gateway-managed report violated the v0.15 closed-loop contract."
+    throw "Gateway-managed report violated the v0.19 closed-loop contract."
+}
+$benchmark = $report.authorization_concurrency_benchmark
+$expectedLevels = @(1, 2, 4, 8) | Where-Object {
+    $_ -le $AuthorizationMaxConcurrency
+}
+$actualLevels = @($benchmark.levels | ForEach-Object { $_.concurrency })
+if ($benchmark.mode -ne
+        "fluidruntime-gateway-authorization-concurrency-v0.19.0" -or
+    $benchmark.candidate_action_count -ne $CandidateActionCount -or
+    $benchmark.max_concurrency -ne $AuthorizationMaxConcurrency -or
+    $benchmark.samples_per_level -ne $AuthorizationSamplesPerLevel -or
+    $benchmark.p99_budget_milliseconds -ne $AuthorizationP99BudgetMs -or
+    $benchmark.target_sha256 -ne $report.target_sha256 -or
+    $benchmark.hook_sha256 -ne $report.hook_sha256 -or
+    $benchmark.protocol -ne $report.protocol -or
+    $benchmark.contract_sha256 -ne $report.contract_sha256 -or
+    $benchmark.advertised_server_name -ne $report.advertised_server_name -or
+    $benchmark.advertised_server_version -ne
+        $report.advertised_server_version -or
+    $benchmark.peer_process_id -ne $report.peer_process_id -or
+    $benchmark.peer_executable_path -ne $report.peer_executable_path -or
+    $benchmark.peer_executable_sha256 -ne $report.peer_executable_sha256 -or
+    $benchmark.peer_process_started_at_utc -ne
+        $report.peer_process_started_at_utc -or
+    $benchmark.total_measured_request_count -ne
+        ($expectedLevels.Count * $AuthorizationSamplesPerLevel) -or
+    $benchmark.total_failure_count -ne 0 -or
+    -not $benchmark.exact_decisions_verified -or
+    -not $benchmark.contexts_unique -or
+    -not $benchmark.peer_identity_stable -or
+    -not $benchmark.reliability_gate_passed -or
+    $benchmark.shared_memory_prototype_justified -or
+    $benchmark.transport_decision -ne
+        "retain-loopback-tcp-for-current-session-level-control" -or
+    (Compare-Object $expectedLevels $actualLevels) -or
+    ($benchmark.levels | Where-Object {
+        $_.failure_count -ne 0 -or
+        -not $_.exact_decisions_verified -or
+        -not $_.contexts_unique -or
+        -not $_.peer_identity_stable -or
+        $_.latency_microseconds.count -ne $AuthorizationSamplesPerLevel -or
+        $_.latency_microseconds.p99 -le 0 -or
+        $_.latency_microseconds.p99 -gt ($AuthorizationP99BudgetMs * 1000)
+    })) {
+    throw "Concurrent Gateway authorization evidence violated its contract."
+}
+if ($hardwareEnabled -and $TrialPairs -ge 10 -and
+    $AuthorizationMaxConcurrency -eq 8 -and
+    $AuthorizationSamplesPerLevel -ge 32 -and
+    $AuthorizationP99BudgetMs -le 250 -and
+    -not $report.performance_claim_allowed) {
+    throw "Hardware end-to-end performance evidence did not pass its fixed gate."
+}
+if (-not $hardwareEnabled -and
+    ($report.performance_claim_allowed -or
+     $report.performance_claim_blockers -notcontains
+        "software-adapter-not-hardware")) {
+    throw "WARP report did not preserve the hardware-only performance boundary."
 }
 if ($report.authorizations | Where-Object {
     -not $_.authorized -or
@@ -319,8 +397,11 @@ if ($native.mode -ne "fluidruntime-update-upload-elision-trace-v0.12.0" -or
 }
 if ($native.trials | Where-Object {
     $_.baseline.gateway_authorization -ne $null -or
+    $_.baseline.managed_end_to_end_elapsed_microseconds -le 0 -or
     $_.baseline.skipped_update_subresource_count -ne 0 -or
     $_.optimized.gateway_authorization -eq $null -or
+    $_.optimized.managed_end_to_end_elapsed_microseconds -lt
+        $_.optimized.gateway_authorization.authorization_latency_microseconds -or
     $_.optimized.published_policy_expires_at_qpc -le 0 -or
     $_.optimized.published_policy_action_mask -ne 8 -or
     $_.optimized.published_policy_action_budget -ne $CandidateActionCount -or
@@ -359,6 +440,11 @@ if ($slowFallback.completed_round_trip_count -le 0) {
     native_skips_per_run =
         $native.redundant_update_count_per_optimized_run
     native_avoided_bytes_per_run = $native.avoided_update_bytes_per_optimized_run
+    managed_end_to_end_delta_p99_us =
+        $report.managed_end_to_end_latency_microseconds.delta.p99
+    authorization_concurrency = $benchmark.max_concurrency
+    concurrent_authorization_p99_us = $benchmark.levels[-1].latency_microseconds.p99
+    transport_decision = $benchmark.transport_decision
     fail_closed_forwarded_calls = $fallback.forwarded_update_subresource_count
     fail_closed_skipped_calls = $fallback.skipped_update_subresource_count
     invalid_response_forwarded_calls =
