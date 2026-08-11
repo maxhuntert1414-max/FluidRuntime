@@ -40,10 +40,53 @@ public sealed class GatewayUpdateUploadAuthorizerTests
         Assert.Equal(PeerSha256, options.GatewayExecutableSha256);
         Assert.Equal(3, options.TrialPairs);
         Assert.Equal(0, options.WarmupPairs);
+        Assert.Equal(128, options.CandidateActionCount);
         Assert.True(options.UseHardware);
         var native = options.ToNativeOptions();
         Assert.Equal(3, native.TrialPairs);
+        Assert.Equal(128, native.CandidateActionCount);
         Assert.True(native.UseHardware);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(64)]
+    [InlineData(127)]
+    [InlineData(128)]
+    public void Options_forward_each_bounded_candidate_profile_to_native(
+        int candidateActionCount)
+    {
+        var options = GatewayUpdateUploadLabOptions.Parse(
+        [
+            "gateway-update-upload-lab",
+            "--target", "target.exe",
+            "--hook", "hook.dll",
+            "--out", "report.json",
+            "--gateway-pid", "42",
+            "--gateway-executable-sha256", PeerSha256,
+            "--candidate-action-count", candidateActionCount.ToString()
+        ]);
+
+        Assert.Equal(candidateActionCount, options.CandidateActionCount);
+        Assert.Equal(candidateActionCount, options.ToNativeOptions().CandidateActionCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(129)]
+    public void Options_reject_candidate_profiles_outside_the_native_bound(
+        int candidateActionCount)
+    {
+        Assert.Throws<ArgumentException>(() => GatewayUpdateUploadLabOptions.Parse(
+        [
+            "gateway-update-upload-lab",
+            "--target", "target.exe",
+            "--hook", "hook.dll",
+            "--out", "report.json",
+            "--gateway-pid", "42",
+            "--gateway-executable-sha256", PeerSha256,
+            "--candidate-action-count", candidateActionCount.ToString()
+        ]));
     }
 
     [Fact]
@@ -87,6 +130,26 @@ public sealed class GatewayUpdateUploadAuthorizerTests
         evidence.EnsureMatchesNativePolicy(
             ResourceBytes,
             CandidateCount,
+            expectedPairIndex: 0,
+            expectedPhase: "measured",
+            BinarySha256,
+            BinarySha256);
+    }
+
+    [Fact]
+    public void Maximum_candidate_profile_authorizes_128_native_actions()
+    {
+        const ulong candidateCount = 128;
+
+        var evidence = Build(candidateCount: candidateCount);
+
+        Assert.Equal(candidateCount, evidence.CandidateDecisionCount);
+        Assert.Equal(536_870_912UL, evidence.AuthorizedLogicalBytes);
+        Assert.Equal(candidateCount, evidence.NativeActionBudget);
+        Assert.Equal(135, evidence.RuntimeEventCount);
+        evidence.EnsureMatchesNativePolicy(
+            ResourceBytes,
+            candidateCount,
             expectedPairIndex: 0,
             expectedPhase: "measured",
             BinarySha256,
@@ -195,11 +258,26 @@ public sealed class GatewayUpdateUploadAuthorizerTests
                 BinarySha256));
     }
 
+    [Fact]
+    public void Authorization_failure_report_accepts_the_128_candidate_baseline()
+    {
+        var report = GatewayUpdateUploadFailClosedReport.Build(
+            new TimeoutException("gateway timeout"),
+            BaselineFallback(candidateCount: 128),
+            BinarySha256,
+            BinarySha256);
+
+        Assert.Equal(134, report.ForwardedUpdateSubresourceCount);
+        Assert.Equal(0, report.SkippedUpdateSubresourceCount);
+        Assert.True(report.BaselineFallbackCompleted);
+    }
+
     private static GatewayUpdateUploadAuthorization Build(
         FluidLinkV2Welcome? welcome = null,
-        IReadOnlyList<FluidLinkV2RuntimeDecision>? candidates = null)
+        IReadOnlyList<FluidLinkV2RuntimeDecision>? candidates = null,
+        ulong candidateCount = CandidateCount)
     {
-        var request = Request();
+        var request = Request(candidateCount);
         var peer = Peer();
         var context = Context(request: request);
         return FluidLinkGatewayUpdateUploadAuthorizer.BuildAuthorization(
@@ -219,19 +297,20 @@ public sealed class GatewayUpdateUploadAuthorizerTests
                     FluidLinkV2DecisionStatus.Executed,
                 SavedMicroseconds: 0,
                 SavedBytes: 0),
-            candidateDecisions: candidates ?? Candidates(),
+            candidateDecisions: candidates ?? Candidates(candidateCount),
             roundTripCount: 10,
             bytesSent: 4096,
             bytesReceived: 4096,
             authorizationLatencyMicroseconds: 1000);
     }
 
-    private static GatewayUpdateUploadAuthorizationRequest Request() =>
+    private static GatewayUpdateUploadAuthorizationRequest Request(
+        ulong candidateCount = CandidateCount) =>
         new(
             PairIndex: 0,
             Phase: "measured",
             ResourceBytes,
-            CandidateCount,
+            candidateCount,
             BinarySha256,
             BinarySha256);
 
@@ -246,7 +325,7 @@ public sealed class GatewayUpdateUploadAuthorizerTests
         GatewayUpdateUploadAuthorizationRequest? request = null,
         int peerProcessId = 42,
         ulong nativeActionMask = HookRingReader.SkipRedundantUpdateSubresourceAction,
-        ulong nativeActionBudget = CandidateCount) =>
+        ulong? nativeActionBudget = null) =>
         FluidLinkGatewayUpdateUploadAuthorizer.ComputeAuthorizationContextSha256(
             "nonce",
             peerProcessId,
@@ -254,7 +333,7 @@ public sealed class GatewayUpdateUploadAuthorizerTests
             PeerStartedAt,
             request ?? Request(),
             nativeActionMask,
-            nativeActionBudget);
+            nativeActionBudget ?? request?.CandidateActionCount ?? CandidateCount);
 
     private static FluidLinkV2Welcome Welcome() =>
         new(
@@ -266,8 +345,9 @@ public sealed class GatewayUpdateUploadAuthorizerTests
             FluidLinkV2BatchProtocol.AllCapabilities,
             FluidLinkV2Protocol.MaxPayloadBytes);
 
-    private static IReadOnlyList<FluidLinkV2RuntimeDecision> Candidates() =>
-        Enumerable.Range(0, checked((int)CandidateCount))
+    private static IReadOnlyList<FluidLinkV2RuntimeDecision> Candidates(
+        ulong candidateCount = CandidateCount) =>
+        Enumerable.Range(0, checked((int)candidateCount))
             .Select(_ => new FluidLinkV2RuntimeDecision(
                 FluidLinkV2EventOpcode.Operation,
                 FluidLinkV2DecisionOpcode.DeduplicateIdenticalTransfer,
@@ -277,9 +357,15 @@ public sealed class GatewayUpdateUploadAuthorizerTests
                 SavedBytes: ResourceBytes))
             .ToArray();
 
-    private static UpdateUploadElisionRunReport BaselineFallback()
+    private static UpdateUploadElisionRunReport BaselineFallback(
+        int candidateCount = 64)
     {
         using var document = JsonDocument.Parse("{}");
+        var directUpdateCount = candidateCount + 3;
+        var directUpdateBytes = checked((ulong)directUpdateCount * ResourceBytes);
+        var candidateBytes = checked((ulong)candidateCount * ResourceBytes);
+        var forwardedCount = candidateCount + 6;
+        var forwardedBytes = checked(9_216UL + directUpdateBytes);
         return new UpdateUploadElisionRunReport(
             Optimized: false,
             ProcessId: 42,
@@ -293,12 +379,12 @@ public sealed class GatewayUpdateUploadAuthorizerTests
             EventCount: 330,
             LostSequenceCount: 0,
             NativeOverrunCount: 0,
-            DirectUploadUpdateCount: 67,
-            DirectUploadBytes: 281_018_368,
-            RedundantUpdateCandidateCount: 64,
-            RedundantUpdateCandidateBytes: 268_435_456,
-            ForwardedUpdateSubresourceCount: 70,
-            ForwardedUpdateSubresourceBytes: 281_027_584,
+            DirectUploadUpdateCount: directUpdateCount,
+            DirectUploadBytes: directUpdateBytes,
+            RedundantUpdateCandidateCount: candidateCount,
+            RedundantUpdateCandidateBytes: candidateBytes,
+            ForwardedUpdateSubresourceCount: forwardedCount,
+            ForwardedUpdateSubresourceBytes: forwardedBytes,
             SkippedUpdateSubresourceCount: 0,
             SkippedUpdateSubresourceBytes: 0,
             ContentCacheResourceCount: 1,

@@ -1,4 +1,5 @@
 using FluidRuntime.Cli;
+using FluidRuntime.Native;
 
 namespace FluidRuntime.Runtime;
 
@@ -26,6 +27,8 @@ public sealed record GatewayUpdateUploadFailClosedReport(
     string FallbackAction,
     UpdateUploadElisionRunReport BaselineFallback)
 {
+    private const int LegacyUpdateCount = 3;
+
     public static GatewayUpdateUploadFailClosedReport Build(
         Exception authorizationFailure,
         UpdateUploadElisionRunReport baselineFallback,
@@ -34,6 +37,11 @@ public sealed record GatewayUpdateUploadFailClosedReport(
     {
         ArgumentNullException.ThrowIfNull(authorizationFailure);
         ArgumentNullException.ThrowIfNull(baselineFallback);
+        var candidateActionCount = baselineFallback.RedundantUpdateCandidateCount;
+        var expectedDirectUpdateCount = checked(
+            candidateActionCount + UpdateUploadElisionLabOptions.RequiredUpdateCount);
+        var expectedForwardedUpdateCount = checked(
+            expectedDirectUpdateCount + LegacyUpdateCount);
         if (baselineFallback.Optimized ||
             baselineFallback.GatewayAuthorization is not null ||
             baselineFallback.PublishedPolicyEpoch != 0 ||
@@ -43,9 +51,12 @@ public sealed record GatewayUpdateUploadFailClosedReport(
             baselineFallback.PublishedPolicyActionMask != 0 ||
             baselineFallback.PublishedPolicyActionBudget != 0 ||
             baselineFallback.PolicyStatus != "none" ||
+            candidateActionCount is < 1 or
+                > (long)HookRingReader.MaxControlActionBudget ||
             baselineFallback.DirectUploadUpdateCount !=
-                UpdateUploadElisionLabOptions.TotalUpdateCount ||
-            baselineFallback.ForwardedUpdateSubresourceCount != 70 ||
+                expectedDirectUpdateCount ||
+            baselineFallback.ForwardedUpdateSubresourceCount !=
+                expectedForwardedUpdateCount ||
             baselineFallback.SkippedUpdateSubresourceCount != 0 ||
             baselineFallback.LostSequenceCount != 0 ||
             baselineFallback.NativeOverrunCount != 0 ||
@@ -66,7 +77,7 @@ public sealed record GatewayUpdateUploadFailClosedReport(
         var details = authorizationFailure as
             GatewayUpdateUploadAuthorizationFailureException;
         return new GatewayUpdateUploadFailClosedReport(
-            Mode: "fluidruntime-gateway-update-upload-fail-closed-v0.17.0",
+            Mode: "fluidruntime-gateway-update-upload-fail-closed-v0.18.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,

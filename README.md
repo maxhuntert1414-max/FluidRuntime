@@ -3,7 +3,7 @@
 **A Windows research runtime for finding and safely removing redundant work
 between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
 
-[![Version](https://img.shields.io/badge/version-0.17.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
+[![Version](https://img.shields.io/badge/version-0.18.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 [![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
@@ -18,24 +18,28 @@ action can be applied without changing the result.
 | Area | State |
 | --- | --- |
 | FluidLink v2 | Strict binary IPC with numeric opcodes and no JSON payloads |
-| FluidLink batch | 65 logical operations in one ordered request/vector pair |
+| FluidLink batch | 129 logical operations in one ordered request/vector pair |
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
 | D3D12 | Owned observation with queues, barriers, fences, content, and budgets |
 | Vulkan | Planned, not implemented |
 | External games | Unsupported; owned opt-in workloads only |
 
-## v0.17 Result
+## v0.18 Result
 
-The optional FluidLink batch profile preserves the original v2 contract and
-adds an exact second profile for homogeneous operation groups. In the controlled
-Gateway authorization path:
+The owned update-upload lab now uses the existing FluidLink batch profile for
+one seed and 128 exact duplicate candidates. The 64-candidate profile remains
+available as an explicit regression case. The new default:
 
-- 65 operation decisions use one request and one explicit decision vector;
-- complete authorization falls from 74 to 10 loopback round trips;
+- returns 129 explicit operation decisions in one request/vector pair;
+- spends the existing 128-action native ceiling without widening it;
+- skips exactly 128 verified 4 MiB repeats, or 512 MiB of logical API work;
+- keeps one owned resource, one 4 MiB cache, exact `memcmp`, expiration, and rollback;
 - malformed, partial, rejected, stalled, or cumulatively slow responses fail
-  closed before native policy publication;
-- the owned D3D11 workload still validates exact final content, event accounting,
-  process identity, policy bounds, and rollback.
+  closed to 134 forwarded calls and zero skips.
+
+On the RX 580 gate, all 20 measured CPU and GPU pairs favored the optimized
+native workload. Gateway authorization remains outside that timing window, so
+the complete closed loop still blocks a performance claim.
 
 This is measured protocol and functional evidence. It is not yet a claim of
 lower game latency, higher FPS, reduced PCIe traffic, lower power, or physical
@@ -73,6 +77,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File tools/Test-GatewayManagedUpdateUpload.ps1 `
   -GatewayPath ..\FluidGateway `
+  -CandidateActionCount 128 `
   -TrialPairs 2 -WarmupPairs 0 -Hardware $false
 ```
 
@@ -89,6 +94,7 @@ and verified rollback.
 - [Current status and release gate](docs/STATUS.md)
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [v0.18 resilience and 128-action evidence](docs/evidence/v0.18.0-resilience-update-upload-128.md)
 - [FluidLink v0.17 batch evidence](docs/evidence/v0.17.0-fluidlink-operation-batch.md)
 - [D3D12 observation evidence](docs/evidence/v0.16.0-d3d12-observation.md)
 - [Project handoff briefing](docs/BRIEFING-CLAUDE-CODE.md)

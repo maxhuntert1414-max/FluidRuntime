@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-02 para o release v0.17.0.
+Handoff atualizado em 2026-08-11 para o release v0.18.0.
 
 ## 1. Objetivo geral
 
@@ -45,11 +45,13 @@ Real e verificado em software owned:
 - baseline/optimized pareado, hashes, adapter identity, timing e rollback.
 - FluidLink loopback com header binario, opcodes numericos, fingerprint exato,
   sequencia/correlacao, heartbeat e payload posicional binario sem JSON.
-- perfil batch opcional do FluidLink com 65 operacoes homogeneas em um request
-  e vetor explicito ordenado, reduzindo a autorizacao controlada de 74 para 10
-  round trips sem alterar o contrato v2 base.
-- bridge fail-closed que transforma 64 decisoes live exatas do FluidGateway em
+- perfil batch opcional do FluidLink com ate 256 operacoes homogeneas em um
+  request e vetor explicito ordenado; o perfil atual envia uma seed mais 128
+  candidatas sem alterar o contrato v2 base.
+- bridge fail-closed que transforma 128 decisoes live exatas do FluidGateway em
   budget nativo de action 8 somente no workload owned de `UpdateSubresource`.
+- servidor Gateway loopback-only com oito workers, rejeicao por saturacao e
+  deadlines absolutos para header, frame em progresso e sessao ociosa.
 - observacao D3D12 owned de UPLOAD -> DEFAULT -> READBACK com COPY queue,
   promocao/barreira/decay, fence, conteudo exato, arquitetura e budgets DXGI.
 
@@ -112,21 +114,39 @@ Action bit 8 e exclusiva para um upload direto elegivel:
 - um unico recurso retido no cache;
 - bytes exatos iguais e geracao do destino igual.
 
-O target usa um buffer de 4 MiB e 67 updates diretos:
+O target padrao usa um buffer de 4 MiB e 131 updates diretos:
 
-1. A obrigatorio e 32 A repetidos;
-2. B com um bit alterado e 16 B repetidos;
+1. A obrigatorio e 64 A repetidos;
+2. B com um bit alterado e 32 B repetidos;
 3. `CopyResource` externo grava C;
-4. B e reenviado obrigatoriamente e repetido mais 16 vezes.
+4. B e reenviado obrigatoriamente e repetido mais 32 vezes.
 
-Baseline encaminha 67/67. Optimized encaminha os tres obrigatorios e pula 64.
-Com os tres updates legados, os totais nativos sao 70 forwarded no baseline e
-6 no optimized. O destino final precisa ser B, diferente de A e C.
+Baseline encaminha 131/131. Optimized encaminha os tres obrigatorios e pula
+128. Com os tres updates legados, os totais nativos sao 134 forwarded no
+baseline e 6 no optimized. O destino final precisa ser B, diferente de A e C.
+O perfil historico de 64 candidatas continua selecionavel para regressao.
 
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.17
+## 6. Evidencia local v0.18
+
+- managed tests: 172/172;
+- FluidGateway completo: 257/257;
+- resiliencia do servidor: oito casos por dez repeticoes, 80/80;
+- CTests Release: 13/13; CTests Debug: 13/13;
+- WARP 128: 2/2 pares medidos, 128 skips e 536.870.912 bytes logicos por run;
+- RX 580 128: 20/20 pares medidos mais um warmup, com conteudo, guards,
+  accounting e rollback exatos;
+- 21 autorizacoes hardware, 210 round trips e 2.688 decisoes candidatas;
+- resposta malformada, stall e peer cumulativamente lento: baseline verificado,
+  134 forwarded, zero skips e nenhuma policy;
+- claim nativo owned aprovado; claim closed-loop continua bloqueado porque a
+  autorizacao Gateway fica fora da janela de timing nativa;
+- nenhum fingerprint FluidLink, ABI nativo, limite de cache ou teto de action
+  foi ampliado.
+
+Evidencia historica v0.17:
 
 - managed tests: 157/157;
 - FluidLink + autorizacao/process binding Gateway .NET: 59/59;
@@ -235,7 +255,8 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File tools/Test-GatewayManagedUpdateUpload.ps1 `
   -GatewayPath ..\FluidGateway `
-  -TrialPairs 10 `
+  -CandidateActionCount 128 `
+  -TrialPairs 20 `
   -WarmupPairs 1 `
   -Hardware $true
 dotnet pack src/FluidLink/FluidLink.csproj -c Release `
@@ -256,6 +277,7 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.18.0 resiliencia e perfil de 128 actions](evidence/v0.18.0-resilience-update-upload-128.md)
 - [v0.17.0 FluidLink operation batch](evidence/v0.17.0-fluidlink-operation-batch.md)
 - [v0.16.0 D3D12 owned observation](evidence/v0.16.0-d3d12-observation.md)
 - [v0.16.0 RX 580 D3D12 trace](evidence/traces/d3d12-observation-rx580-v0.16.0.json)
@@ -276,10 +298,11 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 10. Proximo passo recomendado
 
-O batch binario limitado ja reduziu a autorizacao controlada de 74 para 10
-viagens. O proximo passo e medir o loop completo antes de qualquer decisao por
-frame. Shared memory so entra depois de contrato de backpressure, identidade,
-crash recovery e benchmark.
+O batch binario limitado agora carrega 129 operacoes em uma unica troca
+request/vector, e o servidor nao permite que uma conexao lenta bloqueie as
+demais. O proximo passo e incluir autorizacao e fallback no benchmark do loop
+completo antes de qualquer decisao por frame. Shared memory so entra depois de
+contrato de backpressure, identidade, crash recovery e benchmark.
 
 Depois, generalizar upload com seguranca: texturas e pitches canonicos, boxes parciais,
 `UpdateSubresource1`, buffers dynamic, aliases, batching, fences e deferred
@@ -300,7 +323,7 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.17 mantem o closed loop D3D11 e o observador D3D12, mas troca
-65 operacoes seriais por um batch binario estrito e reduz a autorizacao de 74
-para 10 RTTs. Ainda nao ha atuacao D3D12/Vulkan nem claim de trafego fisico, FPS
-ou suporte a jogos externos.
+Mensagem curta: v0.18 endurece o servidor FluidLink e leva o workload owned ate
+128 candidatas sem ampliar o ABI, o cache ou a autoridade nativa. Ainda nao ha
+atuacao D3D12/Vulkan nem claim closed-loop de trafego fisico, FPS ou suporte a
+jogos externos.

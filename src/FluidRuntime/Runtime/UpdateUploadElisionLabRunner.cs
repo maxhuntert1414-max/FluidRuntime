@@ -55,6 +55,13 @@ public sealed class UpdateUploadElisionLabRunner
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (options.CandidateActionCount is < 1 or
+            > UpdateUploadElisionLabOptions.MaximumCandidateActionCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.CandidateActionCount),
+                "Candidate action count must be between 1 and 128.");
+        }
         var targetPath = RequireFile(options.TargetPath, "Hook target executable");
         var hookPath = RequireFile(options.HookPath, "Hook DLL");
         var trials = new List<UpdateUploadElisionTrialReport>();
@@ -191,13 +198,13 @@ public sealed class UpdateUploadElisionLabRunner
                         pairIndex,
                         phase,
                         UpdateUploadElisionLabOptions.BufferBytes,
-                        UpdateUploadElisionLabOptions.RedundantUpdateCount,
+                        (ulong)options.CandidateActionCount,
                         binaryBinding.TargetSha256,
                         binaryBinding.HookSha256),
                     cancellationToken);
                 gatewayAuthorization.EnsureMatchesNativePolicy(
                     UpdateUploadElisionLabOptions.BufferBytes,
-                    UpdateUploadElisionLabOptions.RedundantUpdateCount,
+                    (ulong)options.CandidateActionCount,
                     pairIndex,
                     phase,
                     binaryBinding.TargetSha256,
@@ -250,8 +257,7 @@ public sealed class UpdateUploadElisionLabRunner
         startInfo.ArgumentList.Add("--gpu-timeout-ms");
         startInfo.ArgumentList.Add(options.GpuTimeoutMs.ToString());
         startInfo.ArgumentList.Add("--update-upload-count");
-        startInfo.ArgumentList.Add(
-            UpdateUploadElisionLabOptions.RedundantUpdateCount.ToString());
+        startInfo.ArgumentList.Add(options.CandidateActionCount.ToString());
         if (options.UseHardware)
         {
             startInfo.ArgumentList.Add("--hardware");
@@ -282,7 +288,7 @@ public sealed class UpdateUploadElisionLabRunner
                 policy = reader.PublishUpdateSubresourceElisionPolicy(
                     TimeSpan.FromSeconds(4),
                     gatewayAuthorization?.NativeActionBudget ??
-                        UpdateUploadElisionLabOptions.RedundantUpdateCount);
+                        (ulong)options.CandidateActionCount);
                 await reader.WaitForControlAcknowledgmentAsync(
                     policy.Epoch,
                     TimeSpan.FromSeconds(5),
@@ -359,12 +365,12 @@ public sealed class UpdateUploadElisionLabRunner
             .GetProperty("update_upload_destination_buffer_hash")
             .GetString() ?? "";
         var expectedSkipped = optimized
-            ? UpdateUploadElisionLabOptions.RedundantUpdateCount
+            ? options.CandidateActionCount
             : 0L;
         var expectedForwarded = LegacyUpdateCount +
-            UpdateUploadElisionLabOptions.TotalUpdateCount - expectedSkipped;
+            options.TotalUpdateCount - expectedSkipped;
         var expectedForwardedBytes = LegacyUpdateBytes +
-            (ulong)(UpdateUploadElisionLabOptions.TotalUpdateCount - expectedSkipped) *
+            (ulong)(options.TotalUpdateCount - expectedSkipped) *
                 UpdateUploadElisionLabOptions.BufferBytes;
         var expectedStatus = optimized
             ? HookControlPolicyStatus.Exhausted
@@ -376,7 +382,8 @@ public sealed class UpdateUploadElisionLabRunner
             directEvents,
             optimized,
             initialHash,
-            finalHash);
+            finalHash,
+            options.CandidateActionCount);
         var acceptedEventMatches = acceptedEvents.Length == (optimized ? 1 : 0) &&
             (!optimized ||
                 (acceptedEvents[0].Sequence == 0 &&
@@ -384,7 +391,7 @@ public sealed class UpdateUploadElisionLabRunner
                  acceptedEvents[0].ResourceB ==
                     HookRingReader.SkipRedundantUpdateSubresourceAction &&
                  acceptedEvents[0].SizeBytes ==
-                    UpdateUploadElisionLabOptions.RedundantUpdateCount));
+                    (ulong)options.CandidateActionCount));
         var contentEquivalent =
             report.GetProperty("update_upload_mutation_applied").GetBoolean() &&
             report.GetProperty("update_upload_generation_guard_applied").GetBoolean() &&
@@ -396,7 +403,7 @@ public sealed class UpdateUploadElisionLabRunner
             guardHash != finalHash &&
             finalHash == destinationHash;
 
-        var totalDirectBytes = (ulong)UpdateUploadElisionLabOptions.TotalUpdateCount *
+        var totalDirectBytes = (ulong)options.TotalUpdateCount *
             UpdateUploadElisionLabOptions.BufferBytes;
         var valid =
             report.GetProperty("mode").GetString() ==
@@ -408,9 +415,9 @@ public sealed class UpdateUploadElisionLabRunner
             report.GetProperty("update_upload_scope").GetString() ==
                 "owned-d3d11-default-buffer-full-update-subresource-exact-content" &&
             report.GetProperty("update_upload_count").GetInt32() ==
-                UpdateUploadElisionLabOptions.RedundantUpdateCount &&
+                options.CandidateActionCount &&
             report.GetProperty("update_upload_call_count").GetInt32() ==
-                UpdateUploadElisionLabOptions.TotalUpdateCount &&
+                options.TotalUpdateCount &&
             report.GetProperty("update_upload_buffer_bytes").GetInt32() ==
                 UpdateUploadElisionLabOptions.BufferBytes &&
             report.GetProperty("update_upload_logical_bytes").GetUInt64() ==
@@ -428,12 +435,12 @@ public sealed class UpdateUploadElisionLabRunner
             report.GetProperty("detach_hresult").GetString() == "0x00000000" &&
             report.GetProperty("resource_metrics_matched").GetBoolean() &&
             resources.GetProperty("update_subresource_count").GetInt64() ==
-                LegacyUpdateCount + UpdateUploadElisionLabOptions.TotalUpdateCount &&
+                LegacyUpdateCount + options.TotalUpdateCount &&
             resources.GetProperty("tracked_update_subresource_count").GetInt64() ==
-                UpdateUploadElisionLabOptions.TotalUpdateCount &&
+                options.TotalUpdateCount &&
             resources.GetProperty(
                 "redundant_update_subresource_candidate_count").GetInt64() ==
-                UpdateUploadElisionLabOptions.RedundantUpdateCount &&
+                options.CandidateActionCount &&
             resources.GetProperty("forwarded_update_subresource_count").GetInt64() ==
                 expectedForwarded &&
             resources.GetProperty(
@@ -451,8 +458,8 @@ public sealed class UpdateUploadElisionLabRunner
                 expectedSkipped &&
             resources.GetProperty("provenance_failure_count").GetInt64() == 0 &&
             resources.GetProperty("ipc_overrun_count").GetInt64() == 0 &&
-            directEvents.Length == UpdateUploadElisionLabOptions.TotalUpdateCount &&
-            candidateEvents.Length == UpdateUploadElisionLabOptions.RedundantUpdateCount &&
+            directEvents.Length == options.TotalUpdateCount &&
+            candidateEvents.Length == options.CandidateActionCount &&
             skippedEvents.LongLength == expectedSkipped &&
             acceptedEventMatches &&
             eventPatternMatches &&
@@ -468,7 +475,7 @@ public sealed class UpdateUploadElisionLabRunner
                  policy.ActionMask ==
                     HookRingReader.SkipRedundantUpdateSubresourceAction &&
                  policy.ActionBudget ==
-                    UpdateUploadElisionLabOptions.RedundantUpdateCount)) &&
+                    (ulong)options.CandidateActionCount)) &&
             contentEquivalent;
         if (!valid)
         {
@@ -508,10 +515,10 @@ public sealed class UpdateUploadElisionLabRunner
             events.Count,
             reader.LostSequenceCount,
             reader.NativeOverrunCount,
-            UpdateUploadElisionLabOptions.TotalUpdateCount,
+            options.TotalUpdateCount,
             totalDirectBytes,
-            UpdateUploadElisionLabOptions.RedundantUpdateCount,
-            (ulong)UpdateUploadElisionLabOptions.RedundantUpdateCount *
+            options.CandidateActionCount,
+            (ulong)options.CandidateActionCount *
                 UpdateUploadElisionLabOptions.BufferBytes,
             expectedForwarded,
             expectedForwardedBytes,
@@ -546,20 +553,23 @@ public sealed class UpdateUploadElisionLabRunner
         IReadOnlyList<HookIpcEvent> events,
         bool optimized,
         string initialHash,
-        string finalHash)
+        string finalHash,
+        int candidateActionCount)
     {
         if (!ulong.TryParse(initialHash, System.Globalization.NumberStyles.HexNumber, null,
                 out var initialKey) ||
             !ulong.TryParse(finalHash, System.Globalization.NumberStyles.HexNumber, null,
                 out var finalKey) ||
-            events.Count != UpdateUploadElisionLabOptions.TotalUpdateCount)
+            events.Count != candidateActionCount +
+                UpdateUploadElisionLabOptions.RequiredUpdateCount)
         {
             return false;
         }
 
-        var split = 1 + UpdateUploadElisionLabOptions.RedundantUpdateCount / 2;
-        var generationGuardIndex = split + 1 +
-            UpdateUploadElisionLabOptions.RedundantUpdateCount / 4;
+        var initialRepeatCount = candidateActionCount / 2;
+        var finalRepeatCount = candidateActionCount - initialRepeatCount;
+        var split = 1 + initialRepeatCount;
+        var generationGuardIndex = split + 1 + finalRepeatCount / 2;
         for (var index = 0; index < events.Count; ++index)
         {
             var item = events[index];
@@ -592,6 +602,13 @@ public sealed class UpdateUploadElisionLabRunner
         IReadOnlyList<UpdateUploadElisionTrialReport> trials,
         UpdateUploadElisionLabOptions options)
     {
+        if (options.CandidateActionCount is < 1 or
+            > UpdateUploadElisionLabOptions.MaximumCandidateActionCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options.CandidateActionCount),
+                "Candidate action count must be between 1 and 128.");
+        }
         var included = trials.Where(item => item.IncludedInStatistics).ToArray();
         var warmups = trials.Where(item => !item.IncludedInStatistics).ToArray();
         var measuredOrderMatches = included.Select((item, index) =>
@@ -620,7 +637,7 @@ public sealed class UpdateUploadElisionLabRunner
                 !item.Optimized.GenerationGuardApplied ||
                 item.Baseline.SkippedUpdateSubresourceCount != 0 ||
                 item.Optimized.SkippedUpdateSubresourceCount !=
-                    UpdateUploadElisionLabOptions.RedundantUpdateCount ||
+                    options.CandidateActionCount ||
                 item.Baseline.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
                 item.Optimized.RingAbiVersion != HookRingReader.ExpectedAbiVersion ||
                 item.Baseline.RingCapacity != HookRingReader.ExpectedCapacity ||
@@ -693,8 +710,8 @@ public sealed class UpdateUploadElisionLabRunner
             RemoteInjection: false,
             UpdateUploadElisionLabOptions.BufferBytes,
             UpdateUploadElisionLabOptions.RequiredUpdateCount,
-            UpdateUploadElisionLabOptions.RedundantUpdateCount,
-            (ulong)UpdateUploadElisionLabOptions.RedundantUpdateCount *
+            options.CandidateActionCount,
+            (ulong)options.CandidateActionCount *
                 UpdateUploadElisionLabOptions.BufferBytes,
             ExactContentCacheResourceLimit: 1,
             ExactContentCacheByteLimit: UpdateUploadElisionLabOptions.BufferBytes,

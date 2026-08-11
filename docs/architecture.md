@@ -87,11 +87,11 @@ without write/delete sharing and records their SHA-256 values. It then opens a
 fresh FluidLink v2 session, binds the exact IPv4 loopback tuple through the
 Windows TCP owner table to the caller-supplied Gateway PID, executable SHA-256,
 and process start time, and sends one homogeneous operation batch containing
-one seed upload plus 64 same-resource candidate uploads. The Gateway expands
+one seed upload plus 128 same-resource candidate uploads. The Gateway expands
 the template in order and returns one explicit decision per operation. The
 advertised server name/version remain protocol metadata, not peer
 authentication. The exact batch contract, required capabilities, heartbeat,
-one executed seed, and 64 accepted `deduplicate-identical-transfer` decisions
+one executed seed, and 128 accepted `deduplicate-identical-transfer` decisions
 with `executed=false` are all mandatory.
 
 A unique context SHA-256 binds the authorization nonce, peer process evidence,
@@ -99,7 +99,7 @@ frozen target/hook hashes, pair/phase, resource size/count, action mask, and
 budget. Runtime carries that digest in the session ID and every operation
 reason, then recomputes it before accepting the authorization.
 
-Successful authorization is converted locally to action bit 8 and budget 64.
+Successful authorization is converted locally to action bit 8 and budget 128.
 It does not bypass the native proof. After the owned target and per-PID ring are
 opened, Runtime verifies the ring PID, launched executable path/hash, and loaded
 hook path/hash against the held binary binding before publishing one policy
@@ -119,7 +119,7 @@ policy publication remain native-lab failures and are never reported as "no
 policy published."
 
 The current flow uses 10 round trips per optimized run; the equivalent v0.15
-flow used 74. Sixty-five logical operation decisions now cross the wire in one
+flow used 74. One hundred twenty-nine operation decisions now cross the wire in one
 request/vector pair and every entry is still validated. Authorization is
 recorded separately and lies outside the native workload interval. The wrapper
 therefore blocks every performance claim until the complete decision-to-effect

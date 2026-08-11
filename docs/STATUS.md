@@ -1,25 +1,24 @@
 # Project Status
 
-FluidRuntime v0.17.0 is verified locally as of 2026-08-02. It adds a strict
-FluidLink v2 operation-batch profile to the Gateway-managed D3D11 control loop
-while preserving the base v2 contract, the v0.16 D3D12 observer, and the native
-hook ABI.
+FluidRuntime v0.18.0 is verified locally as of 2026-08-11. It hardens the
+FluidGateway server and promotes 128 exact duplicate candidates as the owned
+update-upload default while preserving both FluidLink v2 fingerprints, the
+native hook ABI, one-resource/4 MiB cache, and 128-action ceiling.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.17.0`
-- Canonical Gateway contract: [FluidGateway v0.65.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.65.0)
-- Target release: [FluidRuntime v0.17.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.17.0)
+- Target branch/tag: `main` / `v0.18.0`
+- Canonical Gateway contract: [FluidGateway v0.66.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.66.0)
+- Target release: [FluidRuntime v0.18.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.18.0)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 157/157 passed.
-- Focused FluidLink/Gateway/process-binding tests: 59/59 passed.
-- FluidGateway complete suite: 249/249 passed.
-- FluidGateway FluidLink tests: 50/50 passed across v1, base v2, and the v2
-  batch profile.
+- Managed tests: 172/172 passed.
+- FluidGateway complete suite: 257/257 passed.
+- FluidGateway resilience suite: eight adversarial cases passed ten consecutive
+  runs, for 80/80 total.
 - Cross-process Python/.NET probe: 11/11 v1 and 11/11 v2 round trips passed.
 - Base contract file and negotiated SHA-256:
   `0d24d96aec32d74e123f9e198e51adde74ddf190e8c40b0ac18bddf5c4108b2f`.
@@ -29,19 +28,21 @@ hook ABI.
   `9a626d9b257dd7341a090a49ca649bbc88c0c3ba32ba1edabbf18166a321aeea`.
 - FluidLink frame bytes: 3,189 for v1 versus 1,880 for v2, saving 1,309
   bytes or 41.05% for the same cross-process semantic flow.
-- Batch authorization gate: 2/2 runs, 20 total round trips, 128 candidate
-  decisions, exact content, policy accounting, process binding, and rollback.
-- Per authorization, v0.17 used 10 round trips and 3,138 FluidLink frame bytes;
-  the committed v0.15 WARP trace used 74 and 26,756 for the same 71 logical
-  events. This is a protocol comparison, not a latency claim.
+- The 128-candidate WARP gate passed 2/2 measured pairs. The historical
+  64-candidate profile also passed its regression gate.
+- The RX 580 gate passed 20/20 measured pairs plus one excluded warmup: 21
+  authorizations, 210 round trips, and 2,688 ordered candidate decisions.
+- Each optimized 128-candidate run skipped 128 exact 4 MiB duplicates and
+  accounted for 536,870,912 logical API bytes. This is not a physical-transfer
+  counter.
+- Malformed, stalled, and cumulatively slow peers each published no policy and
+  launched a clean baseline with 134 forwarded calls and zero skips.
 - `FluidLink.0.3.0.nupkg` inspected with the DLL, README, v1/base-v2/batch
   contracts, and both v2 golden-vector files present.
-- Native tests: 12/12 Release and 12/12 Debug passed.
+- Native tests: 13/13 Release and 13/13 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
-- Remote CI is verified after the release candidate is pushed.
-- WARP update-upload trace: 4/4 raw runs passed; claim blocked as intended.
-- RX 580 update-upload trace: 22/22 raw runs passed; scoped gate passed.
+- Remote CI remains a separate required gate for pushed `main` and release tags.
 - Generic, manager, sustained, readback, and staging-upload regression smokes
   passed after ABI and hook changes.
 - Raw D3D11 and D3D12 WARP/RX 580 traces are committed with the source.
@@ -82,6 +83,25 @@ The v0.15 closed-loop gate also passed:
 
 The v0.15 code does not modify native source or ABI. It adds a fail-closed bridge
 that may publish the existing action-8 policy only after exact live decisions.
+
+## New In v0.18.0
+
+- FluidGateway 0.66 isolates local clients behind an eight-worker limit and
+  rejects excess connections. Initial headers, in-progress frames, and idle
+  sessions use monotonic absolute deadlines that do not reset per byte.
+- The owned update-upload lane accepts an explicit `--candidate-action-count`
+  from 1 through 128 and promotes 128 as the controlled-lab default.
+- One seed plus 128 exact duplicate candidates travel as one 129-operation
+  request and one ordered decision vector. No FluidLink fingerprint changed.
+- The existing native action-8 ceiling, one-resource/4 MiB exact-content cache,
+  policy ABI, expiration, generation guard, and rollback remain unchanged.
+- WARP, adversarial peer controls, and 20 measured RX 580 pairs passed. The
+  positive timing result applies only to the owned native D3D11 workload.
+- Gateway authorization remains outside the native timing interval, so the
+  closed-loop report still blocks FPS, latency, power, PCIe, physical RAM/VRAM,
+  external-game, and general-scheduler claims.
+- Full evidence and raw hashes are recorded in
+  [the v0.18 evidence report](evidence/v0.18.0-resilience-update-upload-128.md).
 
 ## New In v0.17.0
 

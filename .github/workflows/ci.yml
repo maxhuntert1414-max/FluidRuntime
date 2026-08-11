@@ -90,6 +90,7 @@ jobs:
           --target native/build/Release/fluidruntime-hook-target.exe
           --hook native/build/Release/fluidruntime-present-hook.dll
           --trial-pairs 2 --warmup-pairs 0
+          --candidate-action-count 128
           --hold-ms 50 --gpu-timeout-ms 5000 --hardware false
           --out artifacts/update-upload-elision-ci.json
       - name: Test owned D3D12 observation
@@ -348,8 +349,8 @@ jobs:
                 'owned-d3d11-default-buffer-full-update-subresource-exact-content-workload-only' -or
               $update.buffer_bytes -ne 4194304 -or
               $update.required_update_count_per_run -ne 3 -or
-              $update.redundant_update_count_per_optimized_run -ne 64 -or
-              $update.avoided_update_bytes_per_optimized_run -ne 268435456 -or
+              $update.redundant_update_count_per_optimized_run -ne 128 -or
+              $update.avoided_update_bytes_per_optimized_run -ne 536870912 -or
               $update.exact_content_cache_resource_limit -ne 1 -or
               $update.exact_content_cache_byte_limit -ne 4194304 -or
               $update.included_trial_pairs -ne 2 -or
@@ -368,8 +369,8 @@ jobs:
           $updateOptimized = $update.trials | ForEach-Object { $_.optimized }
           if ($updateBaselines | Where-Object {
               $_.ring_abi_version -ne 9 -or
-              $_.direct_upload_update_count -ne 67 -or
-              $_.forwarded_update_subresource_count -ne 70 -or
+              $_.direct_upload_update_count -ne 131 -or
+              $_.forwarded_update_subresource_count -ne 134 -or
               $_.skipped_update_subresource_count -ne 0 -or
               $_.content_cache_resource_count -ne 1 -or
               $_.content_cache_bytes -ne 4194304 -or
@@ -385,11 +386,11 @@ jobs:
           }
           if ($updateOptimized | Where-Object {
               $_.ring_abi_version -ne 9 -or
-              $_.direct_upload_update_count -ne 67 -or
+              $_.direct_upload_update_count -ne 131 -or
               $_.forwarded_update_subresource_count -ne 6 -or
-              $_.skipped_update_subresource_count -ne 64 -or
-              $_.skipped_update_subresource_bytes -ne 268435456 -or
-              $_.applied_policy_actions -ne 64 -or
+              $_.skipped_update_subresource_count -ne 128 -or
+              $_.skipped_update_subresource_bytes -ne 536870912 -or
+              $_.applied_policy_actions -ne 128 -or
               $_.policy_status -ne 'exhausted' -or
               $_.final_hash -ne $_.post_detach_destination_hash -or
               -not $_.content_equivalent -or

@@ -115,3 +115,10 @@ add_test(
         --frames 1
         --update-upload-count 64
 )
+add_test(
+    NAME fluidruntime-update-upload-elision-max-baseline
+    COMMAND fluidruntime-hook-target
+        --hook $<TARGET_FILE:fluidruntime-present-hook>
+        --frames 1
+        --update-upload-count 128
+)

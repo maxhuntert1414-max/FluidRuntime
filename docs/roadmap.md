@@ -95,6 +95,13 @@ coordinate the interfaces the operating system and graphics APIs expose.
   decision vector. The controlled authorization flow falls from 74 to 10 round
   trips; profile drift, partial adapter failure, malformed vectors, stalls, and
   cumulative deadline expiry remain fail closed.
+- **v0.18.0:** FluidGateway 0.66 isolates local connections behind an eight-
+  worker limit and monotonic absolute read deadlines. The owned update-upload
+  lane promotes 128 exact duplicate candidates as its default while preserving
+  the existing batch contract, native ABI, one-resource/4 MiB cache, and
+  128-action ceiling. WARP, fault controls, and 20 measured RX 580 pairs pass;
+  end-to-end performance remains blocked because authorization is outside the
+  measured native interval.
 
 ## Next Milestones
 
@@ -119,7 +126,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Generalize live FluidGateway authorization only after each new native pattern
   has equivalence, provenance, budget, expiration, and rollback evidence.
 
-### v0.18: Bounded D3D12 Actuation
+### v0.19: Bounded D3D12 Actuation
 
 - Extend the owned observer to map/unmap, placed resources, textures, copy
   regions, multiple command lists/queues, aliases, and residency signals.
@@ -130,7 +137,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
   resource-state correctness, queue ordering, bounded authority, and rollback
   all pass on WARP and hardware.
 
-### v0.19: Owned Vulkan Backend
+### v0.20: Owned Vulkan Backend
 
 - Add an explicit opt-in Vulkan layer for the owned lab, observing allocations,
   memory binding, buffers/images, copy commands, barriers, queue submit/present,
@@ -140,7 +147,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Promote one bounded action only after deterministic equivalence, validation-
   layer cleanliness, fault controls, timing, and complete layer removal pass.
 
-### v0.20+: Controlled External Observation
+### v0.21+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

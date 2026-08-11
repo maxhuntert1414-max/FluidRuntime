@@ -15,6 +15,7 @@ public sealed record GatewayUpdateUploadLabOptions(
     int WarmupPairs,
     int HoldMs,
     int GpuTimeoutMs,
+    int CandidateActionCount,
     bool UseHardware)
 {
     public const string Usage =
@@ -24,6 +25,7 @@ public sealed record GatewayUpdateUploadLabOptions(
         "[--host <loopback-host>] [--port <port>] [--timeout-ms <milliseconds>] " +
         "[--trial-pairs <count>] [--warmup-pairs <count>] " +
         "[--hold-ms <milliseconds>] [--gpu-timeout-ms <milliseconds>] " +
+        "[--candidate-action-count <1-128>] " +
         "[--hardware <true|false>]";
 
     public static GatewayUpdateUploadLabOptions Parse(string[] args)
@@ -50,6 +52,8 @@ public sealed record GatewayUpdateUploadLabOptions(
         var warmupPairs = 1;
         var holdMs = 50;
         var gpuTimeoutMs = 5000;
+        var candidateActionCount =
+            UpdateUploadElisionLabOptions.DefaultCandidateActionCount;
         var useHardware = false;
         for (var index = 1; index < args.Length; index += 2)
         {
@@ -92,6 +96,13 @@ public sealed record GatewayUpdateUploadLabOptions(
                 case "--gpu-timeout-ms":
                     gpuTimeoutMs = ParseInt(value, "--gpu-timeout-ms", 1, 10_000);
                     break;
+                case "--candidate-action-count":
+                    candidateActionCount = ParseInt(
+                        value,
+                        "--candidate-action-count",
+                        1,
+                        UpdateUploadElisionLabOptions.MaximumCandidateActionCount);
+                    break;
                 case "--hardware":
                     if (!bool.TryParse(value, out useHardware))
                     {
@@ -133,6 +144,7 @@ public sealed record GatewayUpdateUploadLabOptions(
             warmupPairs,
             holdMs,
             gpuTimeoutMs,
+            candidateActionCount,
             useHardware);
     }
 
@@ -145,6 +157,7 @@ public sealed record GatewayUpdateUploadLabOptions(
             WarmupPairs,
             HoldMs,
             GpuTimeoutMs,
+            CandidateActionCount,
             UseHardware);
 
     public IGatewayUpdateUploadAuthorizer CreateAuthorizer() =>

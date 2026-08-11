@@ -8,18 +8,22 @@ public sealed record UpdateUploadElisionLabOptions(
     int WarmupPairs,
     int HoldMs,
     int GpuTimeoutMs,
+    int CandidateActionCount,
     bool UseHardware)
 {
     public const int BufferBytes = 4 * 1024 * 1024;
-    public const int RedundantUpdateCount = 64;
+    public const int DefaultCandidateActionCount = 128;
+    public const int MaximumCandidateActionCount = 128;
     public const int RequiredUpdateCount = 3;
-    public const int TotalUpdateCount = RedundantUpdateCount + RequiredUpdateCount;
+
+    public int TotalUpdateCount => checked(CandidateActionCount + RequiredUpdateCount);
 
     public const string Usage =
         "Usage: fluidruntime update-upload-elision-lab " +
         "--target <hook-target.exe> --hook <hook.dll> --out <report.json> " +
         "[--trial-pairs <count>] [--warmup-pairs <count>] " +
         "[--hold-ms <milliseconds>] [--gpu-timeout-ms <milliseconds>] " +
+        "[--candidate-action-count <1-128>] " +
         "[--hardware <true|false>]";
 
     public static UpdateUploadElisionLabOptions Parse(string[] args)
@@ -41,6 +45,7 @@ public sealed record UpdateUploadElisionLabOptions(
         var warmupPairs = 1;
         var holdMs = 50;
         var gpuTimeoutMs = 5000;
+        var candidateActionCount = DefaultCandidateActionCount;
         var useHardware = false;
         for (var index = 1; index < args.Length; index += 2)
         {
@@ -66,6 +71,13 @@ public sealed record UpdateUploadElisionLabOptions(
                     break;
                 case "--gpu-timeout-ms":
                     gpuTimeoutMs = ParseInt(value, "--gpu-timeout-ms", 1, 10000);
+                    break;
+                case "--candidate-action-count":
+                    candidateActionCount = ParseInt(
+                        value,
+                        "--candidate-action-count",
+                        1,
+                        MaximumCandidateActionCount);
                     break;
                 case "--hardware":
                     if (!bool.TryParse(value, out useHardware))
@@ -93,6 +105,7 @@ public sealed record UpdateUploadElisionLabOptions(
             warmupPairs,
             holdMs,
             gpuTimeoutMs,
+            candidateActionCount,
             useHardware);
     }
 

@@ -20,11 +20,47 @@ public sealed class UpdateUploadElisionLabTests
 
         Assert.Equal(4 * 1024 * 1024, UpdateUploadElisionLabOptions.BufferBytes);
         Assert.Equal(3, UpdateUploadElisionLabOptions.RequiredUpdateCount);
-        Assert.Equal(64, UpdateUploadElisionLabOptions.RedundantUpdateCount);
-        Assert.Equal(67, UpdateUploadElisionLabOptions.TotalUpdateCount);
+        Assert.Equal(128, options.CandidateActionCount);
+        Assert.Equal(131, options.TotalUpdateCount);
         Assert.Equal(10, options.TrialPairs);
         Assert.Equal(1, options.WarmupPairs);
         Assert.False(options.UseHardware);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(64)]
+    [InlineData(127)]
+    [InlineData(128)]
+    public void Options_accept_the_bounded_candidate_profiles(int candidateActionCount)
+    {
+        var options = UpdateUploadElisionLabOptions.Parse(
+        [
+            "update-upload-elision-lab",
+            "--target", "target.exe",
+            "--hook", "hook.dll",
+            "--out", "report.json",
+            "--candidate-action-count", candidateActionCount.ToString()
+        ]);
+
+        Assert.Equal(candidateActionCount, options.CandidateActionCount);
+        Assert.Equal(candidateActionCount + 3, options.TotalUpdateCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(129)]
+    public void Options_reject_candidate_profiles_outside_the_native_bound(
+        int candidateActionCount)
+    {
+        Assert.Throws<ArgumentException>(() => UpdateUploadElisionLabOptions.Parse(
+        [
+            "update-upload-elision-lab",
+            "--target", "target.exe",
+            "--hook", "hook.dll",
+            "--out", "report.json",
+            "--candidate-action-count", candidateActionCount.ToString()
+        ]));
     }
 
     [Fact]
@@ -112,7 +148,32 @@ public sealed class UpdateUploadElisionLabTests
         Assert.Contains("software-adapter-not-hardware", report.PerformanceClaimBlockers);
     }
 
-    private static UpdateUploadElisionLabOptions Options(bool useHardware) => new(
+    [Fact]
+    public void Report_supports_the_128_candidate_profile_with_the_same_cache_bound()
+    {
+        const int candidateActionCount = 128;
+        var options = Options(
+            useHardware: false,
+            candidateActionCount: candidateActionCount);
+        var trials = Trials(
+            baselineCpu: 1000,
+            optimizedCpu: 900,
+            baselineGpu: 1000,
+            optimizedGpu: 100,
+            driver: "warp",
+            candidateActionCount);
+
+        var report = UpdateUploadElisionLabRunner.BuildReport(trials, options);
+
+        Assert.Equal(candidateActionCount, report.RedundantUpdateCountPerOptimizedRun);
+        Assert.Equal(536_870_912UL, report.AvoidedUpdateBytesPerOptimizedRun);
+        Assert.Equal(1, report.ExactContentCacheResourceLimit);
+        Assert.Equal(4UL * 1024 * 1024, report.ExactContentCacheByteLimit);
+    }
+
+    private static UpdateUploadElisionLabOptions Options(
+        bool useHardware,
+        int candidateActionCount = 64) => new(
         "target.exe",
         "hook.dll",
         "report.json",
@@ -120,6 +181,7 @@ public sealed class UpdateUploadElisionLabTests
         WarmupPairs: 0,
         HoldMs: 50,
         GpuTimeoutMs: 5000,
+        CandidateActionCount: candidateActionCount,
         UseHardware: useHardware);
 
     private static IReadOnlyList<UpdateUploadElisionTrialReport> Trials(
@@ -127,11 +189,22 @@ public sealed class UpdateUploadElisionLabTests
         double optimizedCpu,
         double baselineGpu,
         double optimizedGpu,
-        string driver) =>
+        string driver,
+        int candidateActionCount = 64) =>
         Enumerable.Range(0, 10).Select(index =>
         {
-            var baseline = Run(false, baselineCpu, baselineGpu, driver);
-            var optimized = Run(true, optimizedCpu, optimizedGpu, driver);
+            var baseline = Run(
+                false,
+                baselineCpu,
+                baselineGpu,
+                driver,
+                candidateActionCount);
+            var optimized = Run(
+                true,
+                optimizedCpu,
+                optimizedGpu,
+                driver,
+                candidateActionCount);
             return new UpdateUploadElisionTrialReport(
                 index,
                 "measured",
@@ -154,9 +227,20 @@ public sealed class UpdateUploadElisionLabTests
         bool optimized,
         double cpu,
         double gpu,
-        string driver)
+        string driver,
+        int candidateActionCount)
     {
         using var document = JsonDocument.Parse("{}");
+        var directUpdateCount = candidateActionCount + 3;
+        var directUpdateBytes = checked(
+            (ulong)directUpdateCount * UpdateUploadElisionLabOptions.BufferBytes);
+        var candidateBytes = checked(
+            (ulong)candidateActionCount * UpdateUploadElisionLabOptions.BufferBytes);
+        var forwardedCount = optimized ? 6 : candidateActionCount + 6;
+        var forwardedBytes = checked(
+            9_216UL +
+            (ulong)(optimized ? 3 : directUpdateCount) *
+                UpdateUploadElisionLabOptions.BufferBytes);
         return new UpdateUploadElisionRunReport(
             Optimized: optimized,
             ProcessId: 42,
@@ -170,19 +254,19 @@ public sealed class UpdateUploadElisionLabTests
             EventCount: 330,
             LostSequenceCount: 0,
             NativeOverrunCount: 0,
-            DirectUploadUpdateCount: 67,
-            DirectUploadBytes: 281_018_368,
-            RedundantUpdateCandidateCount: 64,
-            RedundantUpdateCandidateBytes: 268_435_456,
-            ForwardedUpdateSubresourceCount: optimized ? 6 : 70,
-            ForwardedUpdateSubresourceBytes: optimized ? 12_592_128UL : 281_027_584UL,
-            SkippedUpdateSubresourceCount: optimized ? 64 : 0,
-            SkippedUpdateSubresourceBytes: optimized ? 268_435_456UL : 0,
+            DirectUploadUpdateCount: directUpdateCount,
+            DirectUploadBytes: directUpdateBytes,
+            RedundantUpdateCandidateCount: candidateActionCount,
+            RedundantUpdateCandidateBytes: candidateBytes,
+            ForwardedUpdateSubresourceCount: forwardedCount,
+            ForwardedUpdateSubresourceBytes: forwardedBytes,
+            SkippedUpdateSubresourceCount: optimized ? candidateActionCount : 0,
+            SkippedUpdateSubresourceBytes: optimized ? candidateBytes : 0,
             ContentCacheResourceCount: 1,
             ContentCacheBytes: 4_194_304,
             PublishedPolicyEpoch: optimized ? 1 : 0,
             AcknowledgedPolicyEpoch: optimized ? 1 : 0,
-            AppliedPolicyActions: optimized ? 64 : 0,
+            AppliedPolicyActions: optimized ? candidateActionCount : 0,
             PolicyStatus: optimized ? "exhausted" : "none",
             MutationApplied: true,
             GenerationGuardApplied: true,

@@ -9,6 +9,8 @@ param(
     [string]$SlowResponseOutputPath = "",
     [int]$TrialPairs = 2,
     [int]$WarmupPairs = 0,
+    [ValidateRange(1, 128)]
+    [int]$CandidateActionCount = 128,
     [object]$Hardware = $false
 )
 
@@ -18,6 +20,12 @@ if ($hardwareText -notin @("true", "false", "1", "0")) {
     throw "Hardware must be true, false, 1, or 0."
 }
 $hardwareEnabled = $hardwareText -in @("true", "1")
+$bufferBytes = [uint64]4194304
+$expectedAuthorizedBytes = [uint64]$CandidateActionCount * $bufferBytes
+$expectedDirectUpdateCount = $CandidateActionCount + 3
+$expectedForwardedUpdateCount = $CandidateActionCount + 6
+$expectedRuntimeEventCount = $CandidateActionCount + 7
+$profileSuffix = "-$CandidateActionCount"
 $runtimeRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($GatewayPath)) {
     $GatewayPath = Join-Path (Split-Path $runtimeRoot -Parent) "FluidGateway"
@@ -47,19 +55,19 @@ if ([string]::IsNullOrWhiteSpace($HookPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $artifactDirectory `
-        "gateway-update-upload-control.json"
+        "gateway-update-upload-control$profileSuffix.json"
 }
 if ([string]::IsNullOrWhiteSpace($FailClosedOutputPath)) {
     $FailClosedOutputPath = Join-Path $artifactDirectory `
-        "gateway-update-upload-fail-closed.json"
+        "gateway-update-upload-fail-closed$profileSuffix.json"
 }
 if ([string]::IsNullOrWhiteSpace($InvalidResponseOutputPath)) {
     $InvalidResponseOutputPath = Join-Path $artifactDirectory `
-        "gateway-update-upload-invalid-response-fail-closed.json"
+        "gateway-update-upload-invalid-response-fail-closed$profileSuffix.json"
 }
 if ([string]::IsNullOrWhiteSpace($SlowResponseOutputPath)) {
     $SlowResponseOutputPath = Join-Path $artifactDirectory `
-        "gateway-update-upload-slow-response-fail-closed.json"
+        "gateway-update-upload-slow-response-fail-closed$profileSuffix.json"
 }
 $TargetPath = (Resolve-Path -LiteralPath $TargetPath).Path
 $HookPath = (Resolve-Path -LiteralPath $HookPath).Path
@@ -130,6 +138,7 @@ function Invoke-FaultCase {
             --warmup-pairs 0 `
             --hold-ms 50 `
             --gpu-timeout-ms 5000 `
+            --candidate-action-count $CandidateActionCount `
             --hardware $hardwareEnabled `
             --out $CaseOutputPath | Out-Host
         if ($LASTEXITCODE -ne 3) {
@@ -145,7 +154,7 @@ function Invoke-FaultCase {
 
     $fallback = Get-Content -LiteralPath $CaseOutputPath -Raw | ConvertFrom-Json
     if ($fallback.mode -ne
-            "fluidruntime-gateway-update-upload-fail-closed-v0.17.0" -or
+            "fluidruntime-gateway-update-upload-fail-closed-v0.18.0" -or
         $fallback.failure_stage -ne "gateway-authorization-before-target-launch" -or
         $fallback.authorization_failure_type -ne $ExpectedFailureType -or
         $fallback.authorization_deadline_milliseconds -ne 500 -or
@@ -157,7 +166,8 @@ function Invoke-FaultCase {
         -not $fallback.baseline_fallback_completed -or
         $fallback.target_sha256 -notmatch "^[0-9a-f]{64}$" -or
         $fallback.hook_sha256 -notmatch "^[0-9a-f]{64}$" -or
-        $fallback.forwarded_update_subresource_count -ne 70 -or
+        $fallback.forwarded_update_subresource_count -ne
+            $expectedForwardedUpdateCount -or
         $fallback.skipped_update_subresource_count -ne 0 -or
         -not $fallback.content_equivalent -or
         -not $fallback.rollback_restored -or
@@ -223,6 +233,7 @@ try {
         --warmup-pairs $WarmupPairs `
         --hold-ms 50 `
         --gpu-timeout-ms 5000 `
+        --candidate-action-count $CandidateActionCount `
         --hardware $hardwareEnabled `
         --out $OutputPath
     if ($LASTEXITCODE -ne 0) {
@@ -238,7 +249,7 @@ finally {
 
 $report = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 $expectedAuthorizationRuns = $TrialPairs + $WarmupPairs
-if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.17.0" -or
+if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.18.0" -or
     -not $report.target_owned -or
     -not $report.cooperative_load -or
     $report.remote_injection -or
@@ -256,10 +267,11 @@ if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.17.0" 
     $report.authorization_run_count -ne $expectedAuthorizationRuns -or
     $report.measured_authorization_run_count -ne $TrialPairs -or
     $report.gateway_candidate_decision_count -ne
-        ($expectedAuthorizationRuns * 64) -or
-    $report.authorized_logical_bytes_per_optimized_run -ne 268435456 -or
+        ($expectedAuthorizationRuns * $CandidateActionCount) -or
+    $report.authorized_logical_bytes_per_optimized_run -ne
+        $expectedAuthorizedBytes -or
     $report.native_action_mask -ne 8 -or
-    $report.native_action_budget_per_optimized_run -ne 64 -or
+    $report.native_action_budget_per_optimized_run -ne $CandidateActionCount -or
     $report.performance_claim_allowed -or
     $report.performance_claim_blockers -notcontains
         "gateway-authorization-outside-native-timing-window" -or
@@ -284,10 +296,10 @@ if ($report.authorizations | Where-Object {
     $_.authorization_deadline_milliseconds -ne 5000 -or
     $_.candidate_decision_opcode -ne 2 -or
     $_.candidate_policy -ne "deduplicate-identical-transfer" -or
-    $_.candidate_decision_count -ne 64 -or
+    $_.candidate_decision_count -ne $CandidateActionCount -or
     $_.native_action_mask -ne 8 -or
-    $_.native_action_budget -ne 64 -or
-    $_.runtime_event_count -ne 71 -or
+    $_.native_action_budget -ne $CandidateActionCount -or
+    $_.runtime_event_count -ne $expectedRuntimeEventCount -or
     $_.round_trip_count -ne 10
 }) {
     throw "A FluidGateway authorization drifted from the exact decision contract."
@@ -295,7 +307,10 @@ if ($report.authorizations | Where-Object {
 $native = $report.native_evidence
 if ($native.mode -ne "fluidruntime-update-upload-elision-trace-v0.12.0" -or
     $native.included_trial_pairs -ne $TrialPairs -or
-    $native.avoided_update_bytes_per_optimized_run -ne 268435456 -or
+    $native.redundant_update_count_per_optimized_run -ne
+        $CandidateActionCount -or
+    $native.avoided_update_bytes_per_optimized_run -ne
+        $expectedAuthorizedBytes -or
     -not $native.mutation_guard_passed -or
     -not $native.generation_guard_passed -or
     -not $native.content_equivalent -or
@@ -308,9 +323,10 @@ if ($native.trials | Where-Object {
     $_.optimized.gateway_authorization -eq $null -or
     $_.optimized.published_policy_expires_at_qpc -le 0 -or
     $_.optimized.published_policy_action_mask -ne 8 -or
-    $_.optimized.published_policy_action_budget -ne 64 -or
-    $_.optimized.skipped_update_subresource_count -ne 64 -or
-    $_.optimized.applied_policy_actions -ne 64 -or
+    $_.optimized.published_policy_action_budget -ne $CandidateActionCount -or
+    $_.optimized.direct_upload_update_count -ne $expectedDirectUpdateCount -or
+    $_.optimized.skipped_update_subresource_count -ne $CandidateActionCount -or
+    $_.optimized.applied_policy_actions -ne $CandidateActionCount -or
     $_.optimized.policy_status -ne "exhausted" -or
     -not $_.content_equivalent -or
     -not $_.rollback_restored_in_both_runs
