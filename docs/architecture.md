@@ -121,6 +121,13 @@ action bit 16 cannot be replayed as D3D11 authorization. Gateway remains the
 policy authority; a separate D3D12 per-PID ring carries only the short-lived
 native policy and evidence.
 
+Version 0.21 binds that D3D12 authorization to
+`fluidruntime-native-transfer-v1`. The canonical context now includes numeric
+backend and operation IDs plus queue, execution-scope, source, destination,
+lane, fence, and expected-event counts. D3D12 requests without an explicit
+topology are rejected. The D3D11 canonical context remains unchanged so its
+published fingerprint and historical evidence stay compatible.
+
 Authorization failures happen before optimized target launch. Malformed frames,
 process/contract/capability drift, rejected decisions, and internal timeout
 produce a new baseline run with no policy fields. One linked deadline covers
@@ -187,6 +194,30 @@ submit-to-fence, total workload, and COPY-queue timestamp p50/p95/p99. A positiv
 claim requires hardware, at least ten pairs, negative managed/fence/GPU tails,
 and at least 80% optimized wins. WARP always blocks the claim.
 
+Version 0.21 adds a separate v2 transfer DLL and target while retaining the
+v0.20 single-lane binaries as regression coverage. The v2 attach contract uses
+bounded logical IDs and declares one COPY queue, two command-list scopes, two
+UPLOAD sources, two 4 MiB DEFAULT destinations, two `(scope,destination)` lanes,
+and one fence. Each lane owns independent retained content and generation.
+Unmodeled writes invalidate only the affected destination lanes; close/reset
+invalidate only lanes in the affected scope.
+
+The hook also patches `ExecuteCommandLists` and `Signal`. It records submitted
+scope count and order hash, unregistered submissions, logical fence ID, and
+signal value. Policy acceptance requires every declared registration and every
+scope/destination lane coverage to be complete. Invalid topology is rejected
+before any vtable patch; incomplete registration rejects the policy with zero
+skips. A destination has exactly one lane owner; aliased ownership is rejected
+before policy publication. Detach atomically restores five command-list methods
+and two queue methods, then waits for in-flight calls before releasing owned
+COM references.
+
+The generic layer is deliberately small: backend, operation, queue/scope/
+resource/lane/fence topology, limits, and event count. D3D12 still owns resource
+states, command-list semantics, and fence behavior. A future Vulkan layer can
+consume the same neutral contract while implementing Vulkan-specific memory
+binding, layouts, queue-family ownership, barriers, semaphores, and teardown.
+
 ## Hook Event Transport
 
 Version 0.12.0 publishes 80-byte ABI-v9 events into a 2,048-slot named
@@ -203,6 +234,18 @@ Version 0.20 reuses the ring/control wire layout under the distinct
 `Local\FluidRuntimeD3D12Hook-<pid>` namespace. D3D12 event types record tracked
 buffer copies, automatic/explicit invalidation, close, and reset without mixing
 the D3D11 and D3D12 hook lifecycles.
+
+Version 0.21 moves its new backend adapter to
+`Local\FluidRuntimeTransfer-<backend-id>-<pid>` while preserving the v0.20
+namespace for regression compatibility. The ring header repeats the numeric
+backend ID and the managed reader rejects a namespace/header mismatch. It gives
+event IDs 17..22 backend-neutral transfer names for buffer
+copy, invalidation, scope close/reset, queue submit, and synchronization signal;
+the prior D3D12 names remain numeric aliases. Action bit 16 likewise means
+`skip_redundant_transfer_buffer_copy`. Every v2 transfer event is marked with
+`generalized_transfer` (bit 512). Events carry logical
+IDs rather than pointers. The maximum 128-candidate run emits 144 baseline or
+145 optimized events, below the existing 2,048-slot capacity.
 
 The native writer:
 
@@ -238,7 +281,7 @@ The accepted action mask must be exactly one known action:
 `skip_redundant_readback_copy` (bit 2) or
 `skip_redundant_upload_copy` (bit 4) or
 `skip_redundant_update_subresource` (bit 8) in the D3D11 hook, or
-`skip_redundant_d3d12_copy_buffer_region` (bit 16) in the separate D3D12 hook.
+`skip_redundant_transfer_buffer_copy` (bit 16) in a transfer backend hook.
 Each hook accepts only its own action subset; combined or cross-backend masks
 fail closed. Version 0.12.0 accepts a bounded budget
 from 1 through 128; expiration must be in the future but no more than four
@@ -370,11 +413,11 @@ observe-only, and all regional copies remain forwarded.
 
 ## Known Limits
 
-- D3D12 actuation is limited to one owned COPY command list, one registered
-  copy-only 4 MiB DEFAULT buffer, immutable upload shadows, full-buffer
-  `CopyBufferRegion`, and a maximum 128-action epoch. Textures, aliases, placed
-  resources, multiple queues/lists, general synchronization, presentation, and
-  residency control are excluded. Vulkan is not instrumented yet.
+- D3D12 actuation is limited to one owned COPY queue, two registered command
+  lists, two copy-only 4 MiB DEFAULT buffers, immutable upload shadows,
+  full-buffer `CopyBufferRegion`, and a maximum 128-action epoch. Textures,
+  aliases, placed resources, multiple queues, general barriers/synchronization,
+  presentation, and residency control are excluded. Vulkan is not instrumented.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
 - Shader draw/dispatch writes, UAV integer clears, depth/stencil clears, fences,

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.20.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.21.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -36,6 +36,20 @@ add_executable(fluidruntime-d3d12-hook-target src/d3d12_hook_target.cpp)
 configure_fluidruntime_native_target(fluidruntime-d3d12-hook-target)
 target_include_directories(fluidruntime-d3d12-hook-target PRIVATE include)
 target_link_libraries(fluidruntime-d3d12-hook-target PRIVATE d3d12 dxgi)
+
+add_library(fluidruntime-d3d12-transfer-hook SHARED src/d3d12_transfer_hook.cpp)
+configure_fluidruntime_native_target(fluidruntime-d3d12-transfer-hook)
+target_compile_definitions(
+    fluidruntime-d3d12-transfer-hook
+    PRIVATE FLUIDRUNTIME_D3D12_HOOK_EXPORTS
+)
+target_include_directories(fluidruntime-d3d12-transfer-hook PRIVATE include)
+target_link_libraries(fluidruntime-d3d12-transfer-hook PRIVATE d3d12)
+
+add_executable(fluidruntime-d3d12-transfer-target src/d3d12_transfer_target.cpp)
+configure_fluidruntime_native_target(fluidruntime-d3d12-transfer-target)
+target_include_directories(fluidruntime-d3d12-transfer-target PRIVATE include)
+target_link_libraries(fluidruntime-d3d12-transfer-target PRIVATE d3d12 dxgi)
 
 add_library(fluidruntime-present-hook SHARED src/present_hook.cpp)
 configure_fluidruntime_native_target(fluidruntime-present-hook)
@@ -101,6 +115,50 @@ add_test(
 set_tests_properties(
     fluidruntime-d3d12-copy-elision-rejects-invalid-count
     PROPERTIES WILL_FAIL TRUE
+)
+add_test(
+    NAME fluidruntime-d3d12-transfer-baseline
+    COMMAND fluidruntime-d3d12-transfer-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-transfer-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+)
+add_test(
+    NAME fluidruntime-d3d12-transfer-controlled
+    COMMAND fluidruntime-d3d12-transfer-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-transfer-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+        --self-publish-control
+)
+add_test(
+    NAME fluidruntime-d3d12-transfer-rejects-invalid-topology
+    COMMAND fluidruntime-d3d12-transfer-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-transfer-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+        --invalid-topology
+)
+add_test(
+    NAME fluidruntime-d3d12-transfer-rejects-incomplete-registration
+    COMMAND fluidruntime-d3d12-transfer-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-transfer-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+        --incomplete-registration
+)
+add_test(
+    NAME fluidruntime-d3d12-transfer-rejects-aliased-destination
+    COMMAND fluidruntime-d3d12-transfer-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-transfer-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+        --aliased-destination
 )
 add_test(
     NAME fluidruntime-present-hook-lab

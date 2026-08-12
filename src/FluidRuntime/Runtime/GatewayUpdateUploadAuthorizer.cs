@@ -20,7 +20,8 @@ public sealed record GatewayUpdateUploadAuthorizationRequest(
     ulong CandidateActionCount,
     string TargetSha256,
     string HookSha256,
-    GatewayUploadBackend Backend = GatewayUploadBackend.D3D11UpdateSubresource);
+    GatewayUploadBackend Backend = GatewayUploadBackend.D3D11UpdateSubresource,
+    NativeTransferTopology? Topology = null);
 
 public sealed record GatewayUpdateUploadAuthorization(
     string Protocol,
@@ -65,6 +66,11 @@ public sealed record GatewayUpdateUploadAuthorization(
     public GatewayUploadBackend Backend { get; init; } =
         GatewayUploadBackend.D3D11UpdateSubresource;
 
+    public NativeTransferDescriptor TransferDescriptor =>
+        GatewayUploadAuthorizationProfiles.For(Backend).TransferDescriptor;
+
+    public NativeTransferTopology? TransferTopology { get; init; }
+
     public void EnsureMatchesNativePolicy(
         ulong expectedResourceBytes,
         ulong expectedActionCount,
@@ -73,15 +79,27 @@ public sealed record GatewayUpdateUploadAuthorization(
         string expectedTargetSha256,
         string expectedHookSha256,
         GatewayUploadBackend expectedBackend =
-            GatewayUploadBackend.D3D11UpdateSubresource)
+            GatewayUploadBackend.D3D11UpdateSubresource,
+        NativeTransferTopology? expectedTopology = null)
     {
         var profile = GatewayUploadAuthorizationProfiles.For(expectedBackend);
+        var topology = expectedTopology ??
+            profile.CreateDefaultTopology(expectedActionCount);
+        topology.Validate(expectedActionCount);
         var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
             FluidLinkV2Capability.Heartbeat |
             FluidLinkV2Capability.MemoryTransit |
             FluidLinkV2Capability.SessionLifecycle |
             FluidLinkV2Capability.BatchedRuntimeEvents;
         var expectedLogicalBytes = checked(expectedResourceBytes * expectedActionCount);
+        var contextTopology = expectedBackend ==
+                GatewayUploadBackend.D3D12CopyBufferRegion
+            ? topology
+            : expectedTopology;
+        var topologyEvidenceMatches = expectedBackend ==
+                GatewayUploadBackend.D3D12CopyBufferRegion
+            ? TransferTopology == topology
+            : TransferTopology is null || TransferTopology == topology;
         var request = new GatewayUpdateUploadAuthorizationRequest(
             expectedPairIndex,
             expectedPhase,
@@ -89,7 +107,8 @@ public sealed record GatewayUpdateUploadAuthorization(
             expectedActionCount,
             expectedTargetSha256,
             expectedHookSha256,
-            expectedBackend);
+            expectedBackend,
+            contextTopology);
         var expectedContext = FluidLinkGatewayUpdateUploadAuthorizer
             .ComputeAuthorizationContextSha256(
                 AuthorizationNonce,
@@ -135,14 +154,15 @@ public sealed record GatewayUpdateUploadAuthorization(
             AuthorizedLogicalBytes != expectedLogicalBytes ||
             NativeActionMask != profile.NativeActionMask ||
             NativeActionBudget != expectedActionCount ||
-            RuntimeEventCount != checked((int)expectedActionCount + 7) ||
             RoundTripCount != 10 ||
             BytesSent <= 0 ||
             BytesReceived <= 0 ||
             AuthorizationLatencyMicroseconds <= 0 ||
             AuthorizationLatencyMicroseconds >
                 checked((long)AuthorizationDeadlineMilliseconds * 1000) ||
-            AuthorizationScope != profile.AuthorizationScope)
+            AuthorizationScope != profile.AuthorizationScope ||
+            RuntimeEventCount != topology.RuntimeEventCount ||
+            !topologyEvidenceMatches)
         {
             throw new InvalidDataException(
                 "FluidGateway authorization does not match the bounded native policy.");
@@ -159,7 +179,9 @@ internal sealed record GatewayUploadAuthorizationProfile(
     string SessionPrefix,
     string ContextVersion,
     string AuthorizationScope,
-    IReadOnlyList<string> NativeSafetyGuards);
+    IReadOnlyList<string> NativeSafetyGuards,
+    NativeTransferDescriptor TransferDescriptor,
+    Func<ulong, NativeTransferTopology> CreateDefaultTopology);
 
 internal static class GatewayUploadAuthorizationProfiles
 {
@@ -181,24 +203,28 @@ internal static class GatewayUploadAuthorizationProfiles
                 "one resource and four MiB retained-content bound",
                 "one short-lived native policy epoch with a fixed action budget",
                 "post-detach content equivalence and rollback verification"
-                ]),
+                ],
+                NativeTransferDescriptors.D3D11UpdateBuffer,
+                NativeTransferTopology.D3D11SingleLane),
             GatewayUploadBackend.D3D12CopyBufferRegion => new(
-                HookRingReader.SkipRedundantD3D12CopyBufferRegionAction,
-                "gateway-d3d12-copy",
-                "gateway-d3d12-copy",
-                "fluidruntime-gateway-d3d12-copy-buffer-authorization-context-v1",
-                "owned-d3d12-process-bound-copy-buffer-candidates-native-exact-content-final-gate",
+                HookRingReader.SkipRedundantTransferBufferCopyAction,
+                "gateway-transfer-d3d12",
+                "gateway-transfer-d3d12",
+                "fluidruntime-gateway-transfer-authorization-context-v1",
+                "owned-d3d12-process-bound-multi-lane-copy-buffer-final-gate",
                 [
                     "expected loopback peer PID and executable SHA matched through the OS TCP owner table",
                 "owned target and D3D12 hook binaries frozen before authorization",
-                "one owned copy command list and one registered copy-only destination",
-                "exact full-buffer comparison against a registration-frozen CPU shadow before every skipped CopyBufferRegion call",
-                "unmodeled writes to the registered destination invalidate retained content before later candidates",
-                "registered CPU shadow matched to an upload range kept unmapped through the completion fence",
-                "Close, Reset, CopyResource, CopyTextureRegion, and explicit invalidation clear retained state",
-                "one four MiB retained-content cache and one bounded native policy epoch",
-                "fence completion, final readback equivalence, and vtable rollback verification"
-                ]),
+                "bounded command-list, resource, lane, queue, and fence topology",
+                "exact full-buffer comparison against registration-frozen CPU shadows",
+                "retained content isolated by execution scope and destination resource",
+                "unmodeled and owner-declared writes invalidate the affected lane",
+                "registered upload ranges remain unmapped through the completion fence",
+                "Close, Reset, CopyResource, and CopyTextureRegion clear retained state",
+                "queue submission, fence signal, readback equivalence, and vtable rollback verification"
+                ],
+                NativeTransferDescriptors.D3D12CopyBuffer,
+                NativeTransferTopology.D3D12MultiLane),
             _ => throw new ArgumentOutOfRangeException(nameof(backend))
         };
 }
@@ -214,7 +240,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     IGatewayUpdateUploadAuthorizer
 {
     private const string ClientName = "fluidruntime-gateway-manager";
-    private const string ClientVersion = "0.20.0";
+    private const string ClientVersion = "0.21.0";
     private const string ExpectedAdvertisedServerName = "fluidgateway";
     private const int AuthorizationRoundTrips = 10;
     private readonly string host;
@@ -450,6 +476,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         ValidateRequest(request);
         ArgumentNullException.ThrowIfNull(peer);
         var profile = GatewayUploadAuthorizationProfiles.For(request.Backend);
+        var topology = request.Topology ??
+            profile.CreateDefaultTopology(request.CandidateActionCount);
         var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
             FluidLinkV2Capability.Heartbeat |
             FluidLinkV2Capability.MemoryTransit |
@@ -541,7 +569,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             expectedLogicalBytes,
             profile.NativeActionMask,
             request.CandidateActionCount,
-            RuntimeEventCount: checked((int)request.CandidateActionCount + 7),
+            RuntimeEventCount: topology.RuntimeEventCount,
             roundTripCount,
             bytesSent,
             bytesReceived,
@@ -550,7 +578,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             profile.AuthorizationScope,
             profile.NativeSafetyGuards)
         {
-            Backend = request.Backend
+            Backend = request.Backend,
+            TransferTopology = topology
         };
         evidence.EnsureMatchesNativePolicy(
             request.ResourceBytes,
@@ -559,7 +588,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             request.Phase,
             request.TargetSha256,
             request.HookSha256,
-            request.Backend);
+            request.Backend,
+            request.Topology);
         return evidence;
     }
 
@@ -600,9 +630,22 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             $"native_action_mask={nativeActionMask}",
             $"native_action_budget={nativeActionBudget}"
         };
-        if (request.Backend != GatewayUploadBackend.D3D11UpdateSubresource)
+        if (request.Topology is not null)
         {
-            canonicalLines.Insert(1, $"backend={request.Backend}");
+            canonicalLines.InsertRange(1,
+            [
+                $"transfer_contract={profile.TransferDescriptor.ContractVersion}",
+                $"transfer_backend={(int)profile.TransferDescriptor.Backend}",
+                $"transfer_operation={(int)profile.TransferDescriptor.Operation}",
+                $"transfer_scope={profile.TransferDescriptor.Scope}",
+                $"queue_count={request.Topology.QueueCount}",
+                $"execution_scope_count={request.Topology.ExecutionScopeCount}",
+                $"source_resource_count={request.Topology.SourceResourceCount}",
+                $"destination_resource_count={request.Topology.DestinationResourceCount}",
+                $"lane_count={request.Topology.LaneCount}",
+                $"fence_count={request.Topology.FenceCount}",
+                $"runtime_event_count={request.Topology.RuntimeEventCount}"
+            ]);
         }
         var canonical = string.Join('\n', canonicalLines);
         return Convert.ToHexString(
@@ -625,8 +668,18 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 "Gateway update authorization request is outside the native policy bounds.",
                 nameof(request));
         }
+        if (request.Backend == GatewayUploadBackend.D3D12CopyBufferRegion &&
+            request.Topology is null)
+        {
+            throw new ArgumentException(
+                "D3D12 authorization requires an explicit transfer topology.",
+                nameof(request));
+        }
         RequireSha256(request.TargetSha256, nameof(request.TargetSha256));
         RequireSha256(request.HookSha256, nameof(request.HookSha256));
+        var profile = GatewayUploadAuthorizationProfiles.For(request.Backend);
+        (request.Topology ?? profile.CreateDefaultTopology(
+            request.CandidateActionCount)).Validate(request.CandidateActionCount);
     }
 
     private static string RequireSha256(string value, string name)

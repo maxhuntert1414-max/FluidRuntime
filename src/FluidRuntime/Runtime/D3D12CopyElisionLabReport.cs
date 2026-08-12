@@ -51,6 +51,33 @@ public sealed record D3D12CopyElisionRunReport(
     double? GpuWorkloadMicroseconds,
     JsonElement TargetReport)
 {
+    public NativeTransferDescriptor TransferDescriptor { get; init; } =
+        NativeTransferDescriptors.D3D12CopyBuffer;
+
+    public NativeTransferTopology? TransferTopology { get; init; }
+
+    public int TransferBackendId { get; init; }
+
+    public IReadOnlyList<string> PatternHashes { get; init; } = [];
+
+    public IReadOnlyList<string> FinalHashes { get; init; } = [];
+
+    public bool LaneIsolationVerified { get; init; }
+
+    public bool QueueSubmissionVerified { get; init; }
+
+    public long QueueExecuteCount { get; init; }
+
+    public long QueueSignalCount { get; init; }
+
+    public long SubmittedScopeCount { get; init; }
+
+    public ulong SubmissionScopeOrderHash { get; init; }
+
+    public ulong SignaledFenceId { get; init; }
+
+    public ulong SignaledFenceValue { get; init; }
+
     public GatewayUpdateUploadAuthorization? GatewayAuthorization { get; init; }
 
     public long ManagedEndToEndElapsedMicroseconds { get; init; }
@@ -132,7 +159,25 @@ public sealed record GatewayD3D12CopyLabReport(
     bool PerformanceClaimAllowed,
     IReadOnlyList<string> PerformanceClaimBlockers,
     IReadOnlyList<GatewayUpdateUploadAuthorization> Authorizations,
-    IReadOnlyList<D3D12CopyElisionTrialReport> Trials);
+    IReadOnlyList<D3D12CopyElisionTrialReport> Trials)
+{
+    public NativeTransferDescriptor TransferDescriptor { get; init; } =
+        NativeTransferDescriptors.D3D12CopyBuffer;
+
+    public NativeTransferTopology? TransferTopology { get; init; }
+
+    public int TransferBackendId { get; init; }
+
+    public int RequiredForwardedCopiesPerOptimizedRun { get; init; }
+
+    public bool LaneIsolationVerifiedInAllRuns { get; init; }
+
+    public bool QueueSubmissionVerifiedInAllRuns { get; init; }
+
+    public bool NativeExecutionGatePassed { get; init; }
+
+    public IReadOnlyList<string> NativeExecutionGateBlockers { get; init; } = [];
+}
 
 public sealed record GatewayD3D12CopyFailClosedReport(
     string Mode,

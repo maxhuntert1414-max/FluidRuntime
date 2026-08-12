@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-11 para o release v0.20.0.
+Handoff atualizado em 2026-08-11 para o release v0.21.0.
 
 ## 1. Objetivo geral
 
@@ -135,24 +135,28 @@ O perfil historico de 64 candidatas continua selecionavel para regressao.
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.20
+## 6. Evidencia local v0.21
 
-- managed tests: 186/186;
+- managed tests: 190/190;
 - FluidGateway completo: 259/259;
 - resiliencia do servidor: dez casos por dez repeticoes, 100/100;
-- CTests Release: 16/16; CTests Debug: 16/16;
-- D3D12 WARP: 10/10 pares medidos mais um warmup; claim bloqueado apenas por
-  adapter de software;
-- D3D12 RX 580: 10/10 pares medidos mais um warmup; delta ponta a ponta
-  p50/p95/p99 de -23.551,500 / -10.988,650 / -7.843,330 us;
-- submit-to-fence p50/p95/p99 de -48.442,000 / -46.138,850 / -44.852,570 us;
-- GPU timestamp p50/p95/p99 de -49.349,500 / -47.063,700 / -45.808,740 us;
-- cada optimized: quatro copias obrigatorias, 128 skips e 536.870.912 bytes
-  logicos; cada baseline: 132 tracked forwarded e zero skips;
+- CTests Release: 21/21; CTests Debug: 21/21;
+- D3D12 WARP: dois pares medidos e tres fault controls; claim bloqueado por
+  adapter de software e amostra funcional;
+- D3D12 RX 580: 30 pares medidos mais um warmup;
+- submit-to-fence p50/p95/p99 de -45.816,500 / -42.615,850 / -37.080,440 us,
+  30/30 optimized wins;
+- GPU timestamp p50/p95/p99 de -46.870,000 / -42.814,100 / -38.003,560 us,
+  30/30 optimized wins;
+- ponta a ponta p50/p95/p99 de -15.615,000 / +18.261,950 / +53.557,120 us,
+  27/30 wins: native gate aprovado, product gate bloqueado;
+- cada optimized: oito copias obrigatorias, 128 skips e 536.870.912 bytes
+  logicos; cada baseline: 136 tracked forwarded e zero skips;
 - resposta malformada, stall e peer cumulativamente lento: baseline D3D12
   verificado, zero skips, nenhuma policy, conteudo/fence/rollback corretos;
-- claim ponta a ponta owned aprovado no RX 580; CPU record tails mistos seguem
-  publicados e bytes logicos nao sao trafego fisico.
+- topologia, registro incompleto e ownership duplicado de destino rejeitados
+  antes da policy; sete slots de vtable restaurados; bytes logicos nao sao
+  trafego fisico.
 
 Evidencia historica v0.17:
 
@@ -295,6 +299,7 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.21.0 D3D12 transfer core](evidence/v0.21.0-d3d12-transfer-core.md)
 - [v0.20.0 D3D12 actuation](evidence/v0.20.0-d3d12-copy-elision.md)
 - [v0.19.0 timing ponta a ponta e concorrencia](evidence/v0.19.0-end-to-end-authorization.md)
 - [v0.18.0 resiliencia e perfil de 128 actions](evidence/v0.18.0-resilience-update-upload-128.md)
@@ -329,11 +334,12 @@ Depois, generalizar upload com seguranca: texturas e pitches canonicos, boxes pa
 contexts. O cache nao pode crescer sem limite e cada novo padrao precisa de
 equivalencia, regressao, budget, expiracao e rollback proprios.
 
-O primeiro caminho D3D12 owned agora tambem atua: uma COPY command list, um
-buffer DEFAULT, action 16, 128 candidatos, comparacao exata, invalidacoes,
-fence, readback e rollback passaram em WARP e RX 580. A generalizacao deve vir
-por proveniencia de queues/fences, texturas, copy regions, placed resources e
-aliases, sem ampliar a autoridade do perfil atual.
+O D3D12 owned agora usa um contrato de transferencia backend-neutro: uma COPY
+queue, duas command lists, duas fontes, dois destinos, dois lanes isolados e um
+fence. Action 16, 128 candidatos, comparacao exata, invalidacoes, ordem de
+submit, signal, readback e rollback passaram em WARP e RX 580. Topologia ou
+registro incompleto falha antes da policy. Texturas, copy regions, placed
+resources, aliases e multiplas queues continuam fora da autoridade atual.
 
 Depois criar uma layer Vulkan opt-in separada para allocations/bindings,
 copies, layouts, queue-family ownership, semaphores/fences e present. Cada
@@ -343,7 +349,7 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.20 prova a primeira melhora ponta a ponta em um workload
-D3D12 owned, incluindo autorizacao Gateway, efeito nativo, invalidacao,
-sincronizacao e rollback. Ainda nao ha Vulkan, trafego fisico medido, claim de
-FPS ou suporte a jogos externos.
+Mensagem curta: v0.21 transforma o experimento D3D12 em um transfer core
+reutilizavel e prova melhora da execucao nativa em 30/30 pares. O gate completo
+ponta a ponta ficou bloqueado por variancia de processo/IPC. Ainda nao ha
+Vulkan, trafego fisico medido, claim de FPS ou suporte a jogos externos.

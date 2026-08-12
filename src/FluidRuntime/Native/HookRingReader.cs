@@ -18,11 +18,14 @@ public sealed class HookRingReader : IDisposable
         HeaderSize + (int)ExpectedCapacity * ExpectedEventSize;
     public const string MappingNamePrefix = "Local\\FluidRuntimeHook-";
     public const string D3D12MappingNamePrefix = "Local\\FluidRuntimeD3D12Hook-";
+    public const string TransferMappingNamePrefix = "Local\\FluidRuntimeTransfer-";
     public const ulong SkipRedundantCopyResourceAction = 1;
     public const ulong SkipRedundantReadbackCopyAction = 2;
     public const ulong SkipRedundantUploadCopyAction = 4;
     public const ulong SkipRedundantUpdateSubresourceAction = 8;
-    public const ulong SkipRedundantD3D12CopyBufferRegionAction = 16;
+    public const ulong SkipRedundantTransferBufferCopyAction = 16;
+    public const ulong SkipRedundantD3D12CopyBufferRegionAction =
+        SkipRedundantTransferBufferCopyAction;
     public const ulong MaxControlActionBudget = 128;
 
     private const int ControlPublishedEpochOffset = 72;
@@ -60,6 +63,7 @@ public sealed class HookRingReader : IDisposable
         EventSize = _view.ReadUInt32(12);
         QpcFrequency = _view.ReadUInt64(40);
         ProcessId = _view.ReadUInt64(48);
+        TransferBackendId = _view.ReadUInt64(56);
         var controlMagic = _view.ReadUInt32(RingHeaderSize);
         var controlAbiVersion = _view.ReadUInt32(RingHeaderSize + 4);
         if (magic != ExpectedMagic ||
@@ -90,6 +94,8 @@ public sealed class HookRingReader : IDisposable
 
     public ulong ProcessId { get; }
 
+    public ulong TransferBackendId { get; }
+
     public long LostSequenceCount { get; private set; }
 
     public long NativeOverrunCount
@@ -115,6 +121,25 @@ public sealed class HookRingReader : IDisposable
 
     public static HookRingReader OpenD3D12ForProcess(int processId) =>
         Open(D3D12MappingNamePrefix + processId);
+
+    public static HookRingReader OpenTransferForProcess(
+        int processId,
+        int backendId)
+    {
+        if (processId <= 0 || backendId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                processId <= 0 ? nameof(processId) : nameof(backendId));
+        }
+        var reader = Open($"{TransferMappingNamePrefix}{backendId}-{processId}");
+        if (reader.TransferBackendId != (ulong)backendId)
+        {
+            reader.Dispose();
+            throw new InvalidDataException(
+                "The native transfer ring backend does not match its namespace.");
+        }
+        return reader;
+    }
 
     public static HookRingReader Open(string mappingName)
     {
@@ -232,13 +257,18 @@ public sealed class HookRingReader : IDisposable
             actionBudget,
             SkipRedundantUpdateSubresourceAction);
 
-    public HookControlPolicy PublishD3D12CopyBufferRegionElisionPolicy(
+    public HookControlPolicy PublishTransferBufferCopyElisionPolicy(
         TimeSpan lifetime,
         ulong actionBudget) =>
         PublishBoundedControlPolicy(
             lifetime,
             actionBudget,
-            SkipRedundantD3D12CopyBufferRegionAction);
+            SkipRedundantTransferBufferCopyAction);
+
+    public HookControlPolicy PublishD3D12CopyBufferRegionElisionPolicy(
+        TimeSpan lifetime,
+        ulong actionBudget) =>
+        PublishTransferBufferCopyElisionPolicy(lifetime, actionBudget);
 
     private HookControlPolicy PublishBoundedControlPolicy(
         TimeSpan lifetime,

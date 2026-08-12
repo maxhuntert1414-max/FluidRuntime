@@ -18,10 +18,18 @@ public enum HookEventType : uint
     ClearUnorderedAccessViewFloat = 14,
     ControlPolicyAccepted = 15,
     MapRead = 16,
-    D3D12CopyBufferRegion = 17,
-    D3D12ResourceInvalidate = 18,
-    D3D12CommandListClose = 19,
-    D3D12CommandListReset = 20
+    TransferBufferCopy = 17,
+    TransferResourceInvalidate = 18,
+    TransferScopeClose = 19,
+    TransferScopeReset = 20,
+    TransferQueueSubmit = 21,
+    TransferSyncSignal = 22,
+    D3D12CopyBufferRegion = TransferBufferCopy,
+    D3D12ResourceInvalidate = TransferResourceInvalidate,
+    D3D12CommandListClose = TransferScopeClose,
+    D3D12CommandListReset = TransferScopeReset,
+    D3D12QueueExecute = TransferQueueSubmit,
+    D3D12QueueSignal = TransferSyncSignal
 }
 
 public sealed record HookIpcEvent(
@@ -70,18 +78,30 @@ public sealed record HookIpcEvent(
     public bool WasUpdateSubresourceSkipped =>
         Type == HookEventType.UpdateSubresource && (Flags & 2) != 0;
 
-    public bool IsD3D12RedundantCandidate =>
-        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 1) != 0;
+    public bool IsTransferRedundantCandidate =>
+        Type == HookEventType.TransferBufferCopy && (Flags & 1) != 0;
 
-    public bool WasD3D12CopySkipped =>
-        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 2) != 0;
+    public bool WasTransferSkipped =>
+        Type == HookEventType.TransferBufferCopy && (Flags & 2) != 0;
 
-    public bool IsD3D12ExactContentCompared =>
-        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 64) != 0;
+    public bool IsTransferExactContentCompared =>
+        Type == HookEventType.TransferBufferCopy && (Flags & 64) != 0;
 
-    public bool IsD3D12ImmutableUploadSource =>
-        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 128) != 0;
+    public bool IsTransferImmutableHostSource =>
+        Type == HookEventType.TransferBufferCopy && (Flags & 128) != 0;
 
-    public bool IsD3D12ExplicitInvalidation =>
-        Type == HookEventType.D3D12ResourceInvalidate && (Flags & 256) != 0;
+    public bool IsTransferExplicitInvalidation =>
+        Type == HookEventType.TransferResourceInvalidate && (Flags & 256) != 0;
+
+    public bool IsD3D12RedundantCandidate => IsTransferRedundantCandidate;
+
+    public bool WasD3D12CopySkipped => WasTransferSkipped;
+
+    public bool IsD3D12ExactContentCompared => IsTransferExactContentCompared;
+
+    public bool IsD3D12ImmutableUploadSource => IsTransferImmutableHostSource;
+
+    public bool IsD3D12ExplicitInvalidation => IsTransferExplicitInvalidation;
+
+    public bool IsGeneralizedTransfer => (Flags & 512) != 0;
 }

@@ -116,6 +116,14 @@ coordinate the interfaces the operating system and graphics APIs expose.
   Debug Layer validation, atomic rollback, WARP/fault controls, and 10-pair RX
   580 end-to-end evidence all pass. Logical skipped bytes remain distinct from
   measured physical RAM/VRAM or PCIe traffic.
+- **v0.21.0:** backend-neutral transfer contract and generalized D3D12
+  implementation. Authorization is bound to one queue, two command lists, two
+  source/destination pairs, two isolated lanes, one fence, and exact runtime
+  event count. Queue submission and signal are observed; incomplete topology or
+  registration and aliased destination ownership fail before policy acceptance.
+  Transfer events/actions have neutral names with stable numeric IDs. RX 580 native execution passed
+  30/30 submit/fence and GPU pairs, while the end-to-end performance claim
+  remains blocked by managed-path tail variance.
 
 ## Next Milestones
 
@@ -140,16 +148,17 @@ coordinate the interfaces the operating system and graphics APIs expose.
 
 ### D3D12 Generalization
 
-- Extend the proven buffer path to placed resources, textures, copy regions,
-  multiple command lists/queues, aliases, and residency signals.
-- Add fence- and queue-aware provenance before widening authority. The v0.20
-  action remains disabled outside its single-list, single-buffer contract.
+- The v0.21 buffer core now covers multiple command lists, independent lanes,
+  queue execution order, and fence signals under bounded logical IDs.
+- Next extend it to placed resources, textures, copy regions, multiple queues,
+  aliases, barriers, and residency signals without widening current authority.
 - Measure CPU-shadow construction and reuse thresholds for smaller candidate
   sets so the proof cost never silently exceeds the avoided work.
 
-### v0.21: Owned Vulkan Backend
+### v0.22: Owned Vulkan Backend
 
-- Add an explicit opt-in Vulkan layer for the owned lab, observing allocations,
+- Implement the neutral transfer contract behind an explicit opt-in Vulkan
+  layer for the owned lab, observing allocations,
   memory binding, buffers/images, copy commands, barriers, queue submit/present,
   semaphores, fences, and available memory-budget telemetry.
 - Model layouts, queue-family ownership, suballocation lifetime, and explicit
@@ -157,7 +166,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Promote one bounded action only after deterministic equivalence, validation-
   layer cleanliness, fault controls, timing, and complete layer removal pass.
 
-### v0.22+: Controlled External Observation
+### v0.23+: Controlled External Observation
 
 - Define an explicit allowlist and operator consent model.
 - Add an external attach prototype for unprotected software we are authorized

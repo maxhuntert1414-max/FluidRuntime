@@ -3,7 +3,7 @@
 **A Windows research runtime for finding and safely removing redundant work
 between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
 
-[![Version](https://img.shields.io/badge/version-0.20.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
+[![Version](https://img.shields.io/badge/version-0.21.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 [![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
@@ -20,30 +20,33 @@ action can be applied without changing the result.
 | FluidLink v2 | Strict binary IPC with numeric opcodes and no JSON payloads |
 | FluidLink batch | 129 logical operations in one ordered request/vector pair |
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
-| D3D12 | Gateway-authorized, bounded `CopyBufferRegion` elision in an owned COPY queue |
+| D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Vulkan | Planned, not implemented |
 | External games | Unsupported; owned opt-in workloads only |
 
-## v0.20 Result
+## v0.21 Result
 
-FluidRuntime now has a separate native D3D12 hook and owned COPY-queue target.
-Across 10 measured RX 580 pairs plus one warmup:
+The D3D12 path now consumes a backend-neutral transfer contract covering queues,
+execution scopes, resources, lanes, operations, and fences. Across 30 measured
+RX 580 pairs plus one warmup:
 
-- each optimized run omitted 128 exact redundant 4 MiB
-  `CopyBufferRegion` calls, or 536,870,912 logical API bytes;
-- managed end-to-end delta p50/p95/p99 was
-  `-23.552 / -10.989 / -7.843 ms`, with 10/10 optimized wins;
+- two command lists and two independent destination lanes preserved exact final
+  content while each optimized run omitted 128 redundant 4 MiB calls;
+- baseline forwarded 136 tracked calls; optimized forwarded the eight required
+  guards and skipped 128 candidates;
 - submit-to-fence delta p50/p95/p99 was
-  `-48.442 / -46.139 / -44.853 ms`;
+  `-45.817 / -42.616 / -37.080 ms`, with 30/30 optimized wins;
 - GPU timestamp delta p50/p95/p99 was
-  `-49.350 / -47.064 / -45.809 ms`;
+  `-46.870 / -42.814 / -38.004 ms`, also with 30/30 wins;
+- the native execution gate passed, but the complete managed path did not:
+  end-to-end p95/p99 was `+18.262 / +53.557 ms`, so the product-level
+  performance claim remains blocked;
 - malformed, stalled, and slow peers published no policy and completed an
-  all-forwarded baseline with 132 tracked calls and zero skips.
+  all-forwarded 136-call baseline with zero skips.
 
-The native final gate uses a bounded CPU shadow of an immutable upload range,
-automatic and explicit destination invalidation, a four-second action budget,
-fence completion, full readback equivalence, Debug Layer validation, and atomic
-vtable rollback.
+The reusable contract, transfer event/action opcodes, unique destination
+ownership rule, and numeric backend/operation IDs are ready for a Vulkan
+implementation. Vulkan itself is not implemented in this release.
 
 This is measured protocol and functional evidence. It is not yet a claim of
 lower game latency, higher FPS, reduced PCIe traffic, lower power, or physical
@@ -98,7 +101,8 @@ and verified rollback.
 - [Current status and release gate](docs/STATUS.md)
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
-- [v0.20 D3D12 actuation evidence](docs/evidence/v0.20.0-d3d12-copy-elision.md)
+- [v0.21 generalized D3D12 transfer evidence](docs/evidence/v0.21.0-d3d12-transfer-core.md)
+- [v0.20 single-lane D3D12 evidence](docs/evidence/v0.20.0-d3d12-copy-elision.md)
 - [v0.19 end-to-end authorization evidence](docs/evidence/v0.19.0-end-to-end-authorization.md)
 - [v0.18 resilience and 128-action evidence](docs/evidence/v0.18.0-resilience-update-upload-128.md)
 - [FluidLink v0.17 batch evidence](docs/evidence/v0.17.0-fluidlink-operation-batch.md)

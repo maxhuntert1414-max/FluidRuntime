@@ -1,21 +1,22 @@
 # Project Status
 
-FluidRuntime v0.20.0 is verified locally as of 2026-08-11. It adds the first
-Gateway-authorized native D3D12 action while retaining the existing D3D11 lanes
-and both FluidLink v2 fingerprints. The new backend is bounded to one owned COPY
-command list, one 4 MiB copy-only destination, and 128 exact actions.
+FluidRuntime v0.21.0 is verified locally as of 2026-08-11. It generalizes the
+owned D3D12 action behind a backend-neutral transfer contract while retaining
+the existing D3D11 lanes and FluidLink fingerprints. Authority remains bounded
+to one owned COPY queue, two command lists, two 4 MiB destinations, two isolated
+lanes, one fence, and 128 exact actions.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.20.0`
+- Target branch/tag: `main` / `v0.21.0`
 - Canonical Gateway contract: [FluidGateway v0.67.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.0)
-- Target release: [FluidRuntime v0.20.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.20.0)
+- Target release: [FluidRuntime v0.21.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.21.0)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 186/186 passed.
+- Managed tests: 190/190 passed.
 - FluidGateway complete suite: 259/259 passed.
 - FluidGateway resilience suite: ten adversarial cases passed ten consecutive
   runs, for 100/100 total.
@@ -28,14 +29,17 @@ command list, one 4 MiB copy-only destination, and 128 exact actions.
   `9a626d9b257dd7341a090a49ca649bbc88c0c3ba32ba1edabbf18166a321aeea`.
 - FluidLink frame bytes: 3,189 for v1 versus 1,880 for v2, saving 1,309
   bytes or 41.05% for the same cross-process semantic flow.
-- The final D3D12 WARP gate passed 10/10 measured pairs plus one warmup; its
-  performance claim remains blocked because WARP is a software adapter.
-- The final D3D12 RX 580 gate passed 10/10 measured pairs plus one warmup:
-  managed end-to-end delta p50/p95/p99 was
-  -23,551.500 / -10,988.650 / -7,843.330 us.
+- The generalized D3D12 WARP gate passed two measured pairs plus all three
+  fault controls. Both performance gates remain blocked for software evidence.
+- The generalized D3D12 RX 580 gate passed 30/30 measured pairs plus one
+  warmup. Submit-to-fence and GPU timestamp each favored optimized in 30/30.
 - RX 580 submit-to-fence delta p50/p95/p99 was
-  -48,442.000 / -46,138.850 / -44,852.570 us; GPU timestamp delta was
-  -49,349.500 / -47,063.700 / -45,808.740 us.
+  -45,816.500 / -42,615.850 / -37,080.440 us; GPU timestamp delta was
+  -46,870.000 / -42,814.100 / -38,003.560 us.
+- Managed end-to-end favored optimized in 27/30 pairs. Its p50 was
+  -15,615.000 us, but p95/p99 was +18,261.950 / +53,557.120 us. Therefore the
+  native execution gate passes and the complete product-performance gate stays
+  blocked by `managed-end-to-end-improvement-not-consistent`.
 - Concurrent authorization completed 128 measured requests plus 15 warmups with
   zero failures. Concurrency-8 p99 was 215,338.490 us against a 250,000 us
   session-level budget.
@@ -43,10 +47,11 @@ command list, one 4 MiB copy-only destination, and 128 exact actions.
   accounted for 536,870,912 logical API bytes. This is not a physical-transfer
   counter.
 - Malformed, stalled, and cumulatively slow peers each published no D3D12 policy
-  and launched a clean baseline with 132 tracked calls forwarded and zero skips.
+  and launched a clean baseline with 136 tracked calls forwarded and zero skips.
+  The slow peer completed four round trips before the total deadline.
 - `FluidLink.0.3.0.nupkg` inspected with the DLL, README, v1/base-v2/batch
   contracts, and both v2 golden-vector files present.
-- Native tests: 16/16 Release and 16/16 Debug passed.
+- Native tests: 21/21 Release and 21/21 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
 - Remote CI remains a separate required gate for pushed `main` and release tags.
@@ -90,6 +95,34 @@ The v0.15 closed-loop gate also passed:
 
 The v0.15 code does not modify native source or ABI. It adds a fail-closed bridge
 that may publish the existing action-8 policy only after exact live decisions.
+
+## New In v0.21.0
+
+- `fluidruntime-native-transfer-v1` defines numeric backend/operation IDs and a
+  bounded queue/scope/resource/lane/fence topology shared by managed and native
+  code. Vulkan has a reserved backend ID but no implementation yet.
+- `fluidruntime-d3d12-transfer-hook.dll` keeps lane state by
+  `(execution_scope_id, destination_resource_id)` and hooks five command-list
+  methods plus queue `ExecuteCommandLists` and `Signal`.
+- The owned target uses two 8 MiB UPLOAD resources, two 4 MiB DEFAULT resources,
+  two independent command lists/readbacks, one COPY queue, and one registered
+  fence. Baseline forwards 136 tracked copies; optimized forwards eight guards
+  and skips 128 exact duplicates.
+- FluidGateway authorization hashes the exact transfer topology. Missing
+  topology is rejected by managed code; invalid attach topology leaves vtables
+  untouched; incomplete native registration rejects policy before any skip.
+- Every generalized event carries logical IDs and flag 512. Submission order,
+  fence signal, lane generations, content, zero overruns, and rollback must all
+  agree between ring, snapshot, target JSON, and managed report.
+- Event IDs 17..22 and action bit 16 now expose backend-neutral transfer names;
+  D3D12 names remain aliases. Each destination can have only one lane owner, and
+  aliased ownership is rejected with zero skips before policy publication.
+- The RX 580 native execution gate passed 30/30 submit-to-fence and GPU pairs.
+  The full managed end-to-end gate remains blocked, so v0.21 makes no claim of
+  whole-product acceleration, game FPS, input latency, power, or physical
+  RAM/VRAM/PCIe reduction.
+- Full methodology and raw hashes are in
+  [the v0.21 evidence report](evidence/v0.21.0-d3d12-transfer-core.md).
 
 ## New In v0.20.0
 
@@ -280,13 +313,15 @@ that may publish the existing action-8 policy only after exact live decisions.
 
 ## Evidence Claim
 
-D3D12 positive actuation scope:
+D3D12 v0.21 actuation scope:
 
-`owned-d3d12-copy-buffer-region-fluidgateway-authorized-exact-content-elision`
+`owned-d3d12-multi-lane-copy-buffer-fluidgateway-authorized-exact-content-elision`
 
-The RX 580 report sets `performance_claim_allowed=true` only after negative
-managed end-to-end, submit-to-fence, and GPU p50/p95/p99 deltas plus 10/10 wins.
-The WARP report remains blocked by `software-adapter-not-hardware`.
+The RX 580 report sets `native_execution_gate_passed=true`: submit-to-fence and
+GPU timestamp tails were negative with 30/30 optimized wins. It keeps
+`performance_claim_allowed=false` because managed end-to-end p95/p99 was
+positive. WARP remains blocked by `software-adapter-not-hardware` and is used as
+functional evidence only.
 
 D3D11 positive actuation scope:
 
@@ -324,7 +359,8 @@ FluidRuntime can inspect process/GPU/memory telemetry, observe owned D3D11 and
 D3D12 resource paths, publish bounded managed policies, and interfere reversibly
 with five owned-lab patterns: generic `CopyResource`, default-to-staging
 readback, staging-to-default upload, exact full-buffer `UpdateSubresource`, and
-D3D12 full-buffer `CopyBufferRegion`.
+D3D12 full-buffer `CopyBufferRegion`. The D3D12 path now models two independent
+lanes plus queue submission and fence signal under a neutral transfer contract.
 It can also exchange bounded events and compact decisions with FluidGateway
 through FluidLink. Two domain-separated owned-lab paths now turn those decisions
 into bounded native action budgets; all other Gateway management remains
@@ -335,7 +371,8 @@ physical RAM/VRAM residency, actuate presentation, or support Vulkan.
 
 ## Read Next
 
-- [v0.20.0 D3D12 actuation evidence](evidence/v0.20.0-d3d12-copy-elision.md)
+- [v0.21.0 generalized D3D12 transfer evidence](evidence/v0.21.0-d3d12-transfer-core.md)
+- [v0.20.0 single-lane D3D12 evidence](evidence/v0.20.0-d3d12-copy-elision.md)
 - [v0.16.0 D3D12 observation evidence](evidence/v0.16.0-d3d12-observation.md)
 - [v0.15.0 Gateway-managed actuation evidence](evidence/v0.15.0-gateway-managed-update-upload.md)
 - [v0.14.0 FluidLink v2 evidence](evidence/v0.14.0-fluidlink-v2.md)

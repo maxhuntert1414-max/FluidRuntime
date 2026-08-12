@@ -105,7 +105,7 @@ jobs:
             artifacts/gateway-update-upload-invalid-response-fail-closed-128.json
             artifacts/gateway-update-upload-fail-closed-128.json
             artifacts/gateway-update-upload-slow-response-fail-closed-128.json
-            artifacts/gateway-d3d12-copy-control.json
-            artifacts/gateway-d3d12-copy-invalid-response-fail-closed.json
-            artifacts/gateway-d3d12-copy-fail-closed.json
-            artifacts/gateway-d3d12-copy-slow-response-fail-closed.json
+            artifacts/gateway-d3d12-transfer-control.json
+            artifacts/gateway-d3d12-transfer-invalid-response-fail-closed.json
+            artifacts/gateway-d3d12-transfer-fail-closed.json
+            artifacts/gateway-d3d12-transfer-slow-response-fail-closed.json

@@ -123,6 +123,7 @@ public sealed class D3D12CopyElisionLabRunner
         if (optimized)
         {
             ArgumentNullException.ThrowIfNull(authorizer);
+            var topology = options.CreateTransferTopology();
             try
             {
                 authorization = await authorizer.AuthorizeAsync(
@@ -133,7 +134,8 @@ public sealed class D3D12CopyElisionLabRunner
                         (ulong)options.CandidateActionCount,
                         binding.TargetSha256,
                         binding.HookSha256,
-                        GatewayUploadBackend.D3D12CopyBufferRegion),
+                        GatewayUploadBackend.D3D12CopyBufferRegion,
+                        topology),
                     cancellationToken);
                 authorization.EnsureMatchesNativePolicy(
                     GatewayD3D12CopyLabOptions.BufferBytes,
@@ -142,7 +144,8 @@ public sealed class D3D12CopyElisionLabRunner
                     phase,
                     binding.TargetSha256,
                     binding.HookSha256,
-                    GatewayUploadBackend.D3D12CopyBufferRegion);
+                    GatewayUploadBackend.D3D12CopyBufferRegion,
+                    topology);
             }
             catch (Exception exception) when (
                 exception is not OperationCanceledException ||
@@ -163,7 +166,7 @@ public sealed class D3D12CopyElisionLabRunner
                     cancellationToken);
                 var typed = failure as GatewayUpdateUploadAuthorizationFailureException;
                 var report = new GatewayD3D12CopyFailClosedReport(
-                    "fluidruntime-gateway-d3d12-copy-fail-closed-v0.20.0",
+                    "fluidruntime-gateway-d3d12-transfer-fail-closed-v0.21.0",
                     FailClosed: true,
                     NativePolicyPublished: false,
                     typed?.FailureType ?? failure.GetType().Name,
@@ -229,7 +232,7 @@ public sealed class D3D12CopyElisionLabRunner
             using var reader = await HookLabRunner.OpenRingAsync(
                 process,
                 timeout.Token,
-                d3d12: true);
+                transferBackendId: (int)NativeTransferBackend.D3D12);
             if (reader.ProcessId != (ulong)process.Id)
             {
                 throw new InvalidDataException(
@@ -240,7 +243,7 @@ public sealed class D3D12CopyElisionLabRunner
             HookControlPolicy? policy = null;
             if (optimized)
             {
-                policy = reader.PublishD3D12CopyBufferRegionElisionPolicy(
+                policy = reader.PublishTransferBufferCopyElisionPolicy(
                     TimeSpan.FromSeconds(4),
                     authorization!.NativeActionBudget);
                 await reader.WaitForControlAcknowledgmentAsync(
@@ -310,25 +313,44 @@ public sealed class D3D12CopyElisionLabRunner
         GatewayUpdateUploadAuthorization? authorization)
     {
         var adapter = report.GetProperty("adapter");
+        var transferContract = report.GetProperty("transfer_contract");
         var workload = report.GetProperty("workload");
         var hook = report.GetProperty("hook");
+        var submission = report.GetProperty("submission");
         var nativeControl = report.GetProperty("control");
         var timing = report.GetProperty("timing");
+        var topology = options.CreateTransferTopology();
         const string sourceSnapshotMode =
             "registration-copy-cpu-shadow-upload-unmapped-until-fence";
+        var scopeIds = workload.GetProperty("scope_ids").EnumerateArray()
+            .Select(item => item.GetUInt64()).ToArray();
+        var sourceIds = workload.GetProperty("source_resource_ids").EnumerateArray()
+            .Select(item => item.GetUInt64()).ToArray();
+        var destinationIds = workload.GetProperty("destination_resource_ids")
+            .EnumerateArray().Select(item => item.GetUInt64()).ToArray();
+        var laneCandidateCounts = workload.GetProperty("lane_candidate_counts")
+            .EnumerateArray().Select(item => item.GetInt32()).ToArray();
+        var patternHashes = workload.GetProperty("pattern_hashes").EnumerateArray()
+            .Select(item => item.GetString() ?? "").ToArray();
+        var finalHashes = workload.GetProperty("final_hashes").EnumerateArray()
+            .Select(item => item.GetString() ?? "").ToArray();
         var directEvents = events.Where(item =>
-            item.Type == HookEventType.D3D12CopyBufferRegion).ToArray();
+            item.Type == HookEventType.TransferBufferCopy).ToArray();
         var candidateEvents = directEvents.Where(item =>
-            item.IsD3D12RedundantCandidate).ToArray();
+            item.IsTransferRedundantCandidate).ToArray();
         var skippedEvents = directEvents.Where(item =>
-            item.WasD3D12CopySkipped).ToArray();
+            item.WasTransferSkipped).ToArray();
         var invalidations = events.Where(item =>
-            item.Type == HookEventType.D3D12ResourceInvalidate).ToArray();
+            item.Type == HookEventType.TransferResourceInvalidate).ToArray();
         var closes = events.Where(item =>
-            item.Type == HookEventType.D3D12CommandListClose).ToArray();
+            item.Type == HookEventType.TransferScopeClose).ToArray();
+        var queueExecutions = events.Where(item =>
+            item.Type == HookEventType.TransferQueueSubmit).ToArray();
+        var queueSignals = events.Where(item =>
+            item.Type == HookEventType.TransferSyncSignal).ToArray();
         var accepted = events.Where(item =>
             item.Type == HookEventType.ControlPolicyAccepted).ToArray();
-        var expectedTracked = options.CandidateActionCount + 4L;
+        var expectedTracked = options.CandidateActionCount + 8L;
         var expectedSkipped = optimized ? options.CandidateActionCount : 0L;
         var expectedForwarded = expectedTracked - expectedSkipped;
         var expectedStatus = optimized
@@ -338,34 +360,66 @@ public sealed class D3D12CopyElisionLabRunner
             item.Sequence == index).All(value => value);
         var eventPatternMatches = D3D12EventPatternMatches(
             directEvents,
-            options.CandidateActionCount,
+            laneCandidateCounts,
+            scopeIds,
+            sourceIds,
+            destinationIds,
             optimized);
         var acceptedMatches = accepted.Length == (optimized ? 1 : 0) &&
             (!optimized ||
                 (accepted[0].ResourceA == 1 &&
                  accepted[0].ResourceB ==
-                    HookRingReader.SkipRedundantD3D12CopyBufferRegionAction &&
+                    HookRingReader.SkipRedundantTransferBufferCopyAction &&
                  accepted[0].SizeBytes == (ulong)options.CandidateActionCount));
         var automaticInvalidations = invalidations.Where(item =>
-            !item.IsD3D12ExplicitInvalidation).ToArray();
+            !item.IsTransferExplicitInvalidation).ToArray();
         var explicitInvalidations = invalidations.Where(item =>
-            item.IsD3D12ExplicitInvalidation).ToArray();
+            item.IsTransferExplicitInvalidation).ToArray();
         var guardEventsMatch =
-            automaticInvalidations.Length == 1 &&
-            automaticInvalidations[0].SizeBytes == 1 &&
-            automaticInvalidations[0].Generation == 3 &&
-            explicitInvalidations.Length == 1 &&
-            explicitInvalidations[0].SizeBytes ==
-                GatewayD3D12CopyLabOptions.BufferBytes &&
-            explicitInvalidations[0].Generation == 5 &&
-            closes.Length == 1 &&
-            closes[0].Generation == 7;
-        var patternAHash = workload.GetProperty("pattern_a_hash").GetString() ?? "";
-        var patternBHash = workload.GetProperty("pattern_b_hash").GetString() ?? "";
-        var finalHash = workload.GetProperty("final_hash").GetString() ?? "";
+            scopeIds.Length == 2 && sourceIds.Length == 2 &&
+            destinationIds.Length == 2 && laneCandidateCounts.Length == 2 &&
+            laneCandidateCounts.Sum() == options.CandidateActionCount &&
+            automaticInvalidations.Length == 2 &&
+            automaticInvalidations.Select(item => item.ResourceA)
+                .Order().SequenceEqual(destinationIds.Order()) &&
+            automaticInvalidations.All(item =>
+                item.SizeBytes == 1 && item.Generation == 3 &&
+                item.IsGeneralizedTransfer) &&
+            explicitInvalidations.Length == 2 &&
+            explicitInvalidations.Select(item => item.ResourceA)
+                .Order().SequenceEqual(destinationIds.Order()) &&
+            explicitInvalidations.All(item =>
+                item.SizeBytes == GatewayD3D12CopyLabOptions.BufferBytes &&
+                item.Generation == 5 && item.IsGeneralizedTransfer) &&
+            closes.Length == 2 &&
+            closes.Select(item => item.ResourceA).Order()
+                .SequenceEqual(scopeIds.Order()) &&
+            closes.All(item =>
+                item.Generation == 7 && item.RegionKey == item.ResourceA &&
+                item.IsGeneralizedTransfer);
+        var expectedScopeOrderHash = ComputeScopeOrderHash(scopeIds);
+        var submissionMatches =
+            queueExecutions.Length == 1 && queueSignals.Length == 1 &&
+            queueExecutions[0].ResourceA == submission.GetProperty("queue_id").GetUInt64() &&
+            queueExecutions[0].SizeBytes == 2 &&
+            queueExecutions[0].Generation == 1 &&
+            queueExecutions[0].SubresourceA == 2 &&
+            queueExecutions[0].SubresourceB == 0 &&
+            queueExecutions[0].RegionKey == expectedScopeOrderHash &&
+            queueExecutions[0].IsGeneralizedTransfer &&
+            queueSignals[0].ResourceA == queueExecutions[0].ResourceA &&
+            queueSignals[0].ResourceB == submission.GetProperty("fence_id").GetUInt64() &&
+            queueSignals[0].SizeBytes == submission.GetProperty("fence_value").GetUInt64() &&
+            queueSignals[0].Generation == 1 &&
+            queueSignals[0].IsGeneralizedTransfer &&
+            submission.GetProperty("execute_count").GetInt64() == 1 &&
+            submission.GetProperty("submitted_scope_count").GetInt64() == 2 &&
+            submission.GetProperty("unregistered_scope_count").GetInt64() == 0 &&
+            submission.GetProperty("scope_order_hash").GetString() ==
+                expectedScopeOrderHash.ToString("x16");
         var fenceCompleted =
-            timing.GetProperty("fence_completed_value").GetUInt64() >=
-            timing.GetProperty("fence_signaled_value").GetUInt64();
+            submission.GetProperty("fence_completed_value").GetUInt64() >=
+            submission.GetProperty("fence_value").GetUInt64();
         var debugValid =
             report.GetProperty("debug_warning_count").GetUInt64() == 0 &&
             report.GetProperty("debug_error_count").GetUInt64() == 0;
@@ -375,15 +429,19 @@ public sealed class D3D12CopyElisionLabRunner
             workload.GetProperty("explicit_invalidation_guard_applied").GetBoolean() &&
             workload.GetProperty("immutable_sources_verified").GetBoolean() &&
             workload.GetProperty("content_equivalent").GetBoolean() &&
-            patternAHash.Length == 16 &&
-            patternBHash.Length == 16 &&
-            finalHash.Length == 16 &&
-            patternAHash != patternBHash &&
-            finalHash == patternBHash;
+            patternHashes.Length == 4 && finalHashes.Length == 2 &&
+            patternHashes.All(item => item.Length == 16) &&
+            finalHashes.All(item => item.Length == 16) &&
+            patternHashes[0] != patternHashes[1] &&
+            patternHashes[2] != patternHashes[3] &&
+            finalHashes[0] == patternHashes[1] &&
+            finalHashes[1] == patternHashes[3];
         var expectedPolicyEpoch = optimized ? 1L : 0L;
+        var expectedEventCount = options.CandidateActionCount +
+            (optimized ? 17L : 16L);
         var nativeValid =
             report.GetProperty("mode").GetString() ==
-                "fluidruntime-owned-d3d12-copy-elision-v0.20.0" &&
+                "fluidruntime-owned-d3d12-transfer-v0.21.0" &&
             report.GetProperty("target_owned").GetBoolean() &&
             report.GetProperty("cooperative_load").GetBoolean() &&
             !report.GetProperty("remote_injection").GetBoolean() &&
@@ -393,8 +451,33 @@ public sealed class D3D12CopyElisionLabRunner
             report.GetProperty("render_driver").GetString() ==
                 (options.UseHardware ? "hardware" : "warp") &&
             report.GetProperty("process_id").GetInt32() == processId &&
+            transferContract.GetProperty("abi_version").GetInt32() == 1 &&
+            transferContract.GetProperty("backend").GetInt32() ==
+                (int)NativeTransferBackend.D3D12 &&
+            transferContract.GetProperty("operation").GetInt32() ==
+                (int)NativeTransferOperation.CopyBuffer &&
+            transferContract.GetProperty("queue_count").GetInt32() ==
+                topology.QueueCount &&
+            transferContract.GetProperty("execution_scope_count").GetInt32() ==
+                topology.ExecutionScopeCount &&
+            transferContract.GetProperty("source_resource_count").GetInt32() ==
+                topology.SourceResourceCount &&
+            transferContract.GetProperty("destination_resource_count").GetInt32() ==
+                topology.DestinationResourceCount &&
+            transferContract.GetProperty("lane_count").GetInt32() ==
+                topology.LaneCount &&
+            transferContract.GetProperty("fence_count").GetInt32() ==
+                topology.FenceCount &&
+            transferContract.GetProperty("max_action_count").GetInt32() ==
+                options.CandidateActionCount &&
+            transferContract.GetProperty("runtime_event_count").GetInt32() ==
+                topology.RuntimeEventCount &&
+            transferContract.GetProperty("max_resource_bytes").GetUInt64() ==
+                GatewayD3D12CopyLabOptions.BufferBytes &&
+            transferContract.GetProperty("max_total_retained_bytes").GetUInt64() ==
+                GatewayD3D12CopyLabOptions.RetainedCapacityBytes &&
             workload.GetProperty("scope").GetString() ==
-                "owned-d3d12-copy-queue-full-buffer-copy-buffer-region" &&
+                "owned-d3d12-copy-queue-multi-lane-full-buffer" &&
             workload.GetProperty("buffer_bytes").GetUInt64() ==
                 GatewayD3D12CopyLabOptions.BufferBytes &&
             workload.GetProperty("source_snapshot_mode").GetString() ==
@@ -409,28 +492,29 @@ public sealed class D3D12CopyElisionLabRunner
                 expectedForwarded &&
             workload.GetProperty("expected_skipped_count").GetInt64() ==
                 expectedSkipped &&
-            hook.GetProperty("snapshot_abi_version").GetUInt32() == 1 &&
+            hook.GetProperty("snapshot_abi_version").GetUInt32() == 2 &&
             hook.GetProperty("source_snapshot_bytes").GetUInt64() ==
                 GatewayD3D12CopyLabOptions.SourceSnapshotBytes &&
             hook.GetProperty("attach_hresult").GetString() == "0x00000000" &&
-            hook.GetProperty("register_upload_hresult").GetString() == "0x00000000" &&
-            hook.GetProperty("register_destination_hresult").GetString() ==
-                "0x00000000" &&
-            hook.GetProperty("invalidation_hresult").GetString() == "0x00000000" &&
             hook.GetProperty("detach_hresult").GetString() == "0x00000000" &&
-            hook.GetProperty("original_pointer_restored").GetBoolean() &&
+            hook.GetProperty("original_pointers_restored").GetBoolean() &&
+            hook.GetProperty("retained_capacity_bytes").GetUInt64() ==
+                GatewayD3D12CopyLabOptions.RetainedCapacityBytes &&
+            hook.GetProperty("maximum_lane_generation").GetInt64() == 7 &&
+            hook.GetProperty("copy_buffer_region_count").GetInt64() ==
+                options.CandidateActionCount + 12L &&
             hook.GetProperty("tracked_copy_count").GetInt64() == expectedTracked &&
             hook.GetProperty("redundant_candidate_count").GetInt64() ==
                 options.CandidateActionCount &&
             hook.GetProperty("forwarded_copy_count").GetInt64() == expectedForwarded &&
             hook.GetProperty("skipped_copy_count").GetInt64() == expectedSkipped &&
             hook.GetProperty("exact_comparison_count").GetInt64() ==
-                options.CandidateActionCount + 1L &&
-            hook.GetProperty("automatic_invalidation_count").GetInt64() == 1 &&
-            hook.GetProperty("explicit_invalidation_count").GetInt64() == 1 &&
-            hook.GetProperty("command_list_close_count").GetInt64() == 1 &&
-            hook.GetProperty("cache_generation").GetInt64() == 7 &&
+                options.CandidateActionCount + 2L &&
+            hook.GetProperty("automatic_invalidation_count").GetInt64() == 2 &&
+            hook.GetProperty("explicit_invalidation_count").GetInt64() == 2 &&
+            hook.GetProperty("command_list_close_count").GetInt64() == 2 &&
             hook.GetProperty("ipc_event_count").GetInt64() == events.Count &&
+            hook.GetProperty("ipc_event_count").GetInt64() == expectedEventCount &&
             hook.GetProperty("ipc_overrun_count").GetInt64() == 0 &&
             nativeControl.GetProperty("requested").GetBoolean() == optimized &&
             nativeControl.GetProperty("wait_hresult").GetString() ==
@@ -452,9 +536,12 @@ public sealed class D3D12CopyElisionLabRunner
             acceptedMatches &&
             guardEventsMatch &&
             eventPatternMatches &&
+            submissionMatches &&
+            events.All(item => item.IsGeneralizedTransfer) &&
             sequencesMatch &&
             reader.LostSequenceCount == 0 &&
             reader.NativeOverrunCount == 0 &&
+            reader.TransferBackendId == (ulong)NativeTransferBackend.D3D12 &&
             control.PublishedEpoch == expectedPolicyEpoch &&
             control.AcknowledgedEpoch == expectedPolicyEpoch &&
             control.AppliedActionCount == expectedSkipped &&
@@ -462,9 +549,10 @@ public sealed class D3D12CopyElisionLabRunner
             (!optimized ||
                 (policy is not null &&
                  policy.ActionMask ==
-                    HookRingReader.SkipRedundantD3D12CopyBufferRegionAction &&
+                    HookRingReader.SkipRedundantTransferBufferCopyAction &&
                  policy.ActionBudget == (ulong)options.CandidateActionCount &&
-                 authorization?.Backend == GatewayUploadBackend.D3D12CopyBufferRegion));
+                 authorization?.Backend == GatewayUploadBackend.D3D12CopyBufferRegion &&
+                 authorization.TransferTopology == topology));
         if (!nativeValid)
         {
             throw new InvalidDataException(
@@ -501,12 +589,12 @@ public sealed class D3D12CopyElisionLabRunner
             (ulong)expectedForwarded * GatewayD3D12CopyLabOptions.BufferBytes,
             expectedSkipped,
             (ulong)expectedSkipped * GatewayD3D12CopyLabOptions.BufferBytes,
-            options.CandidateActionCount + 1L,
-            (ulong)(options.CandidateActionCount + 1L) *
+            options.CandidateActionCount + 2L,
+            (ulong)(options.CandidateActionCount + 2L) *
                 GatewayD3D12CopyLabOptions.BufferBytes,
-            1,
-            1,
-            1,
+            2,
+            2,
+            2,
             SourceTransitionApplied: true,
             AutomaticInvalidationGuardApplied: true,
             ExplicitInvalidationGuardApplied: true,
@@ -515,9 +603,9 @@ public sealed class D3D12CopyElisionLabRunner
             fenceCompleted,
             debugValid,
             RollbackRestored: true,
-            patternAHash,
-            patternBHash,
-            finalHash,
+            patternHashes[0],
+            patternHashes[1],
+            finalHashes[0],
             timing.GetProperty("cpu_record_microseconds").GetDouble(),
             timing.GetProperty("submit_to_fence_microseconds").GetDouble(),
             timing.GetProperty("total_workload_microseconds").GetDouble(),
@@ -526,6 +614,18 @@ public sealed class D3D12CopyElisionLabRunner
                 : null,
             report)
         {
+            TransferTopology = topology,
+            TransferBackendId = checked((int)reader.TransferBackendId),
+            PatternHashes = patternHashes,
+            FinalHashes = finalHashes,
+            LaneIsolationVerified = eventPatternMatches && guardEventsMatch,
+            QueueSubmissionVerified = submissionMatches,
+            QueueExecuteCount = queueExecutions.LongLength,
+            QueueSignalCount = queueSignals.LongLength,
+            SubmittedScopeCount = submission.GetProperty("submitted_scope_count").GetInt64(),
+            SubmissionScopeOrderHash = expectedScopeOrderHash,
+            SignaledFenceId = submission.GetProperty("fence_id").GetUInt64(),
+            SignaledFenceValue = submission.GetProperty("fence_value").GetUInt64(),
             GatewayAuthorization = authorization,
             PublishedPolicyExpiresAtQpc = policy?.ExpiresAtQpc ?? 0,
             PublishedPolicyActionMask = policy?.ActionMask ?? 0,
@@ -535,7 +635,58 @@ public sealed class D3D12CopyElisionLabRunner
 
     private static bool D3D12EventPatternMatches(
         IReadOnlyList<HookIpcEvent> events,
+        IReadOnlyList<int> candidateCounts,
+        IReadOnlyList<ulong> scopeIds,
+        IReadOnlyList<ulong> sourceIds,
+        IReadOnlyList<ulong> destinationIds,
+        bool optimized)
+    {
+        if (candidateCounts.Count != 2 || scopeIds.Count != 2 ||
+            sourceIds.Count != 2 || destinationIds.Count != 2 ||
+            events.Count != candidateCounts.Sum() + 8)
+        {
+            return false;
+        }
+        for (var lane = 0; lane < 2; ++lane)
+        {
+            var laneEvents = events.Where(item =>
+                item.RegionKey == scopeIds[lane]).ToArray();
+            if (!D3D12LaneEventPatternMatches(
+                laneEvents,
+                candidateCounts[lane],
+                scopeIds[lane],
+                sourceIds[lane],
+                destinationIds[lane],
+                optimized))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static ulong ComputeScopeOrderHash(IReadOnlyList<ulong> scopeIds)
+    {
+        const ulong offsetBasis = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offsetBasis;
+        foreach (var scopeId in scopeIds)
+        {
+            for (var shift = 0; shift < 64; shift += 8)
+            {
+                hash ^= (scopeId >> shift) & 0xff;
+                hash = unchecked(hash * prime);
+            }
+        }
+        return hash;
+    }
+
+    private static bool D3D12LaneEventPatternMatches(
+        IReadOnlyList<HookIpcEvent> events,
         int candidateCount,
+        ulong scopeId,
+        ulong sourceId,
+        ulong destinationId,
         bool optimized)
     {
         if (events.Count != candidateCount + 4)
@@ -549,8 +700,6 @@ public sealed class D3D12CopyElisionLabRunner
         var automaticGuardIndex = transitionIndex +
             secondBeforeAutomaticInvalidation + 1;
         var explicitGuardIndex = automaticGuardIndex + 1;
-        var destination = events[0].ResourceA;
-        var source = events[0].ResourceB;
         for (var index = 0; index < events.Count; ++index)
         {
             var item = events[index];
@@ -570,18 +719,19 @@ public sealed class D3D12CopyElisionLabRunner
             var compared = index != 0 &&
                 index != automaticGuardIndex &&
                 index != explicitGuardIndex;
-            if (destination == 0 || source == 0 ||
-                item.ResourceA != destination ||
-                item.ResourceB != source ||
+            if (scopeId == 0 || destinationId == 0 || sourceId == 0 ||
+                item.ResourceA != destinationId ||
+                item.ResourceB != sourceId ||
                 item.SizeBytes != GatewayD3D12CopyLabOptions.BufferBytes ||
                 item.Generation != expectedGeneration ||
                 item.SubresourceA != 0 ||
                 item.SubresourceB != expectedSourceOffset ||
-                item.RegionKey != expectedSourceOffset ||
-                !item.IsD3D12ImmutableUploadSource ||
-                item.IsD3D12ExactContentCompared != compared ||
-                item.IsD3D12RedundantCandidate == required ||
-                item.WasD3D12CopySkipped != (optimized && !required))
+                item.RegionKey != scopeId ||
+                !item.IsGeneralizedTransfer ||
+                !item.IsTransferImmutableHostSource ||
+                item.IsTransferExactContentCompared != compared ||
+                item.IsTransferRedundantCandidate == required ||
+                item.WasTransferSkipped != (optimized && !required))
             {
                 return false;
             }
@@ -605,7 +755,15 @@ public sealed class D3D12CopyElisionLabRunner
                 !item.ContentEquivalent ||
                 !item.FenceCompletedInBothRuns ||
                 !item.RollbackRestoredInBothRuns ||
-                !item.AdapterIdentityMatched))
+                !item.AdapterIdentityMatched ||
+                !item.Baseline.LaneIsolationVerified ||
+                !item.Optimized.LaneIsolationVerified ||
+                !item.Baseline.QueueSubmissionVerified ||
+                !item.Optimized.QueueSubmissionVerified ||
+                item.Baseline.TransferBackendId !=
+                    (int)NativeTransferBackend.D3D12 ||
+                item.Optimized.TransferBackendId !=
+                    (int)NativeTransferBackend.D3D12))
         {
             throw new InvalidDataException(
                 "D3D12 paired trials violated ordering or correctness gates.");
@@ -634,7 +792,8 @@ public sealed class D3D12CopyElisionLabRunner
                 trial.Phase,
                 binding.TargetSha256,
                 binding.HookSha256,
-                GatewayUploadBackend.D3D12CopyBufferRegion);
+                GatewayUploadBackend.D3D12CopyBufferRegion,
+                options.CreateTransferTopology());
             if (trial.Optimized.PublishedPolicyActionMask !=
                     authorization.NativeActionMask ||
                 trial.Optimized.PublishedPolicyActionBudget !=
@@ -653,6 +812,7 @@ public sealed class D3D12CopyElisionLabRunner
             verified.Select(item => item.AdvertisedServerVersion).Distinct().Count() != 1 ||
             verified.Any(item =>
                 item.Backend != GatewayUploadBackend.D3D12CopyBufferRegion ||
+                item.TransferTopology != options.CreateTransferTopology() ||
                 !item.PeerProcessBindingVerified ||
                 item.PeerCryptographicallyAuthenticated))
         {
@@ -693,43 +853,46 @@ public sealed class D3D12CopyElisionLabRunner
                 measured.Select(item => item.Optimized.GpuWorkloadMicroseconds!.Value));
         }
         var winsRequired = (int)Math.Ceiling(measured.Length * 0.8);
-        var blockers = new List<string>();
+        var nativeBlockers = new List<string>();
         if (!options.UseHardware)
         {
-            blockers.Add("software-adapter-not-hardware");
+            nativeBlockers.Add("software-adapter-not-hardware");
         }
         if (measured.Length < MinimumPairsForPerformanceClaim)
         {
-            blockers.Add("insufficient-paired-samples");
+            nativeBlockers.Add("insufficient-paired-samples");
         }
         AddTailBlocker(
-            blockers,
-            managed,
-            winsRequired,
-            "managed-end-to-end-improvement-not-consistent");
-        AddTailBlocker(
-            blockers,
+            nativeBlockers,
             submit,
             winsRequired,
             "submit-to-fence-improvement-not-consistent");
         if (gpu is null)
         {
-            blockers.Add("gpu-timestamp-evidence-incomplete");
+            nativeBlockers.Add("gpu-timestamp-evidence-incomplete");
         }
         else
         {
             AddTailBlocker(
-                blockers,
+                nativeBlockers,
                 gpu,
                 winsRequired,
                 "gpu-timestamp-improvement-not-consistent");
         }
+        var blockers = new List<string>(nativeBlockers);
+        AddTailBlocker(
+            blockers,
+            managed,
+            winsRequired,
+            "managed-end-to-end-improvement-not-consistent");
 
         var authorizationLatency = GatewayLatencyStatistics.Distribution(
             verified.Select(item => item.AuthorizationLatencyMicroseconds));
+        var distinctNativeBlockers = nativeBlockers
+            .Distinct(StringComparer.Ordinal).ToArray();
         var distinctBlockers = blockers.Distinct(StringComparer.Ordinal).ToArray();
         return new GatewayD3D12CopyLabReport(
-            "fluidruntime-gateway-d3d12-copy-control-trace-v0.20.0",
+            "fluidruntime-gateway-d3d12-transfer-control-trace-v0.21.0",
             TargetOwned: true,
             CooperativeLoad: true,
             RemoteInjection: false,
@@ -782,12 +945,21 @@ public sealed class D3D12CopyElisionLabRunner
             total,
             gpu,
             winsRequired,
-            "owned-d3d12-copy-buffer-region-fluidgateway-authorized-exact-content-elision",
+            "owned-d3d12-multi-lane-copy-buffer-fluidgateway-authorized-exact-content-elision",
             "paired-managed-end-to-end-submit-fence-and-gpu-timestamp-tails",
             PerformanceClaimAllowed: distinctBlockers.Length == 0,
             distinctBlockers,
             verified,
-            trials);
+            trials)
+        {
+            TransferTopology = options.CreateTransferTopology(),
+            TransferBackendId = (int)NativeTransferBackend.D3D12,
+            RequiredForwardedCopiesPerOptimizedRun = 8,
+            LaneIsolationVerifiedInAllRuns = true,
+            QueueSubmissionVerifiedInAllRuns = true,
+            NativeExecutionGatePassed = distinctNativeBlockers.Length == 0,
+            NativeExecutionGateBlockers = distinctNativeBlockers
+        };
     }
 
     private static bool OrderMatches(

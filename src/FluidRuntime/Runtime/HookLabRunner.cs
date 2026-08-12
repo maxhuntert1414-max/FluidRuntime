@@ -288,15 +288,17 @@ public sealed class HookLabRunner
     internal static async Task<HookRingReader> OpenRingAsync(
         Process process,
         CancellationToken cancellationToken,
-        bool d3d12 = false)
+        int? transferBackendId = null)
     {
         var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 5;
         while (!process.HasExited && Stopwatch.GetTimestamp() < deadline)
         {
             try
             {
-                return d3d12
-                    ? HookRingReader.OpenD3D12ForProcess(process.Id)
+                return transferBackendId is not null
+                    ? HookRingReader.OpenTransferForProcess(
+                        process.Id,
+                        transferBackendId.Value)
                     : HookRingReader.OpenForProcess(process.Id);
             }
             catch (Exception exception)
@@ -307,7 +309,7 @@ public sealed class HookLabRunner
         }
 
         throw new InvalidOperationException(
-            $"Native {(d3d12 ? "D3D12 " : string.Empty)}hook ring for PID " +
+            $"Native {(transferBackendId is not null ? "transfer " : string.Empty)}hook ring for PID " +
             $"{process.Id} did not become available.");
     }
 

@@ -41,9 +41,13 @@ public static class GatewayD3D12CopyLabCommand
                 $"p50={report.SubmitToFenceMicroseconds.Delta.P50:0.###} us; " +
                 $"p95={report.SubmitToFenceMicroseconds.Delta.P95:0.###} us; " +
                 $"p99={report.SubmitToFenceMicroseconds.Delta.P99:0.###} us.");
+            Console.WriteLine(report.NativeExecutionGatePassed
+                ? "Native D3D12 execution gate: passed."
+                : "Native D3D12 execution gate: blocked by " +
+                    string.Join(", ", report.NativeExecutionGateBlockers) + ".");
             Console.WriteLine(report.PerformanceClaimAllowed
-                ? $"Performance evidence gate: passed for {report.ClaimScope}."
-                : "Performance evidence gate: blocked by " +
+                ? $"End-to-end performance gate: passed for {report.ClaimScope}."
+                : "End-to-end performance gate: blocked by " +
                     string.Join(", ", report.PerformanceClaimBlockers) + ".");
             Console.WriteLine($"Report: {Path.GetFullPath(options.OutputPath)}");
             return 0;

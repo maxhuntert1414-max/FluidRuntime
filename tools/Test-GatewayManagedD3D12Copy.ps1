@@ -24,8 +24,8 @@ if ($hardwareText -notin @("true", "false", "1", "0")) {
 $hardwareEnabled = $hardwareText -in @("true", "1")
 $bufferBytes = [uint64]4194304
 $expectedLogicalBytes = [uint64]$CandidateActionCount * $bufferBytes
-$expectedTrackedCopyCount = $CandidateActionCount + 4
-$expectedRuntimeEventCount = $CandidateActionCount + 7
+$expectedTrackedCopyCount = $CandidateActionCount + 8
+$expectedRuntimeEventCount = $CandidateActionCount + 17
 $runtimeRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($GatewayPath)) {
     $GatewayPath = Join-Path (Split-Path $runtimeRoot -Parent) "FluidGateway"
@@ -47,27 +47,27 @@ function Get-FreeTcpPort {
 
 if ([string]::IsNullOrWhiteSpace($TargetPath)) {
     $TargetPath = Join-Path $runtimeRoot `
-        "native\build\Release\fluidruntime-d3d12-hook-target.exe"
+        "native\build\Release\fluidruntime-d3d12-transfer-target.exe"
 }
 if ([string]::IsNullOrWhiteSpace($HookPath)) {
     $HookPath = Join-Path $runtimeRoot `
-        "native\build\Release\fluidruntime-d3d12-hook.dll"
+        "native\build\Release\fluidruntime-d3d12-transfer-hook.dll"
 }
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $artifactDirectory `
-        "gateway-d3d12-copy-control.json"
+        "gateway-d3d12-transfer-control.json"
 }
 if ([string]::IsNullOrWhiteSpace($InvalidResponseOutputPath)) {
     $InvalidResponseOutputPath = Join-Path $artifactDirectory `
-        "gateway-d3d12-copy-invalid-response-fail-closed.json"
+        "gateway-d3d12-transfer-invalid-response-fail-closed.json"
 }
 if ([string]::IsNullOrWhiteSpace($FailClosedOutputPath)) {
     $FailClosedOutputPath = Join-Path $artifactDirectory `
-        "gateway-d3d12-copy-fail-closed.json"
+        "gateway-d3d12-transfer-fail-closed.json"
 }
 if ([string]::IsNullOrWhiteSpace($SlowResponseOutputPath)) {
     $SlowResponseOutputPath = Join-Path $artifactDirectory `
-        "gateway-d3d12-copy-slow-response-fail-closed.json"
+        "gateway-d3d12-transfer-slow-response-fail-closed.json"
 }
 $TargetPath = (Resolve-Path -LiteralPath $TargetPath).Path
 $HookPath = (Resolve-Path -LiteralPath $HookPath).Path
@@ -82,6 +82,8 @@ function Invoke-FaultCase {
     )
 
     $faultPort = Get-FreeTcpPort
+    $faultTimeoutMs = if ($Mode -eq "slow") { 1200 } else { 500 }
+    $faultDelayMs = if ($Mode -eq "slow") { 200 } else { 100 }
     $readyPath = Join-Path $artifactDirectory "fluidlink-d3d12-$Mode.ready"
     $faultOutput = Join-Path $artifactDirectory "fluidlink-d3d12-$Mode.stdout.log"
     $faultError = Join-Path $artifactDirectory "fluidlink-d3d12-$Mode.stderr.log"
@@ -92,6 +94,7 @@ function Invoke-FaultCase {
             "-u", (Join-Path $PSScriptRoot "fluidlink_fault_server.py"),
             "--port", "$faultPort",
             "--mode", $Mode,
+            "--delay-ms", "$faultDelayMs",
             "--ready", $readyPath,
             "--gateway-path", $gatewayRoot
         ) `
@@ -126,7 +129,7 @@ function Invoke-FaultCase {
             --hook $HookPath `
             --host 127.0.0.1 `
             --port $faultPort `
-            --timeout-ms 500 `
+            --timeout-ms $faultTimeoutMs `
             --gateway-pid $faultServer.Id `
             --gateway-executable-sha256 $pythonSha256 `
             --trial-pairs 1 `
@@ -150,11 +153,11 @@ function Invoke-FaultCase {
     $fallback = Get-Content -LiteralPath $CaseOutputPath -Raw | ConvertFrom-Json
     $native = $fallback.baseline_fallback
     if ($fallback.mode -ne
-            "fluidruntime-gateway-d3d12-copy-fail-closed-v0.20.0" -or
+            "fluidruntime-gateway-d3d12-transfer-fail-closed-v0.21.0" -or
         -not $fallback.fail_closed -or
         $fallback.native_policy_published -or
         $fallback.failure_type -ne $ExpectedFailureType -or
-        $fallback.authorization_deadline_milliseconds -ne 500 -or
+        $fallback.authorization_deadline_milliseconds -ne $faultTimeoutMs -or
         $fallback.authorization_elapsed_microseconds -le 0 -or
         $fallback.complete_fallback_elapsed_microseconds -lt
             $fallback.authorization_elapsed_microseconds -or
@@ -173,8 +176,10 @@ function Invoke-FaultCase {
         $native.tracked_copy_count -ne $expectedTrackedCopyCount -or
         $native.forwarded_copy_count -ne $expectedTrackedCopyCount -or
         $native.skipped_copy_count -ne 0 -or
-        $native.automatic_invalidation_count -ne 1 -or
-        $native.explicit_invalidation_count -ne 1 -or
+        $native.automatic_invalidation_count -ne 2 -or
+        $native.explicit_invalidation_count -ne 2 -or
+        -not $native.lane_isolation_verified -or
+        -not $native.queue_submission_verified -or
         $native.published_policy_expires_at_qpc -ne 0 -or
         $native.published_policy_action_mask -ne 0 -or
         $native.published_policy_action_budget -ne 0 -or
@@ -259,7 +264,7 @@ finally {
 $report = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 $expectedAuthorizationRuns = $TrialPairs + $WarmupPairs
 if ($report.mode -ne
-        "fluidruntime-gateway-d3d12-copy-control-trace-v0.20.0" -or
+        "fluidruntime-gateway-d3d12-transfer-control-trace-v0.21.0" -or
     -not $report.target_owned -or
     -not $report.cooperative_load -or
     $report.remote_injection -or
@@ -280,7 +285,7 @@ if ($report.mode -ne
     $report.buffer_bytes -ne $bufferBytes -or
     $report.source_snapshot_mode -ne
         "registration-copy-cpu-shadow-upload-unmapped-until-fence" -or
-    $report.source_snapshot_bytes -ne (2 * $bufferBytes) -or
+    $report.source_snapshot_bytes -ne (4 * $bufferBytes) -or
     -not $report.upload_unmapped_after_registration -or
     $report.candidate_action_count -ne $CandidateActionCount -or
     $report.avoided_logical_bytes_per_optimized_run -ne $expectedLogicalBytes -or
@@ -290,6 +295,21 @@ if ($report.mode -ne
     -not $report.explicit_invalidation_guard_passed -or
     -not $report.fence_completed_in_all_runs -or
     -not $report.rollback_restored_in_all_runs -or
+    -not $report.lane_isolation_verified_in_all_runs -or
+    -not $report.queue_submission_verified_in_all_runs -or
+    $report.native_execution_gate_passed -ne
+        ($hardwareEnabled -and $TrialPairs -ge 10) -or
+    $report.required_forwarded_copies_per_optimized_run -ne 8 -or
+    $report.transfer_descriptor.backend -ne 2 -or
+    $report.transfer_backend_id -ne 2 -or
+    $report.transfer_descriptor.operation -ne 2 -or
+    $report.transfer_topology.queue_count -ne 1 -or
+    $report.transfer_topology.execution_scope_count -ne 2 -or
+    $report.transfer_topology.source_resource_count -ne 2 -or
+    $report.transfer_topology.destination_resource_count -ne 2 -or
+    $report.transfer_topology.lane_count -ne 2 -or
+    $report.transfer_topology.fence_count -ne 1 -or
+    $report.transfer_topology.runtime_event_count -ne $expectedRuntimeEventCount -or
     $report.authorization_run_count -ne $expectedAuthorizationRuns -or
     $report.authorization_latency_microseconds.count -ne
         $expectedAuthorizationRuns -or
@@ -297,16 +317,19 @@ if ($report.mode -ne
     $report.managed_end_to_end_microseconds.optimized.count -ne $TrialPairs -or
     $report.managed_end_to_end_microseconds.delta.count -ne $TrialPairs -or
     $report.claim_scope -ne
-        "owned-d3d12-copy-buffer-region-fluidgateway-authorized-exact-content-elision") {
-    throw "Gateway-managed D3D12 report violated the v0.20 closed-loop contract."
+        "owned-d3d12-multi-lane-copy-buffer-fluidgateway-authorized-exact-content-elision") {
+    throw "Gateway-managed D3D12 report violated the v0.21 transfer contract."
 }
 
 if ($hardwareEnabled -and $TrialPairs -ge 10 -and
-    -not $report.performance_claim_allowed) {
-    throw "Hardware D3D12 performance evidence did not pass its fixed gate."
+    -not $report.native_execution_gate_passed) {
+    throw "Hardware D3D12 native execution evidence did not pass its fixed gate."
 }
 if (-not $hardwareEnabled -and
-    ($report.performance_claim_allowed -or
+    ($report.native_execution_gate_passed -or
+     $report.performance_claim_allowed -or
+     $report.native_execution_gate_blockers -notcontains
+        "software-adapter-not-hardware" -or
      $report.performance_claim_blockers -notcontains
         "software-adapter-not-hardware")) {
     throw "WARP report did not preserve the hardware-only performance boundary."
@@ -333,9 +356,18 @@ if ($report.authorizations | Where-Object {
     $_.native_action_mask -ne 16 -or
     $_.native_action_budget -ne $CandidateActionCount -or
     $_.runtime_event_count -ne $expectedRuntimeEventCount -or
+    $_.transfer_descriptor.backend -ne 2 -or
+    $_.transfer_descriptor.operation -ne 2 -or
+    $_.transfer_topology.queue_count -ne 1 -or
+    $_.transfer_topology.execution_scope_count -ne 2 -or
+    $_.transfer_topology.source_resource_count -ne 2 -or
+    $_.transfer_topology.destination_resource_count -ne 2 -or
+    $_.transfer_topology.lane_count -ne 2 -or
+    $_.transfer_topology.fence_count -ne 1 -or
+    $_.transfer_topology.runtime_event_count -ne $expectedRuntimeEventCount -or
     $_.round_trip_count -ne 10 -or
     $_.authorization_scope -ne
-        "owned-d3d12-process-bound-copy-buffer-candidates-native-exact-content-final-gate"
+        "owned-d3d12-process-bound-multi-lane-copy-buffer-final-gate"
 }) {
     throw "A D3D12 authorization drifted from the exact FluidGateway contract."
 }
@@ -344,23 +376,34 @@ if ($report.trials | Where-Object {
     $_.baseline.optimized -or
     $_.baseline.gateway_authorization -ne $null -or
     $_.baseline.tracked_copy_count -ne $expectedTrackedCopyCount -or
-    $_.baseline.source_snapshot_bytes -ne (2 * $bufferBytes) -or
+    $_.baseline.transfer_backend_id -ne 2 -or
+    $_.baseline.source_snapshot_bytes -ne (4 * $bufferBytes) -or
     -not $_.baseline.upload_unmapped_after_registration -or
     $_.baseline.forwarded_copy_count -ne $expectedTrackedCopyCount -or
     $_.baseline.skipped_copy_count -ne 0 -or
-    $_.baseline.automatic_invalidation_count -ne 1 -or
+    $_.baseline.automatic_invalidation_count -ne 2 -or
+    $_.baseline.explicit_invalidation_count -ne 2 -or
+    -not $_.baseline.lane_isolation_verified -or
+    -not $_.baseline.queue_submission_verified -or
+    $_.baseline.queue_execute_count -ne 1 -or
+    $_.baseline.queue_signal_count -ne 1 -or
+    $_.baseline.submitted_scope_count -ne 2 -or
     $_.baseline.published_policy_action_mask -ne 0 -or
     $_.baseline.published_policy_action_budget -ne 0 -or
     -not $_.optimized.optimized -or
     $_.optimized.gateway_authorization -eq $null -or
     $_.optimized.tracked_copy_count -ne $expectedTrackedCopyCount -or
-    $_.optimized.source_snapshot_bytes -ne (2 * $bufferBytes) -or
+    $_.optimized.transfer_backend_id -ne 2 -or
+    $_.optimized.source_snapshot_bytes -ne (4 * $bufferBytes) -or
     -not $_.optimized.upload_unmapped_after_registration -or
-    $_.optimized.forwarded_copy_count -ne 4 -or
+    $_.optimized.forwarded_copy_count -ne 8 -or
     $_.optimized.skipped_copy_count -ne $CandidateActionCount -or
-    $_.optimized.automatic_invalidation_count -ne 1 -or
+    $_.optimized.automatic_invalidation_count -ne 2 -or
+    $_.optimized.explicit_invalidation_count -ne 2 -or
+    -not $_.optimized.lane_isolation_verified -or
+    -not $_.optimized.queue_submission_verified -or
     $_.optimized.skipped_copy_bytes -ne $expectedLogicalBytes -or
-    $_.optimized.exact_comparison_count -ne ($CandidateActionCount + 1) -or
+    $_.optimized.exact_comparison_count -ne ($CandidateActionCount + 2) -or
     $_.optimized.published_policy_action_mask -ne 16 -or
     $_.optimized.published_policy_action_budget -ne $CandidateActionCount -or
     -not $_.content_equivalent -or

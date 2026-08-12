@@ -19,12 +19,15 @@ public sealed record GatewayD3D12CopyLabOptions(
     bool UseHardware)
 {
     public const ulong BufferBytes = 4UL * 1024UL * 1024UL;
-    public const ulong SourceSnapshotBytes = 2 * BufferBytes;
+    public const ulong UploadResourceBytes = 2 * BufferBytes;
+    public const ulong SourceSnapshotBytes = 2 * UploadResourceBytes;
+    public const ulong RetainedCapacityBytes = 2 * BufferBytes;
     public const int MaximumCandidateActionCount = 128;
 
     public const string Usage =
         "Usage: fluidruntime gateway-d3d12-copy-lab " +
-        "--target <d3d12-hook-target.exe> --hook <d3d12-hook.dll> " +
+        "--target <d3d12-transfer-target.exe> " +
+        "--hook <d3d12-transfer-hook.dll> " +
         "--out <report.json> --gateway-pid <pid> " +
         "--gateway-executable-sha256 <sha256> " +
         "[--host 127.0.0.1] [--port <port>] [--timeout-ms <milliseconds>] " +
@@ -152,6 +155,9 @@ public sealed record GatewayD3D12CopyLabOptions(
             TimeSpan.FromMilliseconds(TimeoutMs),
             GatewayProcessId,
             GatewayExecutableSha256);
+
+    public NativeTransferTopology CreateTransferTopology() =>
+        NativeTransferTopology.D3D12MultiLane((ulong)CandidateActionCount);
 
     private static string RequireSha256(string value)
     {
