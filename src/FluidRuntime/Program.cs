@@ -14,6 +14,15 @@ public static class RuntimeApplication
         if (args.Length > 0 &&
             string.Equals(
                 args[0],
+                "gateway-d3d12-copy-lab",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return await GatewayD3D12CopyLabCommand.RunAsync(args);
+        }
+
+        if (args.Length > 0 &&
+            string.Equals(
+                args[0],
                 "d3d12-observe-lab",
                 StringComparison.OrdinalIgnoreCase))
         {
@@ -109,6 +118,7 @@ public static class RuntimeApplication
             Console.WriteLine(GatewayUpdateUploadLabOptions.Usage);
             Console.WriteLine(FluidLinkProbeOptions.Usage);
             Console.WriteLine(D3D12ObservationLabOptions.Usage);
+            Console.WriteLine(GatewayD3D12CopyLabOptions.Usage);
             return 0;
         }
 

@@ -108,6 +108,14 @@ coordinate the interfaces the operating system and graphics APIs expose.
   concurrency 1/2/4/8 benchmark validates exact decisions, unique contexts,
   peer stability, and transport tails. Gateway 0.67 removes a bounded-slot
   turnover race while preserving saturation rejection.
+- **v0.20.0:** first Gateway-authorized native D3D12 action. A dedicated DLL
+  patches one owned COPY command list and may elide up to 128 exact redundant
+  4 MiB `CopyBufferRegion` calls to one copy-only DEFAULT buffer. A bounded
+  CPU shadow avoids repeated reads from write-combined UPLOAD memory; automatic
+  and explicit invalidation, four required guard copies, fences, readback,
+  Debug Layer validation, atomic rollback, WARP/fault controls, and 10-pair RX
+  580 end-to-end evidence all pass. Logical skipped bytes remain distinct from
+  measured physical RAM/VRAM or PCIe traffic.
 
 ## Next Milestones
 
@@ -130,16 +138,14 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Generalize live FluidGateway authorization only after each new native pattern
   has equivalence, provenance, budget, expiration, and rollback evidence.
 
-### v0.20: Bounded D3D12 Actuation
+### D3D12 Generalization
 
-- Extend the owned observer to map/unmap, placed resources, textures, copy
-  regions, multiple command lists/queues, aliases, and residency signals.
-- Build a D3D12-specific provenance and synchronization model. Do not reuse
-  D3D11 generation assumptions where explicit states, queues, and fences differ.
-- Add alternating baseline/optimized evidence for one exact redundant transfer.
-- Keep actuation disabled until final content, Debug Layer cleanliness,
-  resource-state correctness, queue ordering, bounded authority, and rollback
-  all pass on WARP and hardware.
+- Extend the proven buffer path to placed resources, textures, copy regions,
+  multiple command lists/queues, aliases, and residency signals.
+- Add fence- and queue-aware provenance before widening authority. The v0.20
+  action remains disabled outside its single-list, single-buffer contract.
+- Measure CPU-shadow construction and reuse thresholds for smaller candidate
+  sets so the proof cost never silently exceeds the avoided work.
 
 ### v0.21: Owned Vulkan Backend
 

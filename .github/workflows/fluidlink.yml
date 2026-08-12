@@ -53,7 +53,7 @@ jobs:
         run: >-
           dotnet test tests/FluidRuntime.Tests/FluidRuntime.Tests.csproj
           --no-restore
-          --filter "FullyQualifiedName~FluidLink|FullyQualifiedName~GatewayUpdateUpload|FullyQualifiedName~OwnedBinaryBinding|FullyQualifiedName~WindowsLoopbackPeerVerifier"
+          --filter "FullyQualifiedName~FluidLink|FullyQualifiedName~GatewayUpdateUpload|FullyQualifiedName~D3D12CopyElision|FullyQualifiedName~OwnedBinaryBinding|FullyQualifiedName~WindowsLoopbackPeerVerifier"
 
       - name: Test Python and .NET intercommunication
         shell: powershell
@@ -71,6 +71,16 @@ jobs:
         shell: powershell
         run: >-
           ./tools/Test-GatewayManagedUpdateUpload.ps1
+          -GatewayPath "$PWD/FluidGateway"
+          -CandidateActionCount 128
+          -TrialPairs 2
+          -WarmupPairs 0
+          -Hardware $false
+
+      - name: Test Gateway-authorized D3D12 actuation and fallback
+        shell: powershell
+        run: >-
+          ./tools/Test-GatewayManagedD3D12Copy.ps1
           -GatewayPath "$PWD/FluidGateway"
           -CandidateActionCount 128
           -TrialPairs 2
@@ -95,3 +105,7 @@ jobs:
             artifacts/gateway-update-upload-invalid-response-fail-closed-128.json
             artifacts/gateway-update-upload-fail-closed-128.json
             artifacts/gateway-update-upload-slow-response-fail-closed-128.json
+            artifacts/gateway-d3d12-copy-control.json
+            artifacts/gateway-d3d12-copy-invalid-response-fail-closed.json
+            artifacts/gateway-d3d12-copy-fail-closed.json
+            artifacts/gateway-d3d12-copy-slow-response-fail-closed.json

@@ -7,13 +7,20 @@ using FluidRuntime.Native;
 
 namespace FluidRuntime.Runtime;
 
+public enum GatewayUploadBackend
+{
+    D3D11UpdateSubresource = 0,
+    D3D12CopyBufferRegion = 1
+}
+
 public sealed record GatewayUpdateUploadAuthorizationRequest(
     int PairIndex,
     string Phase,
     ulong ResourceBytes,
     ulong CandidateActionCount,
     string TargetSha256,
-    string HookSha256);
+    string HookSha256,
+    GatewayUploadBackend Backend = GatewayUploadBackend.D3D11UpdateSubresource);
 
 public sealed record GatewayUpdateUploadAuthorization(
     string Protocol,
@@ -55,14 +62,20 @@ public sealed record GatewayUpdateUploadAuthorization(
     string AuthorizationScope,
     IReadOnlyList<string> NativeSafetyGuards)
 {
+    public GatewayUploadBackend Backend { get; init; } =
+        GatewayUploadBackend.D3D11UpdateSubresource;
+
     public void EnsureMatchesNativePolicy(
         ulong expectedResourceBytes,
         ulong expectedActionCount,
         int expectedPairIndex,
         string expectedPhase,
         string expectedTargetSha256,
-        string expectedHookSha256)
+        string expectedHookSha256,
+        GatewayUploadBackend expectedBackend =
+            GatewayUploadBackend.D3D11UpdateSubresource)
     {
+        var profile = GatewayUploadAuthorizationProfiles.For(expectedBackend);
         var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
             FluidLinkV2Capability.Heartbeat |
             FluidLinkV2Capability.MemoryTransit |
@@ -75,7 +88,8 @@ public sealed record GatewayUpdateUploadAuthorization(
             expectedResourceBytes,
             expectedActionCount,
             expectedTargetSha256,
-            expectedHookSha256);
+            expectedHookSha256,
+            expectedBackend);
         var expectedContext = FluidLinkGatewayUpdateUploadAuthorizer
             .ComputeAuthorizationContextSha256(
                 AuthorizationNonce,
@@ -83,14 +97,15 @@ public sealed record GatewayUpdateUploadAuthorization(
                 PeerExecutableSha256,
                 PeerProcessStartedAtUtc,
                 request,
-                HookRingReader.SkipRedundantUpdateSubresourceAction,
+                profile.NativeActionMask,
                 expectedActionCount);
         if (!Authorized ||
             Protocol != FluidLinkV2Protocol.Version ||
             ContractSha256 != FluidLinkV2BatchProtocol.ContractSha256 ||
             WireSessionId.Length != 32 ||
             WireSessionId.Any(character => !Uri.IsHexDigit(character)) ||
-            RuntimeSessionId != $"gateway-update-{expectedContext}" ||
+            RuntimeSessionId != $"{profile.SessionPrefix}-{expectedContext}" ||
+            Backend != expectedBackend ||
             PairIndex != expectedPairIndex ||
             !string.Equals(Phase, expectedPhase, StringComparison.Ordinal) ||
             AdvertisedServerName != "fluidgateway" ||
@@ -118,7 +133,7 @@ public sealed record GatewayUpdateUploadAuthorization(
             CandidatePolicy != "deduplicate-identical-transfer" ||
             CandidateDecisionCount != expectedActionCount ||
             AuthorizedLogicalBytes != expectedLogicalBytes ||
-            NativeActionMask != HookRingReader.SkipRedundantUpdateSubresourceAction ||
+            NativeActionMask != profile.NativeActionMask ||
             NativeActionBudget != expectedActionCount ||
             RuntimeEventCount != checked((int)expectedActionCount + 7) ||
             RoundTripCount != 10 ||
@@ -126,7 +141,8 @@ public sealed record GatewayUpdateUploadAuthorization(
             BytesReceived <= 0 ||
             AuthorizationLatencyMicroseconds <= 0 ||
             AuthorizationLatencyMicroseconds >
-                checked((long)AuthorizationDeadlineMilliseconds * 1000))
+                checked((long)AuthorizationDeadlineMilliseconds * 1000) ||
+            AuthorizationScope != profile.AuthorizationScope)
         {
             throw new InvalidDataException(
                 "FluidGateway authorization does not match the bounded native policy.");
@@ -135,6 +151,56 @@ public sealed record GatewayUpdateUploadAuthorization(
 
     private static bool IsSha256(string value) =>
         value.Length == 64 && value.All(Uri.IsHexDigit);
+}
+
+internal sealed record GatewayUploadAuthorizationProfile(
+    ulong NativeActionMask,
+    string NoncePrefix,
+    string SessionPrefix,
+    string ContextVersion,
+    string AuthorizationScope,
+    IReadOnlyList<string> NativeSafetyGuards);
+
+internal static class GatewayUploadAuthorizationProfiles
+{
+    public static GatewayUploadAuthorizationProfile For(
+        GatewayUploadBackend backend) => backend switch
+        {
+            GatewayUploadBackend.D3D11UpdateSubresource => new(
+                HookRingReader.SkipRedundantUpdateSubresourceAction,
+                "gateway-update",
+                "gateway-update",
+                "fluidruntime-gateway-update-upload-authorization-context-v2",
+                "owned-d3d11-process-bound-candidates-native-exact-content-final-gate",
+                [
+                    "expected loopback peer PID and executable SHA matched through the OS TCP owner table",
+                "owned target and hook binaries frozen before authorization",
+                "owned cooperative target only",
+                "exact full-buffer content comparison before every skipped call",
+                "mutation and external-write generation invalidation",
+                "one resource and four MiB retained-content bound",
+                "one short-lived native policy epoch with a fixed action budget",
+                "post-detach content equivalence and rollback verification"
+                ]),
+            GatewayUploadBackend.D3D12CopyBufferRegion => new(
+                HookRingReader.SkipRedundantD3D12CopyBufferRegionAction,
+                "gateway-d3d12-copy",
+                "gateway-d3d12-copy",
+                "fluidruntime-gateway-d3d12-copy-buffer-authorization-context-v1",
+                "owned-d3d12-process-bound-copy-buffer-candidates-native-exact-content-final-gate",
+                [
+                    "expected loopback peer PID and executable SHA matched through the OS TCP owner table",
+                "owned target and D3D12 hook binaries frozen before authorization",
+                "one owned copy command list and one registered copy-only destination",
+                "exact full-buffer comparison against a registration-frozen CPU shadow before every skipped CopyBufferRegion call",
+                "unmodeled writes to the registered destination invalidate retained content before later candidates",
+                "registered CPU shadow matched to an upload range kept unmapped through the completion fence",
+                "Close, Reset, CopyResource, CopyTextureRegion, and explicit invalidation clear retained state",
+                "one four MiB retained-content cache and one bounded native policy epoch",
+                "fence completion, final readback equivalence, and vtable rollback verification"
+                ]),
+            _ => throw new ArgumentOutOfRangeException(nameof(backend))
+        };
 }
 
 public interface IGatewayUpdateUploadAuthorizer
@@ -148,12 +214,9 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     IGatewayUpdateUploadAuthorizer
 {
     private const string ClientName = "fluidruntime-gateway-manager";
-    private const string ClientVersion = "0.19.0";
+    private const string ClientVersion = "0.20.0";
     private const string ExpectedAdvertisedServerName = "fluidgateway";
     private const int AuthorizationRoundTrips = 10;
-    private const string ContextVersion =
-        "fluidruntime-gateway-update-upload-authorization-context-v2";
-
     private readonly string host;
     private readonly int port;
     private readonly TimeSpan deadline;
@@ -210,8 +273,9 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         deadlineSource.CancelAfter(deadline);
         try
         {
+            var profile = GatewayUploadAuthorizationProfiles.For(request.Backend);
             var token = Guid.NewGuid().ToString("N");
-            var authorizationNonce = $"gateway-update-{token}";
+            var authorizationNonce = $"{profile.NoncePrefix}-{token}";
             var ramResourceId = $"ram-source-{token}";
             var vramResourceId = $"vram-target-{token}";
 
@@ -234,9 +298,9 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 peer.ExecutableSha256,
                 peer.ProcessStartedAtUtc,
                 request,
-                HookRingReader.SkipRedundantUpdateSubresourceAction,
+                profile.NativeActionMask,
                 request.CandidateActionCount);
-            var runtimeSessionId = $"gateway-update-{contextSha256}";
+            var runtimeSessionId = $"{profile.SessionPrefix}-{contextSha256}";
             var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
                 FluidLinkV2Capability.Heartbeat |
                 FluidLinkV2Capability.MemoryTransit |
@@ -385,6 +449,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     {
         ValidateRequest(request);
         ArgumentNullException.ThrowIfNull(peer);
+        var profile = GatewayUploadAuthorizationProfiles.For(request.Backend);
         var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
             FluidLinkV2Capability.Heartbeat |
             FluidLinkV2Capability.MemoryTransit |
@@ -398,7 +463,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             peer.ExecutableSha256,
             peer.ProcessStartedAtUtc,
             request,
-            HookRingReader.SkipRedundantUpdateSubresourceAction,
+            profile.NativeActionMask,
             request.CandidateActionCount);
         var decisionsMatch = candidateDecisions.Count ==
                 checked((int)request.CandidateActionCount) &&
@@ -416,7 +481,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             welcome.MaxPayloadBytes == FluidLinkV2Protocol.MaxPayloadBytes &&
             (requiredCapabilities & ~welcome.AcceptedCapabilities) == 0 &&
             string.Equals(heartbeat, expectedHeartbeat, StringComparison.Ordinal) &&
-            runtimeSessionId == $"gateway-update-{expectedContext}" &&
+            runtimeSessionId == $"{profile.SessionPrefix}-{expectedContext}" &&
             authorizationContextSha256 == expectedContext &&
             peer.ProcessId > 0 &&
             !string.IsNullOrWhiteSpace(peer.ExecutablePath) &&
@@ -474,7 +539,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 FluidLinkV2DecisionOpcode.DeduplicateIdenticalTransfer),
             request.CandidateActionCount,
             expectedLogicalBytes,
-            HookRingReader.SkipRedundantUpdateSubresourceAction,
+            profile.NativeActionMask,
             request.CandidateActionCount,
             RuntimeEventCount: checked((int)request.CandidateActionCount + 7),
             roundTripCount,
@@ -482,26 +547,19 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             bytesReceived,
             authorizationLatencyMicroseconds,
             Authorized: true,
-            AuthorizationScope:
-                "owned-d3d11-process-bound-candidates-native-exact-content-final-gate",
-            NativeSafetyGuards:
-            [
-                "expected loopback peer PID and executable SHA matched through the OS TCP owner table",
-                "owned target and hook binaries frozen before authorization",
-                "owned cooperative target only",
-                "exact full-buffer content comparison before every skipped call",
-                "mutation and external-write generation invalidation",
-                "one resource and four MiB retained-content bound",
-                "one short-lived native policy epoch with a fixed action budget",
-                "post-detach content equivalence and rollback verification"
-            ]);
+            profile.AuthorizationScope,
+            profile.NativeSafetyGuards)
+        {
+            Backend = request.Backend
+        };
         evidence.EnsureMatchesNativePolicy(
             request.ResourceBytes,
             request.CandidateActionCount,
             request.PairIndex,
             request.Phase,
             request.TargetSha256,
-            request.HookSha256);
+            request.HookSha256,
+            request.Backend);
         return evidence;
     }
 
@@ -523,9 +581,10 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         var peerSha256 = RequireSha256(
             peerExecutableSha256,
             nameof(peerExecutableSha256));
-        var canonical = string.Join('\n',
-        [
-            $"context_version={ContextVersion}",
+        var profile = GatewayUploadAuthorizationProfiles.For(request.Backend);
+        var canonicalLines = new List<string>
+        {
+            $"context_version={profile.ContextVersion}",
             $"protocol={FluidLinkV2Protocol.Version}",
             $"contract_sha256={FluidLinkV2BatchProtocol.ContractSha256}",
             $"nonce={nonce}",
@@ -540,7 +599,12 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             $"candidate_action_count={request.CandidateActionCount}",
             $"native_action_mask={nativeActionMask}",
             $"native_action_budget={nativeActionBudget}"
-        ]);
+        };
+        if (request.Backend != GatewayUploadBackend.D3D11UpdateSubresource)
+        {
+            canonicalLines.Insert(1, $"backend={request.Backend}");
+        }
+        var canonical = string.Join('\n', canonicalLines);
         return Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant();
@@ -554,7 +618,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             request.Phase is not ("warmup" or "measured") ||
             request.ResourceBytes == 0 ||
             request.CandidateActionCount is 0 or
-                > HookRingReader.MaxControlActionBudget)
+                > HookRingReader.MaxControlActionBudget ||
+            !Enum.IsDefined(request.Backend))
         {
             throw new ArgumentException(
                 "Gateway update authorization request is outside the native policy bounds.",

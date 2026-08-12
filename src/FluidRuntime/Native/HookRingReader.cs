@@ -17,10 +17,12 @@ public sealed class HookRingReader : IDisposable
     public const int ExpectedMappingSize =
         HeaderSize + (int)ExpectedCapacity * ExpectedEventSize;
     public const string MappingNamePrefix = "Local\\FluidRuntimeHook-";
+    public const string D3D12MappingNamePrefix = "Local\\FluidRuntimeD3D12Hook-";
     public const ulong SkipRedundantCopyResourceAction = 1;
     public const ulong SkipRedundantReadbackCopyAction = 2;
     public const ulong SkipRedundantUploadCopyAction = 4;
     public const ulong SkipRedundantUpdateSubresourceAction = 8;
+    public const ulong SkipRedundantD3D12CopyBufferRegionAction = 16;
     public const ulong MaxControlActionBudget = 128;
 
     private const int ControlPublishedEpochOffset = 72;
@@ -110,6 +112,9 @@ public sealed class HookRingReader : IDisposable
 
     public static HookRingReader OpenForProcess(int processId) =>
         Open(MappingNamePrefix + processId);
+
+    public static HookRingReader OpenD3D12ForProcess(int processId) =>
+        Open(D3D12MappingNamePrefix + processId);
 
     public static HookRingReader Open(string mappingName)
     {
@@ -226,6 +231,14 @@ public sealed class HookRingReader : IDisposable
             lifetime,
             actionBudget,
             SkipRedundantUpdateSubresourceAction);
+
+    public HookControlPolicy PublishD3D12CopyBufferRegionElisionPolicy(
+        TimeSpan lifetime,
+        ulong actionBudget) =>
+        PublishBoundedControlPolicy(
+            lifetime,
+            actionBudget,
+            SkipRedundantD3D12CopyBufferRegionAction);
 
     private HookControlPolicy PublishBoundedControlPolicy(
         TimeSpan lifetime,

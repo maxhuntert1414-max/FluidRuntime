@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.16.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.20.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -22,6 +22,20 @@ target_link_libraries(fluidruntime-native-probe PRIVATE pdh psapi)
 add_executable(fluidruntime-d3d12-observation src/d3d12_observation.cpp)
 configure_fluidruntime_native_target(fluidruntime-d3d12-observation)
 target_link_libraries(fluidruntime-d3d12-observation PRIVATE d3d12 dxgi)
+
+add_library(fluidruntime-d3d12-hook SHARED src/d3d12_hook.cpp)
+configure_fluidruntime_native_target(fluidruntime-d3d12-hook)
+target_compile_definitions(
+    fluidruntime-d3d12-hook
+    PRIVATE FLUIDRUNTIME_D3D12_HOOK_EXPORTS
+)
+target_include_directories(fluidruntime-d3d12-hook PRIVATE include)
+target_link_libraries(fluidruntime-d3d12-hook PRIVATE d3d12)
+
+add_executable(fluidruntime-d3d12-hook-target src/d3d12_hook_target.cpp)
+configure_fluidruntime_native_target(fluidruntime-d3d12-hook-target)
+target_include_directories(fluidruntime-d3d12-hook-target PRIVATE include)
+target_link_libraries(fluidruntime-d3d12-hook-target PRIVATE d3d12 dxgi)
 
 add_library(fluidruntime-present-hook SHARED src/present_hook.cpp)
 configure_fluidruntime_native_target(fluidruntime-present-hook)
@@ -59,6 +73,33 @@ add_test(
 )
 set_tests_properties(
     fluidruntime-d3d12-observation-rejects-invalid-timeout
+    PROPERTIES WILL_FAIL TRUE
+)
+add_test(
+    NAME fluidruntime-d3d12-copy-elision-baseline
+    COMMAND fluidruntime-d3d12-hook-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+)
+add_test(
+    NAME fluidruntime-d3d12-copy-elision-controlled
+    COMMAND fluidruntime-d3d12-hook-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-hook>
+        --hardware false
+        --candidate-count 16
+        --hold-ms 1
+        --self-publish-control
+)
+add_test(
+    NAME fluidruntime-d3d12-copy-elision-rejects-invalid-count
+    COMMAND fluidruntime-d3d12-hook-target
+        --hook $<TARGET_FILE:fluidruntime-d3d12-hook>
+        --candidate-count 129
+)
+set_tests_properties(
+    fluidruntime-d3d12-copy-elision-rejects-invalid-count
     PROPERTIES WILL_FAIL TRUE
 )
 add_test(

@@ -33,6 +33,10 @@ enum class FluidHookEventTypeV1 : std::uint32_t {
     clear_unordered_access_view_float = 14,
     control_policy_accepted = 15,
     map_read = 16,
+    d3d12_copy_buffer_region = 17,
+    d3d12_resource_invalidate = 18,
+    d3d12_command_list_close = 19,
+    d3d12_command_list_reset = 20,
 };
 
 constexpr std::uint32_t fluid_hook_event_flag_redundant_candidate = 1;
@@ -42,6 +46,8 @@ constexpr std::uint32_t fluid_hook_event_flag_precise_subresource_write = 8;
 constexpr std::uint32_t fluid_hook_event_flag_readback_transfer = 16;
 constexpr std::uint32_t fluid_hook_event_flag_upload_transfer = 32;
 constexpr std::uint32_t fluid_hook_event_flag_content_compared = 64;
+constexpr std::uint32_t fluid_hook_event_flag_immutable_upload_source = 128;
+constexpr std::uint32_t fluid_hook_event_flag_explicit_invalidation = 256;
 constexpr std::uint32_t fluid_hook_attach_flag_skip_first_redundant_copy = 1;
 constexpr std::uint32_t fluid_hook_attach_flag_track_resource_lifetime = 2;
 constexpr std::uint32_t fluid_hook_attach_flag_allow_control_policy = 4;
@@ -51,6 +57,8 @@ constexpr std::uint64_t fluid_hook_control_action_skip_redundant_readback_copy =
 constexpr std::uint64_t fluid_hook_control_action_skip_redundant_upload_copy = 4;
 constexpr std::uint64_t
     fluid_hook_control_action_skip_redundant_update_subresource = 8;
+constexpr std::uint64_t
+    fluid_hook_control_action_skip_redundant_d3d12_copy_buffer_region = 16;
 constexpr std::uint64_t fluid_hook_control_max_action_budget = 128;
 
 enum class FluidHookControlStatusV1 : std::uint64_t {

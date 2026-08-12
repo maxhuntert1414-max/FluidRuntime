@@ -1,6 +1,6 @@
 # FluidRuntime Architecture
 
-FluidRuntime is the live observation and future actuation half of the Fluid
+FluidRuntime is the live observation and bounded actuation half of the Fluid
 project. FluidGateway turns PresentMon traces into ranked evidence and an
 operational ledger. FluidRuntime combines that ledger with live process,
 memory, GPU, and graphics API telemetry.
@@ -14,11 +14,14 @@ flowchart LR
     L --> MR
     NP[Native process and GPU probe] --> MR
     D12[D3D12 owned observer] --> MR
+    D12H[D3D12 cooperative hook] --> D12R[D3D12 shared-memory ring]
+    D12R --> MR
     D3D[D3D11 cooperative hook] --> R[Shared-memory event ring]
     R --> MR
     MR --> P[Validated control plan]
     P --> C[Shared-memory control block]
     C -. owned lab opt-in only .-> D3D
+    C -. owned D3D12 opt-in only .-> D12H
 ```
 
 ## Components
@@ -34,6 +37,10 @@ flowchart LR
 - `fluidruntime-d3d12-observation`: standalone owned 4 MiB
   UPLOAD/DEFAULT/READBACK workload with explicit queue, command, state, fence,
   exact-content, timing, architecture, and DXGI memory evidence.
+- `fluidruntime-d3d12-hook` and `fluidruntime-d3d12-hook-target`: dedicated
+  D3D12 COPY-command-list interception and deterministic baseline/optimized
+  workload with bounded exact-content elision, invalidation, fences, IPC, and
+  rollback. They do not share vtable state with the D3D11 hook.
 - `fluidruntime-present-hook`: cooperative D3D11 observation of Present,
   resource creation, retirement, pointer reuse, CPU reads/writes, updates, and
   GPU clears through owned RTV/UAV views, plus whole-resource and
@@ -99,13 +106,20 @@ frozen target/hook hashes, pair/phase, resource size/count, action mask, and
 budget. Runtime carries that digest in the session ID and every operation
 reason, then recomputes it before accepting the authorization.
 
-Successful authorization is converted locally to action bit 8 and budget 128.
+The D3D11 direct-update profile converts successful authorization to action bit
+8 and budget 128.
 It does not bypass the native proof. After the owned target and per-PID ring are
 opened, Runtime verifies the ring PID, launched executable path/hash, and loaded
 hook path/hash against the held binary binding before publishing one policy
 expiring within four seconds. Each candidate still requires trusted resource
 provenance, a matching destination generation, and exact full-buffer comparison
 before an atomic action reservation can skip the call.
+
+Version 0.20 adds a domain-separated D3D12 profile over the same FluidLink v2
+operation batch. Its nonce, session, context digest, scope, safety guards, and
+action bit 16 cannot be replayed as D3D11 authorization. Gateway remains the
+policy authority; a separate D3D12 per-PID ring carries only the short-lived
+native policy and evidence.
 
 Authorization failures happen before optimized target launch. Malformed frames,
 process/contract/capability drift, rejected decisions, and internal timeout
@@ -129,7 +143,7 @@ manager. The OS process binding narrows accidental/wrong-peer risk but is
 explicitly not cryptographic authentication against a hostile or compromised
 same-user peer.
 
-## Owned D3D12 Observation
+## Owned D3D12 Backend
 
 Version 0.16 introduces a separate executable instead of extending the D3D11
 hook or ABI. It selects WARP or a high-performance adapter, creates one COPY
@@ -152,6 +166,27 @@ schema rejects unknown and missing members. This path has no native policy
 block, no command skip, and no external target; its report always blocks a
 performance claim.
 
+Version 0.20 keeps that observer and adds a separate actuation DLL. It patches
+`Close`, `Reset`, `CopyBufferRegion`, `CopyTextureRegion`, and `CopyResource` on
+one exact owned COPY command list. Other command lists are forwarded unchanged.
+The registered destination is one 4 MiB committed DEFAULT buffer used as a
+copy-only resource inside the modeled workload.
+
+The owner supplies an 8 MiB CPU-cacheable shadow matching two immutable upload
+ranges, writes the same bytes into the UPLOAD resource, and unmaps it before
+recording commands. The hook retains at most one 4 MiB destination image and
+compares every candidate byte before reserving action bit 16. Partial or
+otherwise ineligible destination writes invalidate automatically; the owner can
+also invalidate explicitly. Close/reset and modeled copy writes clear retained
+state. A fence, final readback, unchanged shadow hashes, exact event sequence,
+Debug Layer state, and vtable restoration must all agree.
+
+The paired runner alternates baseline and optimized processes, includes Gateway
+authorization in managed end-to-end time, and reports CPU record,
+submit-to-fence, total workload, and COPY-queue timestamp p50/p95/p99. A positive
+claim requires hardware, at least ten pairs, negative managed/fence/GPU tails,
+and at least 80% optimized wins. WARP always blocks the claim.
+
 ## Hook Event Transport
 
 Version 0.12.0 publishes 80-byte ABI-v9 events into a 2,048-slot named
@@ -163,6 +198,11 @@ The mapping is local to the Windows session and named for the target PID. The
 header, control, and event layouts are versioned independently from the report
 schema. The mapping and retained forwarding metadata stay alive until the owned
 target exits; policy authority is disabled at detach.
+
+Version 0.20 reuses the ring/control wire layout under the distinct
+`Local\FluidRuntimeD3D12Hook-<pid>` namespace. D3D12 event types record tracked
+buffer copies, automatic/explicit invalidation, close, and reset without mixing
+the D3D11 and D3D12 hook lifecycles.
 
 The native writer:
 
@@ -197,7 +237,10 @@ The accepted action mask must be exactly one known action:
 `skip_redundant_copy_resource` (bit 1) or
 `skip_redundant_readback_copy` (bit 2) or
 `skip_redundant_upload_copy` (bit 4) or
-`skip_redundant_update_subresource` (bit 8). Version 0.12.0 accepts a bounded budget
+`skip_redundant_update_subresource` (bit 8) in the D3D11 hook, or
+`skip_redundant_d3d12_copy_buffer_region` (bit 16) in the separate D3D12 hook.
+Each hook accepts only its own action subset; combined or cross-backend masks
+fail closed. Version 0.12.0 accepts a bounded budget
 from 1 through 128; expiration must be in the future but no more than four
 seconds away. A combined mask, second epoch, unknown bit, out-of-range
 budget, or invalid expiration is rejected. `CopyResource` consults cached native
@@ -327,10 +370,11 @@ observe-only, and all regional copies remain forwarded.
 
 ## Known Limits
 
-- Native actuation remains D3D11-only. D3D12 currently observes one owned
-  buffer round trip; it does not hook, elide commands, or cover textures,
-  aliases, multiple queues, placed resources, or residency control. Vulkan is
-  not instrumented yet.
+- D3D12 actuation is limited to one owned COPY command list, one registered
+  copy-only 4 MiB DEFAULT buffer, immutable upload shadows, full-buffer
+  `CopyBufferRegion`, and a maximum 128-action epoch. Textures, aliases, placed
+  resources, multiple queues/lists, general synchronization, presentation, and
+  residency control are excluded. Vulkan is not instrumented yet.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
 - Shader draw/dispatch writes, UAV integer clears, depth/stencil clears, fences,

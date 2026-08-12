@@ -1,6 +1,6 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-11 para o release v0.19.0.
+Handoff atualizado em 2026-08-11 para o release v0.20.0.
 
 ## 1. Objetivo geral
 
@@ -16,9 +16,9 @@ Apple Silicon nem prometer FPS antes da prova.
 
 - `FluidGateway`: analise offline de PresentMon, diagnosticos, ranking, policy
   modeling e operational ledger.
-- `FluidRuntime`: telemetria Windows/GPU/memoria, hook D3D11 cooperativo,
-  observador D3D12 owned, shared-memory IPC, control plane, workloads, atuacao
-  limitada e evidence gates.
+- `FluidRuntime`: telemetria Windows/GPU/memoria, hooks D3D11 e D3D12
+  cooperativos, shared-memory IPC, control plane, workloads, atuacao limitada e
+  evidence gates.
 - `FluidLink`: contrato binario compartilhado e cliente .NET tipado para
   eventos/decisoes consultivas entre os dois repositorios.
 
@@ -56,6 +56,10 @@ Real e verificado em software owned:
   validacao e fallback; percentis p50/p95/p99 e stress concorrente 1/2/4/8.
 - observacao D3D12 owned de UPLOAD -> DEFAULT -> READBACK com COPY queue,
   promocao/barreira/decay, fence, conteudo exato, arquitetura e budgets DXGI.
+- atuacao D3D12 owned em uma COPY command list: action 16 autorizada pelo
+  Gateway, shadow CPU limitado, upload unmapped, comparacao exata, invalidacao
+  automatica/explicita, ate 128 `CopyBufferRegion` redundantes, fence, readback,
+  Debug Layer e rollback atomico.
 
 Ainda nao e real:
 
@@ -63,9 +67,9 @@ Ainda nao e real:
 - scheduler de threads do Windows;
 - residencia fisica RAM/VRAM, PCIe bytes ou unified memory;
 - texturas/boxes/pitches, buffers dynamic, `UpdateSubresource1` ou batching;
-- command lists/fences fora do workload D3D12 owned, deferred contexts e todos
-  os shader writes;
-- atuacao no presentation path ou D3D12 e qualquer backend Vulkan;
+- command lists/queues/fences fora do workload D3D12 owned, texturas, aliases,
+  placed resources, deferred contexts e todos os shader writes;
+- atuacao no presentation path e qualquer backend Vulkan;
 - claim geral de FPS, energia ou maquinas antigas.
 
 ## 4. Contrato FluidLink v0.14
@@ -131,24 +135,24 @@ O perfil historico de 64 candidatas continua selecionavel para regressao.
 `memcmp` prova igualdade. FNV-1a apenas rotula eventos. Retirement e detach
 apagam os bytes retidos.
 
-## 6. Evidencia local v0.19
+## 6. Evidencia local v0.20
 
-- managed tests: 178/178;
+- managed tests: 186/186;
 - FluidGateway completo: 259/259;
 - resiliencia do servidor: dez casos por dez repeticoes, 100/100;
-- CTests Release: 13/13; CTests Debug: 13/13;
-- WARP: 10/10 pares medidos mais um warmup; claim bloqueado apenas por adapter
-  de software;
-- RX 580: 10/10 pares medidos mais um warmup; delta ponta a ponta
-  p50/p95/p99 de -376.362,500 / -356.111,700 / -352.855,140 us;
-- stress 1/2/4/8: 128 autorizacoes medidas, 15 warmups, zero falhas e p99 x8
-  de 215.338,490 us contra budget de sessao de 250.000 us;
-- resposta malformada, stall e peer cumulativamente lento: baseline verificado,
-  134 forwarded, zero skips e nenhuma policy;
-- claim ponta a ponta owned aprovado no RX 580; TCP mantido somente para
-  controle por sessao, sem conclusao para hot path por frame;
-- nenhum fingerprint FluidLink, ABI nativo, limite de cache ou teto de action
-  foi ampliado.
+- CTests Release: 16/16; CTests Debug: 16/16;
+- D3D12 WARP: 10/10 pares medidos mais um warmup; claim bloqueado apenas por
+  adapter de software;
+- D3D12 RX 580: 10/10 pares medidos mais um warmup; delta ponta a ponta
+  p50/p95/p99 de -23.551,500 / -10.988,650 / -7.843,330 us;
+- submit-to-fence p50/p95/p99 de -48.442,000 / -46.138,850 / -44.852,570 us;
+- GPU timestamp p50/p95/p99 de -49.349,500 / -47.063,700 / -45.808,740 us;
+- cada optimized: quatro copias obrigatorias, 128 skips e 536.870.912 bytes
+  logicos; cada baseline: 132 tracked forwarded e zero skips;
+- resposta malformada, stall e peer cumulativamente lento: baseline D3D12
+  verificado, zero skips, nenhuma policy, conteudo/fence/rollback corretos;
+- claim ponta a ponta owned aprovado no RX 580; CPU record tails mistos seguem
+  publicados e bytes logicos nao sao trafego fisico.
 
 Evidencia historica v0.17:
 
@@ -266,6 +270,13 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -TrialPairs 10 `
   -WarmupPairs 1 `
   -Hardware $true
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/Test-GatewayManagedD3D12Copy.ps1 `
+  -GatewayPath ..\FluidGateway `
+  -CandidateActionCount 128 `
+  -TrialPairs 10 `
+  -WarmupPairs 1 `
+  -Hardware $true
 dotnet pack src/FluidLink/FluidLink.csproj -c Release `
   -o artifacts/packages
 cmake -S native -B native/build -A x64
@@ -284,6 +295,7 @@ dotnet run --project src/FluidRuntime -c Release -- update-upload-elision-lab `
 
 ## 9. Evidencia
 
+- [v0.20.0 D3D12 actuation](evidence/v0.20.0-d3d12-copy-elision.md)
 - [v0.19.0 timing ponta a ponta e concorrencia](evidence/v0.19.0-end-to-end-authorization.md)
 - [v0.18.0 resiliencia e perfil de 128 actions](evidence/v0.18.0-resilience-update-upload-128.md)
 - [v0.17.0 FluidLink operation batch](evidence/v0.17.0-fluidlink-operation-batch.md)
@@ -317,11 +329,11 @@ Depois, generalizar upload com seguranca: texturas e pitches canonicos, boxes pa
 contexts. O cache nao pode crescer sem limite e cada novo padrao precisa de
 equivalencia, regressao, budget, expiracao e rollback proprios.
 
-O primeiro caminho D3D12 owned ja existe e esta limpo no Debug Layer. Agora ele
-precisa crescer para map/unmap, texturas, copy regions, placed resources,
-aliases, multiplas queues e residency signals; depois vem proveniencia propria,
-baseline/optimized e somente entao uma action limitada. Nao reutilizar as
-suposicoes de geracao do D3D11 em estados/queues/fences explicitos.
+O primeiro caminho D3D12 owned agora tambem atua: uma COPY command list, um
+buffer DEFAULT, action 16, 128 candidatos, comparacao exata, invalidacoes,
+fence, readback e rollback passaram em WARP e RX 580. A generalizacao deve vir
+por proveniencia de queues/fences, texturas, copy regions, placed resources e
+aliases, sem ampliar a autoridade do perfil atual.
 
 Depois criar uma layer Vulkan opt-in separada para allocations/bindings,
 copies, layouts, queue-family ownership, semaphores/fences e present. Cada
@@ -331,7 +343,7 @@ External observation vem depois, com allowlist, consentimento, identidade do
 executavel, recusa de anti-cheat/elevated/protected e modo read-only antes de
 qualquer atuacao.
 
-Mensagem curta: v0.19 prova uma melhora ponta a ponta em um workload D3D11
-owned, incluindo autorizacao e efeito nativo, sem ampliar ABI, cache ou
-autoridade. Ainda nao ha atuacao D3D12/Vulkan nem claim de trafego fisico, FPS
-ou suporte a jogos externos.
+Mensagem curta: v0.20 prova a primeira melhora ponta a ponta em um workload
+D3D12 owned, incluindo autorizacao Gateway, efeito nativo, invalidacao,
+sincronizacao e rollback. Ainda nao ha Vulkan, trafego fisico medido, claim de
+FPS ou suporte a jogos externos.

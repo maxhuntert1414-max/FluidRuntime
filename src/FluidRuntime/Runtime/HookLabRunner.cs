@@ -287,14 +287,17 @@ public sealed class HookLabRunner
 
     internal static async Task<HookRingReader> OpenRingAsync(
         Process process,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool d3d12 = false)
     {
         var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 5;
         while (!process.HasExited && Stopwatch.GetTimestamp() < deadline)
         {
             try
             {
-                return HookRingReader.OpenForProcess(process.Id);
+                return d3d12
+                    ? HookRingReader.OpenD3D12ForProcess(process.Id)
+                    : HookRingReader.OpenForProcess(process.Id);
             }
             catch (Exception exception)
                 when (exception is FileNotFoundException or InvalidDataException)
@@ -304,7 +307,8 @@ public sealed class HookLabRunner
         }
 
         throw new InvalidOperationException(
-            $"Native hook ring for PID {process.Id} did not become available.");
+            $"Native {(d3d12 ? "D3D12 " : string.Empty)}hook ring for PID " +
+            $"{process.Id} did not become available.");
     }
 
     private sealed class OwnedProcessGuard(Process process) : IDisposable

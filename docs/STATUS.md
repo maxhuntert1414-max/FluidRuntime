@@ -1,21 +1,21 @@
 # Project Status
 
-FluidRuntime v0.19.0 is verified locally as of 2026-08-11. It measures live
-Gateway authorization, process startup, native action, validation, and fallback
-inside one end-to-end window while preserving both FluidLink v2 fingerprints,
-the native hook ABI, one-resource/4 MiB cache, and 128-action ceiling.
+FluidRuntime v0.20.0 is verified locally as of 2026-08-11. It adds the first
+Gateway-authorized native D3D12 action while retaining the existing D3D11 lanes
+and both FluidLink v2 fingerprints. The new backend is bounded to one owned COPY
+command list, one 4 MiB copy-only destination, and 128 exact actions.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.19.0`
+- Target branch/tag: `main` / `v0.20.0`
 - Canonical Gateway contract: [FluidGateway v0.67.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.0)
-- Target release: [FluidRuntime v0.19.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.19.0)
+- Target release: [FluidRuntime v0.20.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.20.0)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 178/178 passed.
+- Managed tests: 186/186 passed.
 - FluidGateway complete suite: 259/259 passed.
 - FluidGateway resilience suite: ten adversarial cases passed ten consecutive
   runs, for 100/100 total.
@@ -28,21 +28,25 @@ the native hook ABI, one-resource/4 MiB cache, and 128-action ceiling.
   `9a626d9b257dd7341a090a49ca649bbc88c0c3ba32ba1edabbf18166a321aeea`.
 - FluidLink frame bytes: 3,189 for v1 versus 1,880 for v2, saving 1,309
   bytes or 41.05% for the same cross-process semantic flow.
-- The final WARP gate passed 10/10 measured pairs plus one warmup; its performance
-  claim remains blocked because WARP is a software adapter.
-- The final RX 580 gate passed 10/10 measured pairs plus one warmup: end-to-end
-  delta p50/p95/p99 was -376,362.500 / -356,111.700 / -352,855.140 us.
+- The final D3D12 WARP gate passed 10/10 measured pairs plus one warmup; its
+  performance claim remains blocked because WARP is a software adapter.
+- The final D3D12 RX 580 gate passed 10/10 measured pairs plus one warmup:
+  managed end-to-end delta p50/p95/p99 was
+  -23,551.500 / -10,988.650 / -7,843.330 us.
+- RX 580 submit-to-fence delta p50/p95/p99 was
+  -48,442.000 / -46,138.850 / -44,852.570 us; GPU timestamp delta was
+  -49,349.500 / -47,063.700 / -45,808.740 us.
 - Concurrent authorization completed 128 measured requests plus 15 warmups with
   zero failures. Concurrency-8 p99 was 215,338.490 us against a 250,000 us
   session-level budget.
 - Each optimized 128-candidate run skipped 128 exact 4 MiB duplicates and
   accounted for 536,870,912 logical API bytes. This is not a physical-transfer
   counter.
-- Malformed, stalled, and cumulatively slow peers each published no policy and
-  launched a clean baseline with 134 forwarded calls and zero skips.
+- Malformed, stalled, and cumulatively slow peers each published no D3D12 policy
+  and launched a clean baseline with 132 tracked calls forwarded and zero skips.
 - `FluidLink.0.3.0.nupkg` inspected with the DLL, README, v1/base-v2/batch
   contracts, and both v2 golden-vector files present.
-- Native tests: 13/13 Release and 13/13 Debug passed.
+- Native tests: 16/16 Release and 16/16 Debug passed.
 - Negative control-policy matrix: 320/320 WARP processes passed.
 - Exact local CI evidence contract: passed.
 - Remote CI remains a separate required gate for pushed `main` and release tags.
@@ -86,6 +90,29 @@ The v0.15 closed-loop gate also passed:
 
 The v0.15 code does not modify native source or ABI. It adds a fail-closed bridge
 that may publish the existing action-8 policy only after exact live decisions.
+
+## New In v0.20.0
+
+- `fluidruntime-d3d12-hook.dll` patches five methods on one exact owned COPY
+  command list and forwards every unrelated object unchanged.
+- `gateway-d3d12-copy-lab` uses a domain-separated FluidGateway authorization
+  profile and maps accepted decisions to action bit 16 with budget 1..128.
+- One 8 MiB CPU-cacheable shadow matches an UPLOAD resource that is unmapped
+  before command recording. The hook retains at most one 4 MiB destination
+  image and performs a full comparison before every candidate action.
+- One partial destination write proves automatic invalidation; an explicit
+  invalidation and command-list close prove separate lifecycle boundaries.
+- Baseline runs forward 132 tracked copies. Optimized runs forward four required
+  copies and skip 128 exact repeats while preserving final readback content.
+- RX 580 managed end-to-end, submit-to-fence, and GPU p50/p95/p99 deltas all
+  passed the fixed hardware gate with 10/10 wins. CPU record tails remain
+  published and mixed because both paths retain exact comparison cost.
+- Invalid, stalled, and cumulatively slow Gateway peers publish no native policy
+  and complete the same all-forwarded baseline on WARP and hardware.
+- The result is scoped to one owned D3D12 buffer workload. Logical command bytes
+  are not physical PCIe or RAM/VRAM traffic, and external games remain excluded.
+- Full methodology and raw hashes are in
+  [the v0.20 evidence report](evidence/v0.20.0-d3d12-copy-elision.md).
 
 ## New In v0.19.0
 
@@ -253,12 +280,13 @@ that may publish the existing action-8 policy only after exact live decisions.
 
 ## Evidence Claim
 
-D3D12 observation scope:
+D3D12 positive actuation scope:
 
-`owned-d3d12-upload-default-readback-observation-only`
+`owned-d3d12-copy-buffer-region-fluidgateway-authorized-exact-content-elision`
 
-Its report always sets `performance_claim_allowed=false`; timings describe the
-owned command-recording and submit-to-fence path without an optimized baseline.
+The RX 580 report sets `performance_claim_allowed=true` only after negative
+managed end-to-end, submit-to-fence, and GPU p50/p95/p99 deltas plus 10/10 wins.
+The WARP report remains blocked by `software-adapter-not-hardware`.
 
 D3D11 positive actuation scope:
 
@@ -294,17 +322,20 @@ is functional closed-loop evidence, not end-to-end acceleration.
 
 FluidRuntime can inspect process/GPU/memory telemetry, observe owned D3D11 and
 D3D12 resource paths, publish bounded managed policies, and interfere reversibly
-with four owned-lab patterns: generic `CopyResource`, default-to-staging
-readback, staging-to-default upload, and exact full-buffer `UpdateSubresource`.
+with five owned-lab patterns: generic `CopyResource`, default-to-staging
+readback, staging-to-default upload, exact full-buffer `UpdateSubresource`, and
+D3D12 full-buffer `CopyBufferRegion`.
 It can also exchange bounded events and compact decisions with FluidGateway
-through FluidLink. One exact owned-lab path now turns those decisions into a
-bounded native action budget; all other Gateway management remains advisory.
+through FluidLink. Two domain-separated owned-lab paths now turn those decisions
+into bounded native action budgets; all other Gateway management remains
+advisory.
 
 It still does not inject into external games, schedule OS threads, control
-physical RAM/VRAM residency, actuate presentation or D3D12, or support Vulkan.
+physical RAM/VRAM residency, actuate presentation, or support Vulkan.
 
 ## Read Next
 
+- [v0.20.0 D3D12 actuation evidence](evidence/v0.20.0-d3d12-copy-elision.md)
 - [v0.16.0 D3D12 observation evidence](evidence/v0.16.0-d3d12-observation.md)
 - [v0.15.0 Gateway-managed actuation evidence](evidence/v0.15.0-gateway-managed-update-upload.md)
 - [v0.14.0 FluidLink v2 evidence](evidence/v0.14.0-fluidlink-v2.md)

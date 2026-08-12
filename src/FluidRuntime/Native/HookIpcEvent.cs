@@ -17,7 +17,11 @@ public enum HookEventType : uint
     ClearRenderTargetView = 13,
     ClearUnorderedAccessViewFloat = 14,
     ControlPolicyAccepted = 15,
-    MapRead = 16
+    MapRead = 16,
+    D3D12CopyBufferRegion = 17,
+    D3D12ResourceInvalidate = 18,
+    D3D12CommandListClose = 19,
+    D3D12CommandListReset = 20
 }
 
 public sealed record HookIpcEvent(
@@ -65,4 +69,19 @@ public sealed record HookIpcEvent(
 
     public bool WasUpdateSubresourceSkipped =>
         Type == HookEventType.UpdateSubresource && (Flags & 2) != 0;
+
+    public bool IsD3D12RedundantCandidate =>
+        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 1) != 0;
+
+    public bool WasD3D12CopySkipped =>
+        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 2) != 0;
+
+    public bool IsD3D12ExactContentCompared =>
+        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 64) != 0;
+
+    public bool IsD3D12ImmutableUploadSource =>
+        Type == HookEventType.D3D12CopyBufferRegion && (Flags & 128) != 0;
+
+    public bool IsD3D12ExplicitInvalidation =>
+        Type == HookEventType.D3D12ResourceInvalidate && (Flags & 256) != 0;
 }
