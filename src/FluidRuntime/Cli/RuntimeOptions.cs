@@ -7,12 +7,14 @@ public sealed record RuntimeOptions(
     int IntervalMs,
     string OutputPath,
     string? NativeProbePath,
+    int NativeProbeTimeoutMs,
     bool AllowLedgerTargetMismatch)
 {
     public const string Usage =
         "Usage: fluidruntime inspect --ledger <ledger.json> --out <report.json> " +
         "[--pid <id>] [--samples <count>] [--interval-ms <milliseconds>] " +
         "[--native-probe <fluidruntime-native-probe.exe>] " +
+        "[--native-probe-timeout-ms <milliseconds>] " +
         "[--allow-ledger-target-mismatch <true|false>]";
 
     public static RuntimeOptions Parse(string[] args)
@@ -30,6 +32,8 @@ public sealed record RuntimeOptions(
         var sampleCount = 3;
         var intervalMs = 250;
         string? nativeProbePath = null;
+        var nativeProbeTimeoutMs = 10000;
+        var nativeProbeTimeoutExplicit = false;
         var allowLedgerTargetMismatch = false;
 
         for (var index = 1; index < args.Length; index += 2)
@@ -60,6 +64,12 @@ public sealed record RuntimeOptions(
                 case "--native-probe":
                     nativeProbePath = value;
                     break;
+                case "--native-probe-timeout-ms":
+                    nativeProbeTimeoutMs = ParsePositiveInt(
+                        value,
+                        "--native-probe-timeout-ms");
+                    nativeProbeTimeoutExplicit = true;
+                    break;
                 case "--allow-ledger-target-mismatch":
                     if (!bool.TryParse(value, out allowLedgerTargetMismatch))
                     {
@@ -81,6 +91,22 @@ public sealed record RuntimeOptions(
         {
             throw new ArgumentOutOfRangeException(nameof(args), "--samples must be 100 or less.");
         }
+        if (intervalMs > 60000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "--interval-ms must be 60000 or less.");
+        }
+        if (nativeProbeTimeoutMs > 120000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "--native-probe-timeout-ms must be 120000 or less.");
+        }
+        if (!nativeProbeTimeoutExplicit)
+        {
+            nativeProbeTimeoutMs = Math.Clamp(intervalMs + 5000, 10000, 65000);
+        }
 
         return new RuntimeOptions(
             ledgerPath,
@@ -89,6 +115,7 @@ public sealed record RuntimeOptions(
             intervalMs,
             outputPath,
             nativeProbePath,
+            nativeProbeTimeoutMs,
             allowLedgerTargetMismatch);
     }
 

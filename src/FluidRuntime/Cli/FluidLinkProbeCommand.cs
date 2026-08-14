@@ -8,7 +8,7 @@ namespace FluidRuntime.Cli;
 public static class FluidLinkProbeCommand
 {
     private const string ClientName = "fluidruntime";
-    private const string ClientVersion = "0.21.0";
+    private const string ClientVersion = "0.21.1";
     private const string ProbeSessionId = "fluidruntime-link-probe";
     private const string ProbeNonce = "fluidruntime-link-probe";
     private const string RamResourceId = "fluidlink-ram-buffer";
@@ -43,7 +43,7 @@ public static class FluidLinkProbeCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(
+            await AtomicJsonFile.WriteTextAsync(
                 outputPath,
                 json + Environment.NewLine,
                 cancellationToken);

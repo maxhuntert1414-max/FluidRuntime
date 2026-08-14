@@ -32,7 +32,7 @@ public static class D3D12ObservationLabCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(
+            await AtomicJsonFile.WriteTextAsync(
                 outputPath,
                 json + Environment.NewLine,
                 cancellationToken);

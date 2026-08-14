@@ -13,6 +13,7 @@ public sealed class RuntimeOptionsTests
         Assert.Equal(Environment.ProcessId, options.ProcessId);
         Assert.Equal(3, options.SampleCount);
         Assert.Equal(250, options.IntervalMs);
+        Assert.Equal(10000, options.NativeProbeTimeoutMs);
     }
 
     [Fact]
@@ -73,5 +74,27 @@ public sealed class RuntimeOptionsTests
     {
         Assert.Throws<ArgumentException>(() => RuntimeOptions.Parse(
             ["inspect", "--ledger", "ledger.json", "--out", "report.json", "--mutate", "true"]));
+    }
+
+    [Fact]
+    public void Parse_bounds_sampling_and_native_probe_deadlines()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => RuntimeOptions.Parse(
+            [
+                "inspect", "--ledger", "ledger.json", "--out", "report.json",
+                "--interval-ms", "60001"
+            ]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => RuntimeOptions.Parse(
+            [
+                "inspect", "--ledger", "ledger.json", "--out", "report.json",
+                "--native-probe-timeout-ms", "120001"
+            ]));
+
+        var options = RuntimeOptions.Parse(
+            [
+                "inspect", "--ledger", "ledger.json", "--out", "report.json",
+                "--interval-ms", "60000"
+            ]);
+        Assert.Equal(65000, options.NativeProbeTimeoutMs);
     }
 }

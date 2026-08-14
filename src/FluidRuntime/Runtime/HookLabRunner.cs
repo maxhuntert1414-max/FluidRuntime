@@ -53,7 +53,7 @@ public sealed class HookLabRunner
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Unable to start the hook lab target.");
-        using var processGuard = new OwnedProcessGuard(process);
+        await using var processGuard = new OwnedProcessGuard(process);
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
@@ -313,22 +313,11 @@ public sealed class HookLabRunner
             $"{process.Id} did not become available.");
     }
 
-    private sealed class OwnedProcessGuard(Process process) : IDisposable
+    private sealed class OwnedProcessGuard(Process process) : IAsyncDisposable
     {
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                    process.WaitForExit(milliseconds: 5000);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // The process exited between the state check and termination.
-            }
+            await OwnedProcessLifetime.TerminateAsync(process);
         }
     }
 

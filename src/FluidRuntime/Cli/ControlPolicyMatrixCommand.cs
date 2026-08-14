@@ -26,7 +26,7 @@ public static class ControlPolicyMatrixCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(
+            await AtomicJsonFile.WriteTextAsync(
                 outputPath,
                 json + Environment.NewLine,
                 cancellationToken);

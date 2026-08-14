@@ -1286,12 +1286,22 @@ HRESULT WINAPI FluidD3D12HookAttachV2(
             return E_INVALIDARG;
         }
         auto** current_vtable = *reinterpret_cast<void***>(item.command_list);
+        if (current_vtable == nullptr) {
+            return E_UNEXPECTED;
+        }
         if (command_list_vtable == nullptr) {
             command_list_vtable = current_vtable;
         } else if (command_list_vtable != current_vtable) {
             return E_NOTIMPL;
         }
         scope_states.push_back({item.command_list, item.scope_id});
+    }
+    if (command_list_vtable == nullptr) {
+        return E_UNEXPECTED;
+    }
+    auto** queue_vtable = *reinterpret_cast<void***>(queue);
+    if (queue_vtable == nullptr) {
+        return E_UNEXPECTED;
     }
 
     const std::lock_guard hook_lock(g_hook_mutex);
@@ -1302,7 +1312,6 @@ HRESULT WINAPI FluidD3D12HookAttachV2(
     if (!pin_hook_module()) {
         return HRESULT_FROM_WIN32(GetLastError());
     }
-    auto** queue_vtable = *reinterpret_cast<void***>(queue);
     std::array<HookSlot, kHookSlotCount> slots{
         HookSlot{&command_list_vtable[kCloseVtableIndex],
             command_list_vtable[kCloseVtableIndex],

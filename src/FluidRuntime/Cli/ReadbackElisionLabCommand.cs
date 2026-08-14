@@ -32,7 +32,7 @@ public static class ReadbackElisionLabCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(
+            await AtomicJsonFile.WriteTextAsync(
                 outputPath,
                 json + Environment.NewLine,
                 cancellationToken);

@@ -195,11 +195,7 @@ public sealed class UploadElisionLabRunner
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
-            }
+            await OwnedProcessLifetime.TerminateAsync(process);
         }
     }
 

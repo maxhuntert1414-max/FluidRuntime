@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using FluidRuntime.Runtime;
 
 namespace FluidRuntime.Native;
 
@@ -8,11 +9,18 @@ public sealed class NativeProbeClient
         string executablePath,
         int processId,
         int intervalMs,
+        TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(intervalMs);
+        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(2))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                "Native probe timeout must be between 1 ms and 2 minutes.");
+        }
 
         var fullPath = Path.GetFullPath(executablePath);
         if (!File.Exists(fullPath))
@@ -35,10 +43,25 @@ public sealed class NativeProbeClient
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Unable to start the native probe.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        await process.WaitForExitAsync(cancellationToken);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+        deadline.CancelAfter(timeout);
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Native probe exceeded its {timeout.TotalMilliseconds:0} ms deadline.");
+        }
+        finally
+        {
+            await OwnedProcessLifetime.TerminateAsync(process);
+            await Task.WhenAll(stdoutTask, stderrTask);
+        }
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         if (process.ExitCode != 0)

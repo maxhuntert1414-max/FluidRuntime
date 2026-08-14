@@ -1,23 +1,27 @@
 # Project Status
 
-FluidRuntime v0.21.0 is verified locally as of 2026-08-11. It generalizes the
-owned D3D12 action behind a backend-neutral transfer contract while retaining
-the existing D3D11 lanes and FluidLink fingerprints. Authority remains bounded
-to one owned COPY queue, two command lists, two 4 MiB destinations, two isolated
-lanes, one fence, and 128 exact actions.
+FluidRuntime v0.21.1 is verified locally as of 2026-08-14. It hardens process
+lifecycle, report persistence, native-probe deadlines, compiler defenses, and
+static-analysis gates without changing the v0.21 D3D12 transfer contract.
+Authority remains bounded to one owned COPY queue, two command lists, two 4 MiB
+destinations, two isolated lanes, one fence, and 128 exact actions.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.21.0`
-- Canonical Gateway contract: [FluidGateway v0.67.0](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.0)
-- Target release: [FluidRuntime v0.21.0](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.21.0)
+- Target branch/tag: `main` / `v0.21.1`
+- Canonical Gateway contract: [FluidGateway v0.67.1](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.1)
+- Target release: [FluidRuntime v0.21.1](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.21.1)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
 ## Local Release Gate
 
-- Managed tests: 190/190 passed.
-- FluidGateway complete suite: 259/259 passed.
+- Managed tests: 194/194 passed.
+- FluidGateway complete suite: 268/268 passed on Python 3.12 and Python 3.14.
+- Native code analysis passes for the D3D12 transfer hook and D3D11 owned
+  target with analyzer warnings treated as errors.
+- All managed evidence writes are atomic; cancellation preserves the previous
+  file. All launched native targets share verified process-tree cleanup.
 - FluidGateway resilience suite: ten adversarial cases passed ten consecutive
   runs, for 100/100 total.
 - Cross-process Python/.NET probe: 11/11 v1 and 11/11 v2 round trips passed.

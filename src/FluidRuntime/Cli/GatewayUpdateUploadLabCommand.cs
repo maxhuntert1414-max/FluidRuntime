@@ -46,7 +46,7 @@ public static class GatewayUpdateUploadLabCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(
+            await AtomicJsonFile.WriteTextAsync(
                 outputPath,
                 json + Environment.NewLine,
                 cancellationToken);
@@ -95,7 +95,7 @@ public static class GatewayUpdateUploadLabCommand
                     PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                     WriteIndented = true
                 });
-            await File.WriteAllTextAsync(
+            await AtomicJsonFile.WriteTextAsync(
                 outputPath,
                 json + Environment.NewLine,
                 cancellationToken);

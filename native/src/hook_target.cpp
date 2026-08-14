@@ -1234,7 +1234,8 @@ bool run_resource_workload(
         }
     }
 
-    std::array<std::uint32_t, kBufferBytes / sizeof(std::uint32_t)> buffer_data{};
+    std::vector<std::uint32_t> buffer_data(
+        kBufferBytes / sizeof(std::uint32_t));
     for (size_t index = 0; index < buffer_data.size(); ++index) {
         buffer_data[index] = static_cast<std::uint32_t>(index);
     }
@@ -1321,7 +1322,7 @@ bool run_resource_workload(
         resources.destination_buffer.Get(),
         resources.source_buffer.Get());
 
-    std::array<std::uint32_t, kTextureWidth * kTextureHeight> texture_data{};
+    std::vector<std::uint32_t> texture_data(kTextureWidth * kTextureHeight);
     for (size_t index = 0; index < texture_data.size(); ++index) {
         texture_data[index] = 0xFF000000U | static_cast<std::uint32_t>(index);
     }
@@ -1359,11 +1360,10 @@ bool run_resource_workload(
         resources.destination_texture.Get(),
         resources.source_texture.Get());
 
-    std::array<std::uint32_t,
-        kSubresourceTextureWidth * kSubresourceTextureHeight> mip_zero_data{};
-    std::array<std::uint32_t,
-        (kSubresourceTextureWidth / 2) * (kSubresourceTextureHeight / 2)>
-        mip_one_data{};
+    std::vector<std::uint32_t> mip_zero_data(
+        kSubresourceTextureWidth * kSubresourceTextureHeight);
+    std::vector<std::uint32_t> mip_one_data(
+        (kSubresourceTextureWidth / 2) * (kSubresourceTextureHeight / 2));
     for (size_t index = 0; index < mip_zero_data.size(); ++index) {
         mip_zero_data[index] = 0xFF100000U | static_cast<std::uint32_t>(index);
     }

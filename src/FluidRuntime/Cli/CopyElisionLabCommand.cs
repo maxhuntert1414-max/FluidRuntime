@@ -73,7 +73,7 @@ public static class CopyElisionLabCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(outputPath, json + Environment.NewLine);
+            await AtomicJsonFile.WriteTextAsync(outputPath, json + Environment.NewLine);
 
             Console.WriteLine(
                 $"FluidRuntime validated {report.IncludedTrialPairs} measured " +

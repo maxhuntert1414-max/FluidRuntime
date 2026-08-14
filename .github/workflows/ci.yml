@@ -8,22 +8,55 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: 10.0.x
       - name: Test managed runtime
-        run: dotnet test FluidRuntime.slnx -c Release
+        run: dotnet test FluidRuntime.slnx -c Release -warnaserror
       - name: Configure native probe
         run: cmake -S native -B native/build -A x64
       - name: Build native probe
         run: cmake --build native/build --config Release
+      - name: Analyze D3D12 transfer hook
+        run: >-
+          cmake --build native/build --config Release
+          --target fluidruntime-d3d12-transfer-hook --
+          /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
+          /p:TreatWarningsAsErrors=true
+      - name: Analyze D3D11 owned target
+        run: >-
+          cmake --build native/build --config Release
+          --target fluidruntime-hook-target --
+          /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
+          /p:TreatWarningsAsErrors=true
       - name: Test native probe
         run: ctest --test-dir native/build -C Release --output-on-failure
       - name: Build native probe (Debug)
         run: cmake --build native/build --config Debug
       - name: Test native probe (Debug)
         run: ctest --test-dir native/build -C Debug --output-on-failure
+      - name: Configure native AddressSanitizer
+        run: >-
+          cmake -S native -B native/build-asan -A x64
+          -DFLUIDRUNTIME_ENABLE_ASAN=ON
+      - name: Build native AddressSanitizer
+        run: cmake --build native/build-asan --config Release
+      - name: Test native AddressSanitizer
+        shell: pwsh
+        run: |
+          $asanRuntime = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Microsoft Visual Studio" `
+            -Recurse -Filter clang_rt.asan_dynamic-x86_64.dll |
+            Where-Object FullName -Match 'Hostx64\\x64' |
+            Select-Object -First 1
+          if (-not $asanRuntime) {
+            throw 'Microsoft AddressSanitizer runtime was not found.'
+          }
+          $env:PATH = "$($asanRuntime.Directory.FullName);$env:PATH"
+          $env:ASAN_OPTIONS = 'halt_on_error=1:abort_on_error=1:detect_leaks=0'
+          ctest --test-dir native/build-asan -C Release `
+            --timeout 30 --output-on-failure
       - name: Test native hook IPC
         run: >-
           dotnet run --project src/FluidRuntime -c Release --no-build -- hook-lab

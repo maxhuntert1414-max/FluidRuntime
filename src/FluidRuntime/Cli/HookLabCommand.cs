@@ -29,7 +29,7 @@ public static class HookLabCommand
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(outputPath, json + Environment.NewLine);
+            await AtomicJsonFile.WriteTextAsync(outputPath, json + Environment.NewLine);
 
             Console.WriteLine(
                 $"FluidRuntime received {report.EventCount} hook events from " +

@@ -179,17 +179,13 @@ public sealed class D3D12ObservationLabRunner
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            KillOwnedProcess(process);
-            await Task.WhenAll(stdoutTask, stderrTask);
             throw new TimeoutException(
                 $"D3D12 observation run {runIndex} exceeded " +
                 $"{options.ProcessTimeoutMs} ms.");
         }
-        catch (OperationCanceledException)
+        finally
         {
-            KillOwnedProcess(process);
-            await Task.WhenAll(stdoutTask, stderrTask);
-            throw;
+            await OwnedProcessLifetime.TerminateAsync(process);
         }
 
         var stdout = await stdoutTask;
@@ -208,21 +204,6 @@ public sealed class D3D12ObservationLabRunner
                 $"{process.Id}.");
         }
         return report;
-    }
-
-    private static void KillOwnedProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit();
-            }
-        }
-        catch (InvalidOperationException)
-        {
-        }
     }
 
     private static bool SameAdapter(

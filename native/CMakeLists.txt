@@ -1,10 +1,16 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.21.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.21.1 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
 endif()
+
+option(
+    FLUIDRUNTIME_ENABLE_ASAN
+    "Build owned native targets with Microsoft AddressSanitizer"
+    OFF
+)
 
 function(configure_fluidruntime_native_target target)
     target_compile_features(${target} PRIVATE cxx_std_20)
@@ -12,7 +18,18 @@ function(configure_fluidruntime_native_target target)
         ${target}
         PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
     )
-    target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(
+        ${target}
+        PRIVATE /W4 /WX /permissive- /EHsc /GS /sdl /guard:cf
+    )
+    target_link_options(
+        ${target}
+        PRIVATE /guard:cf /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA
+    )
+    if(FLUIDRUNTIME_ENABLE_ASAN)
+        target_compile_options(${target} PRIVATE /fsanitize=address /Zi)
+        target_link_options(${target} PRIVATE /INCREMENTAL:NO /DEBUG)
+    endif()
 endfunction()
 
 add_executable(fluidruntime-native-probe src/main.cpp)

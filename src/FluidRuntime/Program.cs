@@ -132,7 +132,8 @@ public static class RuntimeApplication
                 nativeProbe = await new NativeProbeClient().ProbeAsync(
                     options.NativeProbePath,
                     options.ProcessId,
-                    options.IntervalMs);
+                    options.IntervalMs,
+                    TimeSpan.FromMilliseconds(options.NativeProbeTimeoutMs));
             }
 
             var inspector = new RuntimeInspector(
@@ -160,7 +161,9 @@ public static class RuntimeApplication
                 PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(outputPath, json + Environment.NewLine);
+            await AtomicJsonFile.WriteTextAsync(
+                outputPath,
+                json + Environment.NewLine);
 
             Console.WriteLine(
                 $"FluidRuntime inspected PID {report.Telemetry.ProcessId} " +

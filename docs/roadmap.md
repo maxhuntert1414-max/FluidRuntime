@@ -124,6 +124,9 @@ coordinate the interfaces the operating system and graphics APIs expose.
   Transfer events/actions have neutral names with stable numeric IDs. RX 580 native execution passed
   30/30 submit/fence and GPU pairs, while the end-to-end performance claim
   remains blocked by managed-path tail variance.
+- **v0.21.1:** local-use hardening patch. Atomic evidence replacement, bounded
+  native-probe deadlines, verified owned-process cleanup, compiler/linker
+  defenses, and clean MSVC analyzer gates land without widening authority.
 
 ## Next Milestones
 

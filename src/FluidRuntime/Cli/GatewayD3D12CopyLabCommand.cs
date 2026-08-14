@@ -100,7 +100,7 @@ public static class GatewayD3D12CopyLabCommand
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
             WriteIndented = true
         });
-        await File.WriteAllTextAsync(
+        await AtomicJsonFile.WriteTextAsync(
             outputPath,
             json + Environment.NewLine,
             cancellationToken);
