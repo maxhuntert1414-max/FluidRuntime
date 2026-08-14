@@ -127,6 +127,9 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - **v0.21.1:** local-use hardening patch. Atomic evidence replacement, bounded
   native-probe deadlines, verified owned-process cleanup, compiler/linker
   defenses, and clean MSVC analyzer gates land without widening authority.
+- **v0.21.2:** CI portability hotfix. ASAN runtime discovery is derived from
+  the exact MSVC tool directory selected by CMake instead of a fixed Visual
+  Studio installation root. Runtime authority and contracts remain unchanged.
 
 ## Next Milestones
 

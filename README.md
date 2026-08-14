@@ -3,7 +3,7 @@
 **A Windows research runtime for finding and safely removing redundant work
 between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
 
-[![Version](https://img.shields.io/badge/version-0.21.1-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
+[![Version](https://img.shields.io/badge/version-0.21.2-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 [![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
@@ -23,6 +23,13 @@ action can be applied without changing the result.
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Vulkan | Planned, not implemented |
 | External games | Unsupported; owned opt-in workloads only |
+
+## v0.21.2 CI Portability Hotfix
+
+This hotfix derives the Microsoft AddressSanitizer runtime location from the
+toolchain selected by CMake. It supports current GitHub runners whether Visual
+Studio is installed under `Program Files` or `Program Files (x86)` and leaves
+the v0.21.1 runtime authority and wire contracts unchanged.
 
 ## v0.21.1 Safety Release
 
@@ -115,6 +122,7 @@ commands. It does not discover arbitrary games or inject into an external PID.
 - [Roadmap](docs/roadmap.md)
 - [v0.21 generalized D3D12 transfer evidence](docs/evidence/v0.21.0-d3d12-transfer-core.md)
 - [v0.21.1 local-use hardening evidence](docs/evidence/v0.21.1-local-use-hardening.md)
+- [v0.21.2 CI portability evidence](docs/evidence/v0.21.2-ci-portability.md)
 - [v0.20 single-lane D3D12 evidence](docs/evidence/v0.20.0-d3d12-copy-elision.md)
 - [v0.19 end-to-end authorization evidence](docs/evidence/v0.19.0-end-to-end-authorization.md)
 - [v0.18 resilience and 128-action evidence](docs/evidence/v0.18.0-resilience-update-upload-128.md)

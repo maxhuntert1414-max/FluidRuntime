@@ -45,15 +45,21 @@ jobs:
       - name: Test native AddressSanitizer
         shell: pwsh
         run: |
-          $asanRuntime = Get-ChildItem `
-            "${env:ProgramFiles(x86)}\Microsoft Visual Studio" `
-            -Recurse -Filter clang_rt.asan_dynamic-x86_64.dll |
-            Where-Object FullName -Match 'Hostx64\\x64' |
+          $archiveTool = Select-String `
+            -Path native/build-asan/CMakeCache.txt `
+            -Pattern '^CMAKE_AR:FILEPATH=(.+)$' |
             Select-Object -First 1
-          if (-not $asanRuntime) {
-            throw 'Microsoft AddressSanitizer runtime was not found.'
+          if (-not $archiveTool) {
+            throw 'CMake did not record the selected MSVC tool directory.'
           }
-          $env:PATH = "$($asanRuntime.Directory.FullName);$env:PATH"
+          $toolDirectory = Split-Path `
+            (($archiveTool.Line -split '=', 2)[1]) -Parent
+          $asanRuntime = Join-Path `
+            $toolDirectory 'clang_rt.asan_dynamic-x86_64.dll'
+          if (-not (Test-Path -LiteralPath $asanRuntime -PathType Leaf)) {
+            throw "Microsoft AddressSanitizer runtime was not found beside the selected MSVC tools: $toolDirectory"
+          }
+          $env:PATH = "$toolDirectory;$env:PATH"
           $env:ASAN_OPTIONS = 'halt_on_error=1:abort_on_error=1:detect_leaks=0'
           ctest --test-dir native/build-asan -C Release `
             --timeout 30 --output-on-failure

@@ -1,6 +1,6 @@
 # Project Status
 
-FluidRuntime v0.21.1 is verified locally as of 2026-08-14. It hardens process
+FluidRuntime v0.21.2 is verified locally as of 2026-08-14. It hardens process
 lifecycle, report persistence, native-probe deadlines, compiler defenses, and
 static-analysis gates without changing the v0.21 D3D12 transfer contract.
 Authority remains bounded to one owned COPY queue, two command lists, two 4 MiB
@@ -8,9 +8,9 @@ destinations, two isolated lanes, one fence, and 128 exact actions.
 
 ## Release Target
 
-- Target branch/tag: `main` / `v0.21.1`
+- Target branch/tag: `main` / `v0.21.2`
 - Canonical Gateway contract: [FluidGateway v0.67.1](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.1)
-- Target release: [FluidRuntime v0.21.1](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.21.1)
+- Target release: [FluidRuntime v0.21.2](https://github.com/maxhuntert1414-max/FluidRuntime/releases/tag/v0.21.2)
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
