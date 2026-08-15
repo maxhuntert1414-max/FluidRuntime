@@ -1,4 +1,5 @@
 using FluidRuntime.Contracts;
+using FluidRuntime.Native;
 using FluidRuntime.Runtime;
 using FluidRuntime.Telemetry;
 
@@ -96,6 +97,54 @@ public sealed class RuntimeInspectorTests
         Assert.False(report.LedgerTargetMatched);
         Assert.Equal("hold-ledger-target-mismatch", report.DecisionPlan.Policy);
         Assert.All(report.DecisionPlan.Actions, action => Assert.True(action.Blocked));
+    }
+
+    [Fact]
+    public async Task InspectAsync_uses_latest_concurrent_native_probe_sample()
+    {
+        var samples = new TelemetrySnapshot[]
+        {
+            new(DateTimeOffset.UtcNow, 42, "TestGame", 20, 500, 400, 12, 40, 9000)
+        };
+        var nativeSamples = new NativeProbeReport[]
+        {
+            new()
+            {
+                Mode = "fluidruntime-native-probe-v0.2",
+                ReadOnly = true,
+                ProcessId = 42,
+                CapturedAtUnixMs = 100,
+                SampleIntervalMs = 250
+            },
+            new()
+            {
+                Mode = "fluidruntime-native-probe-v0.2",
+                ReadOnly = true,
+                ProcessId = 42,
+                CapturedAtUnixMs = 350,
+                SampleIntervalMs = 250
+            }
+        };
+        var inspector = new RuntimeInspector(
+            new FakeSampler(samples),
+            new RuntimeDecisionEngine());
+        var ledger = new FluidGatewayLedger
+        {
+            Mode = "presentmon-operational-ledger-v0.61",
+            DryRun = true,
+            Application = "TestGame.exe"
+        };
+
+        var report = await inspector.InspectAsync(
+            ledger,
+            "ledger.json",
+            processId: 42,
+            sampleCount: 1,
+            interval: TimeSpan.FromMilliseconds(1),
+            nativeProbeSamplesTask: Task.FromResult<IReadOnlyList<NativeProbeReport>>(nativeSamples));
+
+        Assert.Equal(2, report.NativeProbeSamples.Count);
+        Assert.Same(nativeSamples[1], report.NativeProbe);
     }
 
     private sealed class FakeSampler(IReadOnlyList<TelemetrySnapshot> samples)

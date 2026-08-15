@@ -126,14 +126,24 @@ public static class RuntimeApplication
         {
             var options = RuntimeOptions.Parse(args);
             var ledger = FluidGatewayLedgerLoader.Load(options.LedgerPath);
-            NativeProbeReport? nativeProbe = null;
+            Task<IReadOnlyList<NativeProbeReport>>? nativeProbeSamplesTask = null;
             if (!string.IsNullOrWhiteSpace(options.NativeProbePath))
             {
-                nativeProbe = await new NativeProbeClient().ProbeAsync(
-                    options.NativeProbePath,
-                    options.ProcessId,
-                    options.IntervalMs,
-                    TimeSpan.FromMilliseconds(options.NativeProbeTimeoutMs));
+                var client = new NativeProbeClient();
+                var timeout = TimeSpan.FromMilliseconds(options.NativeProbeTimeoutMs);
+                nativeProbeSamplesTask = options.NativeProbeSampleCount == 1
+                    ? ProbeOnceAsync(
+                        client,
+                        options.NativeProbePath,
+                        options.ProcessId,
+                        options.IntervalMs,
+                        timeout)
+                    : client.ProbeSeriesAsync(
+                        options.NativeProbePath,
+                        options.ProcessId,
+                        options.IntervalMs,
+                        options.NativeProbeSampleCount,
+                        timeout);
             }
 
             var inspector = new RuntimeInspector(
@@ -146,8 +156,9 @@ public static class RuntimeApplication
                 options.ProcessId,
                 options.SampleCount,
                 TimeSpan.FromMilliseconds(options.IntervalMs),
-                nativeProbe,
-                options.AllowLedgerTargetMismatch);
+                nativeProbe: null,
+                allowLedgerTargetMismatch: options.AllowLedgerTargetMismatch,
+                nativeProbeSamplesTask: nativeProbeSamplesTask);
 
             var outputPath = Path.GetFullPath(options.OutputPath);
             var outputDirectory = Path.GetDirectoryName(outputPath);
@@ -185,6 +196,11 @@ public static class RuntimeApplication
                     $"engines={report.NativeProbe.Gpu.EngineInstanceCount}; " +
                     $"utilization-sum={report.NativeProbe.Gpu.EngineUtilizationSumPercent:0.###}%.");
             }
+            if (report.NativeProbeSamples.Count > 1)
+            {
+                Console.WriteLine(
+                    $"Native GPU probe series: {report.NativeProbeSamples.Count} snapshots.");
+            }
             Console.WriteLine($"Report: {outputPath}");
             return 0;
         }
@@ -200,4 +216,12 @@ public static class RuntimeApplication
             return 1;
         }
     }
+
+    private static async Task<IReadOnlyList<NativeProbeReport>> ProbeOnceAsync(
+        NativeProbeClient client,
+        string executablePath,
+        int processId,
+        int intervalMs,
+        TimeSpan timeout) =>
+        [await client.ProbeAsync(executablePath, processId, intervalMs, timeout)];
 }

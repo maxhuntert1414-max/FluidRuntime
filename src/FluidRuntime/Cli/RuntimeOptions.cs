@@ -7,6 +7,7 @@ public sealed record RuntimeOptions(
     int IntervalMs,
     string OutputPath,
     string? NativeProbePath,
+    int NativeProbeSampleCount,
     int NativeProbeTimeoutMs,
     bool AllowLedgerTargetMismatch)
 {
@@ -14,6 +15,7 @@ public sealed record RuntimeOptions(
         "Usage: fluidruntime inspect --ledger <ledger.json> --out <report.json> " +
         "[--pid <id>] [--samples <count>] [--interval-ms <milliseconds>] " +
         "[--native-probe <fluidruntime-native-probe.exe>] " +
+        "[--native-probe-samples <count>] " +
         "[--native-probe-timeout-ms <milliseconds>] " +
         "[--allow-ledger-target-mismatch <true|false>]";
 
@@ -32,6 +34,7 @@ public sealed record RuntimeOptions(
         var sampleCount = 3;
         var intervalMs = 250;
         string? nativeProbePath = null;
+        var nativeProbeSampleCount = 1;
         var nativeProbeTimeoutMs = 10000;
         var nativeProbeTimeoutExplicit = false;
         var allowLedgerTargetMismatch = false;
@@ -63,6 +66,11 @@ public sealed record RuntimeOptions(
                     break;
                 case "--native-probe":
                     nativeProbePath = value;
+                    break;
+                case "--native-probe-samples":
+                    nativeProbeSampleCount = ParsePositiveInt(
+                        value,
+                        "--native-probe-samples");
                     break;
                 case "--native-probe-timeout-ms":
                     nativeProbeTimeoutMs = ParsePositiveInt(
@@ -103,9 +111,40 @@ public sealed record RuntimeOptions(
                 nameof(args),
                 "--native-probe-timeout-ms must be 120000 or less.");
         }
+        if (nativeProbeSampleCount > 100)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "--native-probe-samples must be 100 or less.");
+        }
+        if (nativeProbeSampleCount > 1 && string.IsNullOrWhiteSpace(nativeProbePath))
+        {
+            throw new ArgumentException(
+                "--native-probe-samples greater than 1 requires --native-probe.");
+        }
+        if (nativeProbeSampleCount > sampleCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "--native-probe-samples cannot exceed --samples.");
+        }
+
+        var nativeProbeWindowMs = checked(intervalMs * nativeProbeSampleCount);
+        if (nativeProbeWindowMs > 115000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "Native probe series duration must be 115000 ms or less.");
+        }
         if (!nativeProbeTimeoutExplicit)
         {
-            nativeProbeTimeoutMs = Math.Clamp(intervalMs + 5000, 10000, 65000);
+            nativeProbeTimeoutMs = Math.Clamp(nativeProbeWindowMs + 5000, 10000, 120000);
+        }
+        else if (nativeProbeTimeoutMs <= nativeProbeWindowMs)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "--native-probe-timeout-ms must exceed the native probe sampling window.");
         }
 
         return new RuntimeOptions(
@@ -115,6 +154,7 @@ public sealed record RuntimeOptions(
             intervalMs,
             outputPath,
             nativeProbePath,
+            nativeProbeSampleCount,
             nativeProbeTimeoutMs,
             allowLedgerTargetMismatch);
     }

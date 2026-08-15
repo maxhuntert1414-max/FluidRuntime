@@ -13,4 +13,7 @@ public sealed record RuntimeInspectionReport(
     IReadOnlyList<TelemetrySnapshot> Samples,
     NativeProbeReport? NativeProbe,
     RuntimeDecisionPlan DecisionPlan,
-    string Disclaimer);
+    string Disclaimer)
+{
+    public IReadOnlyList<NativeProbeReport> NativeProbeSamples { get; init; } = [];
+}

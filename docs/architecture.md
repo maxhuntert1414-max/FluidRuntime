@@ -33,7 +33,8 @@ flowchart LR
 - `FluidLink`: dependency-free .NET client and cross-repository contract for
   loopback binary request/response transport with numeric opcodes.
 - `fluidruntime-native-probe`: read-only Windows process, memory, WDDM VRAM,
-  and GPU-engine counters for one PID.
+  and GPU-engine counters for one PID. Optional bounded series reuse one PDH
+  query and counter set instead of launching one process per snapshot.
 - `fluidruntime-d3d12-observation`: standalone owned 4 MiB
   UPLOAD/DEFAULT/READBACK workload with explicit queue, command, state, fence,
   exact-content, timing, architecture, and DXGI memory evidence.

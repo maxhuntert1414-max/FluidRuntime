@@ -21,8 +21,25 @@ action can be applied without changing the result.
 | FluidLink batch | 129 logical operations in one ordered request/vector pair |
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
+| Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
 | Vulkan | Planned, not implemented |
 | External games | Unsupported; owned opt-in workloads only |
+
+## Persistent Native Telemetry
+
+`fluidruntime inspect` can collect up to 100 native GPU/VRAM snapshots without
+launching a probe process per sample. The native probe keeps one bounded PDH
+session alive, reuses its counters, and emits an ordered
+`native_probe_samples` series. The default remains one snapshot.
+
+```powershell
+fluidruntime inspect --ledger ledger.json --out report.json --pid 1234 `
+  --samples 30 --interval-ms 1000 `
+  --native-probe fluidruntime-native-probe.exe --native-probe-samples 30
+```
+
+This path is observational and read-only. It does not inject, hook, schedule,
+change residency, or optimize the target process.
 
 ## v0.21.2 CI Portability Hotfix
 

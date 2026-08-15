@@ -85,6 +85,18 @@ add_test(
     COMMAND fluidruntime-native-probe --self-test
 )
 add_test(
+    NAME fluidruntime-native-probe-series-self-test
+    COMMAND fluidruntime-native-probe --self-test --samples 3
+)
+add_test(
+    NAME fluidruntime-native-probe-rejects-oversized-series
+    COMMAND fluidruntime-native-probe --self-test --samples 101
+)
+set_tests_properties(
+    fluidruntime-native-probe-rejects-oversized-series
+    PROPERTIES WILL_FAIL TRUE
+)
+add_test(
     NAME fluidruntime-d3d12-observation-warp
     COMMAND fluidruntime-d3d12-observation
         --hardware false

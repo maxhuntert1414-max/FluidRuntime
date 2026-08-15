@@ -16,13 +16,25 @@ public sealed class RuntimeInspector(
         TimeSpan interval,
         NativeProbeReport? nativeProbe = null,
         bool allowLedgerTargetMismatch = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Task<IReadOnlyList<NativeProbeReport>>? nativeProbeSamplesTask = null)
     {
-        var samples = await sampler.SampleAsync(
+        var samplesTask = sampler.SampleAsync(
             processId,
             sampleCount,
             interval,
             cancellationToken);
+        if (nativeProbeSamplesTask is not null)
+        {
+            await Task.WhenAll(samplesTask, nativeProbeSamplesTask);
+        }
+        var samples = await samplesTask;
+        var nativeProbeSamples = nativeProbeSamplesTask is not null
+            ? await nativeProbeSamplesTask
+            : nativeProbe is null
+                ? []
+                : [nativeProbe];
+        var decisionProbe = nativeProbeSamples.LastOrDefault() ?? nativeProbe;
         var telemetry = TelemetrySummary.From(samples);
         var targetMatched = TargetMatches(ledger.Application, telemetry.ProcessName);
         if (!targetMatched && !allowLedgerTargetMismatch)
@@ -33,7 +45,7 @@ public sealed class RuntimeInspector(
         }
 
         var decisionPlan = targetMatched
-            ? decisionEngine.Build(ledger, telemetry, nativeProbe)
+            ? decisionEngine.Build(ledger, telemetry, decisionProbe)
             : BuildTargetMismatchPlan(ledger, telemetry);
 
         return new RuntimeInspectionReport(
@@ -44,9 +56,12 @@ public sealed class RuntimeInspector(
             targetMatched,
             telemetry,
             samples,
-            nativeProbe,
+            decisionProbe,
             decisionPlan,
-            "Inferred diagnostic and advisory plan; not proof of internal cause and not an executed optimization.");
+            "Inferred diagnostic and advisory plan; not proof of internal cause and not an executed optimization.")
+        {
+            NativeProbeSamples = nativeProbeSamples
+        };
     }
 
     private static bool TargetMatches(string application, string processName)

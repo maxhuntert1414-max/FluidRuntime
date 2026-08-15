@@ -2,6 +2,30 @@ using System.Text.Json.Serialization;
 
 namespace FluidRuntime.Native;
 
+public sealed record NativeProbeSeriesReport
+{
+    [JsonPropertyName("mode")]
+    public string Mode { get; init; } = string.Empty;
+
+    [JsonPropertyName("read_only")]
+    public bool ReadOnly { get; init; }
+
+    [JsonPropertyName("would_modify_system")]
+    public bool WouldModifySystem { get; init; }
+
+    [JsonPropertyName("pid")]
+    public int ProcessId { get; init; }
+
+    [JsonPropertyName("sample_interval_ms")]
+    public int SampleIntervalMs { get; init; }
+
+    [JsonPropertyName("sample_count")]
+    public int SampleCount { get; init; }
+
+    [JsonPropertyName("samples")]
+    public List<NativeProbeReport> Samples { get; init; } = [];
+}
+
 public sealed record NativeProbeReport
 {
     [JsonPropertyName("mode")]

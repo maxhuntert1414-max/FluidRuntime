@@ -12,6 +12,51 @@ public sealed class NativeProbeClient
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
+        var stdout = await RunAsync(
+            executablePath,
+            processId,
+            intervalMs,
+            sampleCount: null,
+            timeout,
+            cancellationToken);
+        return NativeProbeReportParser.Parse(stdout, processId);
+    }
+
+    public async Task<IReadOnlyList<NativeProbeReport>> ProbeSeriesAsync(
+        string executablePath,
+        int processId,
+        int intervalMs,
+        int sampleCount,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (sampleCount is < 2 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sampleCount),
+                "Native probe series must contain between 2 and 100 samples.");
+        }
+        var stdout = await RunAsync(
+            executablePath,
+            processId,
+            intervalMs,
+            sampleCount,
+            timeout,
+            cancellationToken);
+        return NativeProbeReportParser.ParseSeries(
+            stdout,
+            processId,
+            sampleCount).Samples;
+    }
+
+    private static async Task<string> RunAsync(
+        string executablePath,
+        int processId,
+        int intervalMs,
+        int? sampleCount,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(intervalMs);
@@ -40,6 +85,11 @@ public sealed class NativeProbeClient
         startInfo.ArgumentList.Add(processId.ToString());
         startInfo.ArgumentList.Add("--interval-ms");
         startInfo.ArgumentList.Add(intervalMs.ToString());
+        if (sampleCount.HasValue)
+        {
+            startInfo.ArgumentList.Add("--samples");
+            startInfo.ArgumentList.Add(sampleCount.Value.ToString());
+        }
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Unable to start the native probe.");
@@ -70,6 +120,6 @@ public sealed class NativeProbeClient
                 $"Native probe exited with code {process.ExitCode}: {stderr.Trim()}");
         }
 
-        return NativeProbeReportParser.Parse(stdout, processId);
+        return stdout;
     }
 }
