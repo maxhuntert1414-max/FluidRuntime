@@ -39,7 +39,14 @@ jobs:
           /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
           /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
       - name: Build native probe (Debug)
+        # Dispatch tests use a mock driver and also run on hosts without Vulkan hardware.
         run: cmake --build native/build --config Debug
+      - name: Analyze Vulkan application observation layer and dispatch tests
+        run: >-
+          cmake --build native/build --config Release
+          --target fluidruntime-vulkan-observe fluidruntime-vulkan-observation-tests --
+          /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
+          /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
       - name: Test native probe (Debug)
         run: ctest --test-dir native/build -C Debug --output-on-failure
       - name: Configure native AddressSanitizer

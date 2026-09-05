@@ -170,20 +170,30 @@ coordinate the interfaces the operating system and graphics APIs expose.
   layer. Private resource ownership makes the first action provable; it does
   not pretend to cover arbitrary engine command streams.
 
-### Next: Vulkan Observation And Engine Integration
+### v0.23: Application Observation And Windows Lease
 
-- Extend the neutral transfer contract behind an explicit opt-in Vulkan
-  layer for the owned lab, observing allocations,
-  memory binding, buffers/images, copy commands, barriers, queue submit/present,
-  semaphores, fences, and available memory-budget telemetry.
+- Delivered explicit, launch-scoped Vulkan observation for selected x64 apps;
+  unmodified Khronos `vkcube` and `vkcubepp` are the current compatibility evidence.
+- CPU/RAM samples, allocation/map/bind/copy/barrier/submit/present counters,
+  binary/module identity, JSON evidence and Gateway HTML diagnosis.
+- Opt-in Normal -> AboveNormal lease with an independent watchdog. Restoration
+  tested both normally and after collector termination. No proven scheduling gain.
+- No global registration, existing-PID injection, protected-game support or
+  external GPU copy removal. The layer remains loaded until application exit.
+
+### Next: Engine Provenance And Compatibility
+
+- Expand observation coverage for newer copy/map entry points, semaphores,
+  resource lifetimes and available memory-budget telemetry. Measure the cost
+  on multi-threaded engines before reducing lock contention.
 - Model layouts, queue-family ownership, suballocation lifetime, and explicit
   synchronization independently from D3D11/D3D12.
 - Promote one bounded action only after deterministic equivalence, validation-
-  layer cleanliness, fault controls, timing, and complete layer removal pass.
+  layer cleanliness, fault controls, timing, and an explicit lifecycle contract pass.
 
-### v0.23+: Controlled External Observation
+### Later: Broader External Integration
 
-- Define an explicit allowlist and operator consent model.
+- Grow a tested application compatibility matrix and executable-specific consent.
 - Add an external attach prototype for unprotected software we are authorized
   to inspect.
 - Refuse anti-cheat, protected, elevated, and identity-mismatched targets.

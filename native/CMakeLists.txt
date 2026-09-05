@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.22.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.23.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -89,6 +89,19 @@ if(FLUIDRUNTIME_ENABLE_VULKAN)
         URL_HASH SHA256=f38a653bf93cab7a2a229a53d2d53b1cba9a2819e4c0a7de13c54085bde9bcf5
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_MakeAvailable(VulkanHeaders)
+    add_library(fluidruntime-vulkan-observe SHARED src/vulkan_observation_layer.cpp)
+    configure_fluidruntime_native_target(fluidruntime-vulkan-observe)
+    target_include_directories(fluidruntime-vulkan-observe PRIVATE include)
+    target_link_libraries(fluidruntime-vulkan-observe PRIVATE Vulkan::Headers)
+    add_executable(fluidruntime-vulkan-observation-tests src/vulkan_observation_tests.cpp)
+    configure_fluidruntime_native_target(fluidruntime-vulkan-observation-tests)
+    target_include_directories(fluidruntime-vulkan-observation-tests PRIVATE include)
+    target_link_libraries(fluidruntime-vulkan-observation-tests PRIVATE Vulkan::Headers)
+    configure_file(vulkan-observe.json.in vulkan-observe.json COPYONLY)
+    add_custom_command(TARGET fluidruntime-vulkan-observe POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_BINARY_DIR}/vulkan-observe.json
+            $<TARGET_FILE_DIR:fluidruntime-vulkan-observe>/vulkan-observe.json)
     add_library(fluidruntime-vulkan-transfer SHARED src/vulkan_transfer.cpp)
     configure_fluidruntime_native_target(fluidruntime-vulkan-transfer)
     target_include_directories(fluidruntime-vulkan-transfer PRIVATE include)
@@ -103,6 +116,9 @@ endif()
 
 enable_testing()
 if(FLUIDRUNTIME_ENABLE_VULKAN)
+    add_test(NAME fluidruntime-vulkan-observation-dispatch
+        COMMAND fluidruntime-vulkan-observation-tests $<TARGET_FILE:fluidruntime-vulkan-observe>)
+    set_tests_properties(fluidruntime-vulkan-observation-dispatch PROPERTIES TIMEOUT 30)
     add_test(NAME fluidruntime-vulkan-policy-tests COMMAND fluidruntime-vulkan-policy-tests)
     add_test(NAME fluidruntime-vulkan-rejects-invalid-count
         COMMAND fluidruntime-vulkan-transfer-target --candidate-count 129)

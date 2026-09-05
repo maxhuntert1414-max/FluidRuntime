@@ -259,7 +259,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     IGatewayUpdateUploadAuthorizer
 {
     private const string ClientName = "fluidruntime-gateway-manager";
-    private const string ClientVersion = "0.22.0";
+    private const string ClientVersion = "0.23.0";
     private const string ExpectedAdvertisedServerName = "fluidgateway";
     private const int AuthorizationRoundTrips = 10;
     private readonly string host;

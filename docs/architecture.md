@@ -26,6 +26,15 @@ flowchart LR
 
 ## Components
 
+The v0.23 application path is separate from owned GPU actuation:
+`app-session -> explicit Vulkan layer -> 288-byte counter mapping -> JSON ->
+Gateway analyze-app`. The selected executable and loaded DLL are hash-bound;
+no external-process attach or global loader registration exists. The mapping
+is trusted same-user telemetry, not a security boundary or an action channel.
+An optional independent Windows watchdog changes Normal to AboveNormal for a
+bounded lease and restores it on expiration/capture stop. It never authorizes
+GPU changes. See [the full session contract](application-sessions.md).
+
 - `FluidGateway`: offline diagnosis, trace ingestion, policy modeling, and the
   operational ledger contract.
 - `FluidRuntime`: .NET CLI, identity checks, telemetry aggregation, decision
@@ -419,11 +428,12 @@ observe-only, and all regional copies remain forwarded.
   full-buffer `CopyBufferRegion`, and a maximum 128-action epoch. Textures,
   aliases, placed resources, multiple queues, general barriers/synchronization,
   presentation, and residency control are excluded.
-- Vulkan uses a separate [cooperative private-object library](vulkan-native.md),
-  not a generic loader layer. It implements buffer-copy elision, two lanes,
+- Vulkan GPU actuation uses a [cooperative private-object library](vulkan-native.md).
+  It implements buffer-copy elision, two lanes,
   explicit barriers, frozen sources, fence-complete readback and revocation
-  over backend ID 3 and the same transfer event/action contract. External Vulkan
-  command streams, images, aliases and multiple queues are not instrumented.
+  over backend ID 3 and the same transfer event/action contract. A separate
+  explicit layer observes selected external API calls, but does not reconstruct
+  complete resource generations, aliases, layouts, or execution provenance.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
 - Shader draw/dispatch writes, UAV integer clears, depth/stencil clears, fences,

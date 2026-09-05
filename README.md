@@ -3,7 +3,7 @@
 **A Windows research runtime for finding and safely removing redundant work
 between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
 
-[![Version](https://img.shields.io/badge/version-0.22.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
+[![Version](https://img.shields.io/badge/version-0.23.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 [![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
@@ -23,7 +23,20 @@ action can be applied without changing the result.
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
 | Vulkan | Native cooperative buffer-copy library, FluidLink authorization, exact readback and rollback |
-| External games | Unsupported; owned opt-in workloads only |
+| Third-party Vulkan | Opt-in launch observation; verified with unmodified Khronos cube applications |
+| Windows integration | Optional Normal -> AboveNormal priority lease with independent rollback watchdog |
+| General game optimization | Not established; external GPU operations are never removed |
+
+## Application Sessions
+
+The v0.23 source on `main` can observe a selected x64 Vulkan application through
+an explicit loader layer, collect CPU/RAM and Vulkan counters, and send the
+result to Gateway's `analyze-app` report. No global installation is required.
+Windows priority changes are **off by default** and limited to a short,
+explicitly requested lease. Protected/anti-cheat applications are unsupported.
+
+[Build and run a session](docs/application-sessions.md) |
+[Test evidence and limitations](docs/evidence/v0.23.0-application-integration.md).
 
 ## Persistent Native Telemetry
 
@@ -95,14 +108,15 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 
 ## Safety Boundary
 
-FluidRuntime does not currently inject into third-party games, alter drivers,
-schedule Windows threads, control physical residency, or promise unified-memory
-behavior in software. Native intervention is limited to owned deterministic
-targets, short-lived policies, exact equivalence checks, bounded action budgets,
-and verified rollback.
+FluidRuntime does not remotely inject into existing processes, alter drivers,
+replace the Windows scheduler, control physical residency, or promise unified-
+memory behavior in software. GPU intervention is limited to owned deterministic
+targets. Third-party Vulkan observation forwards calls unchanged; the separate
+Windows priority lease never requests High/Realtime priority or global changes.
 
-FluidRuntime launches and terminates only executables supplied to explicit lab
-commands. It does not discover arbitrary games or inject into an external PID.
+Lab commands use disposable owned workloads. `app-session` launches only the
+selected application and leaves it running when capture stops. The observation
+layer stays loaded until that application exits; stopping capture is not an unload.
 
 ## Documentation
 

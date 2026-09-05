@@ -1,6 +1,16 @@
 # Project Status
 
-## Current Development: v0.22 Native Vulkan
+## Current Development: v0.23 Application Integration
+
+`main` adds opt-in third-party Vulkan launch observation and a separately
+authorized Windows priority lease. It does not authorize external GPU copy
+elision. See [application sessions](application-sessions.md) and
+[the v0.23 evidence](evidence/v0.23.0-application-integration.md) for reproduction,
+measured coverage, overhead limits and the collector-crash restoration test.
+The FluidLink contract and Gateway v0.67.1 pin are unchanged. The new Gateway
+`analyze-app` importer requires current Gateway `main`, not the older release tag.
+
+## Previous Milestone: v0.22 Native Vulkan
 
 The development branch now implements a cooperative Vulkan buffer-transfer
 library and Gateway-authorized lab. It is not a general Vulkan loader layer or

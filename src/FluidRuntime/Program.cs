@@ -11,6 +11,10 @@ public static class RuntimeApplication
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length > 0 && args[0] == "app-session")
+            return await ApplicationSessionRunner.RunCommandAsync(args);
+        if (args.Length > 0 && args[0] == "windows-priority-lease")
+            return await WindowsPriorityLease.RunWatchdogAsync(args);
         if (args.Length > 0 && args[0] == "gateway-vulkan-copy-lab")
         {
             return await GatewayVulkanCopyLabCommand.RunAsync(args);
@@ -125,6 +129,7 @@ public static class RuntimeApplication
             Console.WriteLine(D3D12ObservationLabOptions.Usage);
             Console.WriteLine(GatewayD3D12CopyLabOptions.Usage);
             Console.WriteLine(GatewayVulkanCopyLabOptions.Usage);
+            Console.WriteLine(ApplicationSessionOptions.Usage);
             return 0;
         }
 
