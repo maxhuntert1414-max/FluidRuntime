@@ -161,9 +161,18 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Measure CPU-shadow construction and reuse thresholds for smaller candidate
   sets so the proof cost never silently exceeds the avoided work.
 
-### v0.22: Owned Vulkan Backend
+### v0.22: Cooperative Vulkan Backend
 
-- Implement the neutral transfer contract behind an explicit opt-in Vulkan
+- Implemented: private two-lane buffer-copy library, frozen source snapshots,
+  exact-copy elision, FluidLink domain-separated authority, native ring evidence,
+  explicit synchronization, fence-complete readback and permanent revocation.
+- This deliberately implements a cooperative library before a general loader
+  layer. Private resource ownership makes the first action provable; it does
+  not pretend to cover arbitrary engine command streams.
+
+### Next: Vulkan Observation And Engine Integration
+
+- Extend the neutral transfer contract behind an explicit opt-in Vulkan
   layer for the owned lab, observing allocations,
   memory binding, buffers/images, copy commands, barriers, queue submit/present,
   semaphores, fences, and available memory-budget telemetry.

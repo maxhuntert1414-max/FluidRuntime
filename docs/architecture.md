@@ -418,7 +418,12 @@ observe-only, and all regional copies remain forwarded.
   lists, two copy-only 4 MiB DEFAULT buffers, immutable upload shadows,
   full-buffer `CopyBufferRegion`, and a maximum 128-action epoch. Textures,
   aliases, placed resources, multiple queues, general barriers/synchronization,
-  presentation, and residency control are excluded. Vulkan is not instrumented.
+  presentation, and residency control are excluded.
+- Vulkan uses a separate [cooperative private-object library](vulkan-native.md),
+  not a generic loader layer. It implements buffer-copy elision, two lanes,
+  explicit barriers, frozen sources, fence-complete readback and revocation
+  over backend ID 3 and the same transfer event/action contract. External Vulkan
+  command streams, images, aliases and multiple queues are not instrumented.
 - Automatic destruction is only proven for the same returned Buffer/Texture2D
   interface identity in the owned target; interface aliases are not covered.
 - Shader draw/dispatch writes, UAV integer clears, depth/stencil clears, fences,

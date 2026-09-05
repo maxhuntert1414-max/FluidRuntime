@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.21.2 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.22.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -79,7 +79,53 @@ configure_fluidruntime_native_target(fluidruntime-hook-target)
 target_include_directories(fluidruntime-hook-target PRIVATE include)
 target_link_libraries(fluidruntime-hook-target PRIVATE d3d11 dxgi)
 
+option(FLUIDRUNTIME_ENABLE_VULKAN "Build the cooperative native Vulkan backend" ON)
+option(FLUIDRUNTIME_TEST_VULKAN_GPU "Run Vulkan tests requiring a Vulkan ICD" OFF)
+if(FLUIDRUNTIME_ENABLE_VULKAN)
+    include(FetchContent)
+    set(VULKAN_HEADERS_ENABLE_MODULE OFF CACHE BOOL "FluidRuntime uses the Vulkan C API, not C++ modules")
+    FetchContent_Declare(VulkanHeaders
+        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.290.tar.gz
+        URL_HASH SHA256=f38a653bf93cab7a2a229a53d2d53b1cba9a2819e4c0a7de13c54085bde9bcf5
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(VulkanHeaders)
+    add_library(fluidruntime-vulkan-transfer SHARED src/vulkan_transfer.cpp)
+    configure_fluidruntime_native_target(fluidruntime-vulkan-transfer)
+    target_include_directories(fluidruntime-vulkan-transfer PRIVATE include)
+    target_link_libraries(fluidruntime-vulkan-transfer PRIVATE Vulkan::Headers)
+    add_executable(fluidruntime-vulkan-transfer-target src/vulkan_transfer_target.cpp)
+    configure_fluidruntime_native_target(fluidruntime-vulkan-transfer-target)
+    target_include_directories(fluidruntime-vulkan-transfer-target PRIVATE include)
+    add_executable(fluidruntime-vulkan-policy-tests src/vulkan_policy_tests.cpp)
+    configure_fluidruntime_native_target(fluidruntime-vulkan-policy-tests)
+    target_include_directories(fluidruntime-vulkan-policy-tests PRIVATE include)
+endif()
+
 enable_testing()
+if(FLUIDRUNTIME_ENABLE_VULKAN)
+    add_test(NAME fluidruntime-vulkan-policy-tests COMMAND fluidruntime-vulkan-policy-tests)
+    add_test(NAME fluidruntime-vulkan-rejects-invalid-count
+        COMMAND fluidruntime-vulkan-transfer-target --candidate-count 129)
+    set_tests_properties(fluidruntime-vulkan-rejects-invalid-count PROPERTIES WILL_FAIL TRUE)
+    if(FLUIDRUNTIME_TEST_VULKAN_GPU)
+        foreach(mode baseline controlled guards)
+            add_test(NAME fluidruntime-vulkan-${mode}
+                COMMAND fluidruntime-vulkan-transfer-target
+                    --library $<TARGET_FILE:fluidruntime-vulkan-transfer>
+                    --candidate-count 16 --mode ${mode})
+            set_tests_properties(fluidruntime-vulkan-${mode} PROPERTIES TIMEOUT 30
+                ENVIRONMENT "VK_LOADER_LAYERS_DISABLE=~implicit~")
+        endforeach()
+        foreach(count 1 127 128)
+            add_test(NAME fluidruntime-vulkan-controlled-${count}
+                COMMAND fluidruntime-vulkan-transfer-target
+                    --library $<TARGET_FILE:fluidruntime-vulkan-transfer>
+                    --candidate-count ${count} --mode controlled)
+            set_tests_properties(fluidruntime-vulkan-controlled-${count} PROPERTIES TIMEOUT 30
+                ENVIRONMENT "VK_LOADER_LAYERS_DISABLE=~implicit~")
+        endforeach()
+    endif()
+endif()
 add_test(
     NAME fluidruntime-native-probe-self-test
     COMMAND fluidruntime-native-probe --self-test

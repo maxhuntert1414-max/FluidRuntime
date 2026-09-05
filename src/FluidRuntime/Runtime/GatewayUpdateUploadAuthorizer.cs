@@ -10,7 +10,8 @@ namespace FluidRuntime.Runtime;
 public enum GatewayUploadBackend
 {
     D3D11UpdateSubresource = 0,
-    D3D12CopyBufferRegion = 1
+    D3D12CopyBufferRegion = 1,
+    VulkanCopyBuffer = 2
 }
 
 public sealed record GatewayUpdateUploadAuthorizationRequest(
@@ -92,12 +93,12 @@ public sealed record GatewayUpdateUploadAuthorization(
             FluidLinkV2Capability.SessionLifecycle |
             FluidLinkV2Capability.BatchedRuntimeEvents;
         var expectedLogicalBytes = checked(expectedResourceBytes * expectedActionCount);
-        var contextTopology = expectedBackend ==
-                GatewayUploadBackend.D3D12CopyBufferRegion
+        var contextTopology = expectedBackend !=
+                GatewayUploadBackend.D3D11UpdateSubresource
             ? topology
             : expectedTopology;
-        var topologyEvidenceMatches = expectedBackend ==
-                GatewayUploadBackend.D3D12CopyBufferRegion
+        var topologyEvidenceMatches = expectedBackend !=
+                GatewayUploadBackend.D3D11UpdateSubresource
             ? TransferTopology == topology
             : TransferTopology is null || TransferTopology == topology;
         var request = new GatewayUpdateUploadAuthorizationRequest(
@@ -225,6 +226,24 @@ internal static class GatewayUploadAuthorizationProfiles
                 ],
                 NativeTransferDescriptors.D3D12CopyBuffer,
                 NativeTransferTopology.D3D12MultiLane),
+            GatewayUploadBackend.VulkanCopyBuffer => new(
+                HookRingReader.SkipRedundantTransferBufferCopyAction,
+                "gateway-transfer-vulkan",
+                "gateway-transfer-vulkan",
+                "fluidruntime-gateway-transfer-authorization-context-v1",
+                "owned-vulkan-process-bound-private-buffer-copy-final-gate",
+                [
+                    "expected loopback peer PID and executable SHA matched through the OS TCP owner table",
+                    "owned target and Vulkan library binaries frozen before authorization",
+                    "private device, queue, command buffers and dedicated non-aliased allocations",
+                    "immutable unmapped upload sources and exact full-buffer content comparison",
+                    "fill, invalidation, reset and close clear retained lane state",
+                    "explicit transfer barriers, host flush/invalidate and completion fence",
+                    "one short-lived epoch, bounded action budget and permanent local revocation",
+                    "exact readback and all-forwarded rollback verified independently of timing"
+                ],
+                NativeTransferDescriptors.VulkanCopyBuffer,
+                NativeTransferTopology.VulkanMultiLane),
             _ => throw new ArgumentOutOfRangeException(nameof(backend))
         };
 }
@@ -240,7 +259,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     IGatewayUpdateUploadAuthorizer
 {
     private const string ClientName = "fluidruntime-gateway-manager";
-    private const string ClientVersion = "0.21.2";
+    private const string ClientVersion = "0.22.0";
     private const string ExpectedAdvertisedServerName = "fluidgateway";
     private const int AuthorizationRoundTrips = 10;
     private readonly string host;
@@ -668,11 +687,11 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 "Gateway update authorization request is outside the native policy bounds.",
                 nameof(request));
         }
-        if (request.Backend == GatewayUploadBackend.D3D12CopyBufferRegion &&
+        if (request.Backend != GatewayUploadBackend.D3D11UpdateSubresource &&
             request.Topology is null)
         {
             throw new ArgumentException(
-                "D3D12 authorization requires an explicit transfer topology.",
+                "Native buffer-copy authorization requires an explicit transfer topology.",
                 nameof(request));
         }
         RequireSha256(request.TargetSha256, nameof(request.TargetSha256));

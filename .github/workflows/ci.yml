@@ -32,6 +32,12 @@ jobs:
           /p:TreatWarningsAsErrors=true
       - name: Test native probe
         run: ctest --test-dir native/build -C Release --output-on-failure
+      - name: Analyze cooperative Vulkan library and owned target
+        run: >-
+          cmake --build native/build --config Release
+          --target fluidruntime-vulkan-transfer fluidruntime-vulkan-transfer-target --
+          /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
+          /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
       - name: Build native probe (Debug)
         run: cmake --build native/build --config Debug
       - name: Test native probe (Debug)

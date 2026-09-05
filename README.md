@@ -3,7 +3,7 @@
 **A Windows research runtime for finding and safely removing redundant work
 between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
 
-[![Version](https://img.shields.io/badge/version-0.21.2-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
+[![Version](https://img.shields.io/badge/version-0.22.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 [![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
@@ -22,7 +22,7 @@ action can be applied without changing the result.
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
-| Vulkan | Planned, not implemented |
+| Vulkan | Native cooperative buffer-copy library, FluidLink authorization, exact readback and rollback |
 | External games | Unsupported; owned opt-in workloads only |
 
 ## Persistent Native Telemetry
@@ -41,49 +41,21 @@ fluidruntime inspect --ledger ledger.json --out report.json --pid 1234 `
 This path is observational and read-only. It does not inject, hook, schedule,
 change residency, or optimize the target process.
 
-## v0.21.2 CI Portability Hotfix
+## Native Vulkan
 
-This hotfix derives the Microsoft AddressSanitizer runtime location from the
-toolchain selected by CMake. It supports current GitHub runners whether Visual
-Studio is installed under `Program Files` or `Program Files (x86)` and leaves
-the v0.21.1 runtime authority and wire contracts unchanged.
+The v0.22 backend removes proven redundant `vkCmdCopyBuffer` calls from an
+owned RAM -> device-local memory -> RAM workload. Two isolated lanes retain
+exact content through source changes, fills, invalidation, reset and revocation.
+FluidGateway authorizes a bounded policy through the existing binary FluidLink
+contract; the native library makes the final decision.
 
-## v0.21.1 Safety Release
+This is a reusable **cooperative library**, not a Vulkan interception layer for
+arbitrary games. It owns its Vulkan objects, installs nothing globally, and
+does not remove required barriers or fences. Logical bytes omitted are not
+physical PCIe traffic, VRAM savings, or proof of higher FPS.
 
-This patch does not widen native authority. It makes the current owned-lab path
-safer to run locally: every launched target is terminated and reaped on timeout
-or cancellation, native-probe duration is bounded, evidence files are replaced
-atomically, and the native toolchain treats warnings as errors with SDL and
-Control Flow Guard enabled. MSVC code analysis is clean for the two targets that
-previously reported null-dereference and excessive-stack warnings.
-
-## v0.21 Result
-
-The D3D12 path now consumes a backend-neutral transfer contract covering queues,
-execution scopes, resources, lanes, operations, and fences. Across 30 measured
-RX 580 pairs plus one warmup:
-
-- two command lists and two independent destination lanes preserved exact final
-  content while each optimized run omitted 128 redundant 4 MiB calls;
-- baseline forwarded 136 tracked calls; optimized forwarded the eight required
-  guards and skipped 128 candidates;
-- submit-to-fence delta p50/p95/p99 was
-  `-45.817 / -42.616 / -37.080 ms`, with 30/30 optimized wins;
-- GPU timestamp delta p50/p95/p99 was
-  `-46.870 / -42.814 / -38.004 ms`, also with 30/30 wins;
-- the native execution gate passed, but the complete managed path did not:
-  end-to-end p95/p99 was `+18.262 / +53.557 ms`, so the product-level
-  performance claim remains blocked;
-- malformed, stalled, and slow peers published no policy and completed an
-  all-forwarded 136-call baseline with zero skips.
-
-The reusable contract, transfer event/action opcodes, unique destination
-ownership rule, and numeric backend/operation IDs are ready for a Vulkan
-implementation. Vulkan itself is not implemented in this release.
-
-This is measured protocol and functional evidence. It is not yet a claim of
-lower game latency, higher FPS, reduced PCIe traffic, lower power, or physical
-RAM/VRAM savings.
+[Build, run and understand the boundary](docs/vulkan-native.md).
+[Measurements and validation](docs/evidence/v0.22.0-vulkan-native.md).
 
 ## How It Fits
 
@@ -98,7 +70,7 @@ PresentMon + Windows telemetry
         FluidRuntime
  proof + bounded owned action
              |
-   native D3D11/D3D12 labs
+   native D3D11/D3D12/Vulkan labs
 ```
 
 ## Verify Locally
@@ -137,6 +109,7 @@ commands. It does not discover arbitrary games or inject into an external PID.
 - [Current status and release gate](docs/STATUS.md)
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [Native Vulkan library and lab](docs/vulkan-native.md)
 - [v0.21 generalized D3D12 transfer evidence](docs/evidence/v0.21.0-d3d12-transfer-core.md)
 - [v0.21.1 local-use hardening evidence](docs/evidence/v0.21.1-local-use-hardening.md)
 - [v0.21.2 CI portability evidence](docs/evidence/v0.21.2-ci-portability.md)

@@ -64,6 +64,9 @@ public sealed record NativeTransferTopology(
             FenceCount: 1,
             RuntimeEventCount: checked((int)candidateCount + 17));
 
+    public static NativeTransferTopology VulkanMultiLane(ulong candidateCount) =>
+        new(1, 2, 2, 2, 2, 1, checked((int)candidateCount + 17));
+
     public void Validate(ulong candidateCount)
     {
         if (candidateCount == 0 ||
@@ -97,4 +100,10 @@ public static class NativeTransferDescriptors
         NativeTransferBackend.D3D12,
         NativeTransferOperation.CopyBuffer,
         "owned-d3d12-multi-command-list-buffer-copy");
+
+    public static readonly NativeTransferDescriptor VulkanCopyBuffer = new(
+        NativeTransferTopology.ContractVersion,
+        NativeTransferBackend.Vulkan,
+        NativeTransferOperation.CopyBuffer,
+        "owned-vulkan-private-command-buffer-copy");
 }

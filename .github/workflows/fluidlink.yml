@@ -53,7 +53,7 @@ jobs:
         run: >-
           dotnet test tests/FluidRuntime.Tests/FluidRuntime.Tests.csproj
           --no-restore
-          --filter "FullyQualifiedName~FluidLink|FullyQualifiedName~GatewayUpdateUpload|FullyQualifiedName~D3D12CopyElision|FullyQualifiedName~OwnedBinaryBinding|FullyQualifiedName~WindowsLoopbackPeerVerifier"
+          --filter "FullyQualifiedName~FluidLink|FullyQualifiedName~GatewayUpdateUpload|FullyQualifiedName~D3D12CopyElision|FullyQualifiedName~VulkanCopyLab|FullyQualifiedName~OwnedBinaryBinding|FullyQualifiedName~WindowsLoopbackPeerVerifier"
 
       - name: Test Python and .NET intercommunication
         shell: powershell

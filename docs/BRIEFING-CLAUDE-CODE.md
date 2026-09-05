@@ -1,6 +1,9 @@
 # Briefing FluidRuntime / FluidGateway
 
-Handoff atualizado em 2026-08-11 para o release v0.21.0.
+Handoff historico de 2026-08-11 para v0.21.0. Para o estado atual do Vulkan
+cooperativo, consulte [Native Vulkan](vulkan-native.md), [STATUS](STATUS.md) e
+o checkpoint mais recente na raiz de Project_FluidGateway. Os limites e
+pendencias abaixo descrevem a versao historica, nao o backend v0.22.
 
 ## 1. Objetivo geral
 

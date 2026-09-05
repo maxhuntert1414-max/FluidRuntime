@@ -11,6 +11,11 @@ public static class RuntimeApplication
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length > 0 && args[0] == "gateway-vulkan-copy-lab")
+        {
+            return await GatewayVulkanCopyLabCommand.RunAsync(args);
+        }
+
         if (args.Length > 0 &&
             string.Equals(
                 args[0],
@@ -119,6 +124,7 @@ public static class RuntimeApplication
             Console.WriteLine(FluidLinkProbeOptions.Usage);
             Console.WriteLine(D3D12ObservationLabOptions.Usage);
             Console.WriteLine(GatewayD3D12CopyLabOptions.Usage);
+            Console.WriteLine(GatewayVulkanCopyLabOptions.Usage);
             return 0;
         }
 

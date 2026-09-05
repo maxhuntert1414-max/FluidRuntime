@@ -1,5 +1,24 @@
 # Project Status
 
+## Current Development: v0.22 Native Vulkan
+
+The development branch now implements a cooperative Vulkan buffer-transfer
+library and Gateway-authorized lab. It is not a general Vulkan loader layer or
+external game hook. Build instructions and authority limits are in
+[Native Vulkan](vulkan-native.md); current validation and measured results are
+in [the v0.22 evidence report](evidence/v0.22.0-vulkan-native.md).
+
+The v0.22 wire contract is unchanged and remains compatible with the pinned
+FluidGateway v0.67.1 server. Release/publication status belongs to the current
+workspace checkpoint and GitHub Actions, not the historical gate below.
+
+Local gates: 270 Gateway tests, 229 managed tests, 31 native tests each in
+Release/Debug/ASAN, clean Vulkan static analysis and Khronos core/synchronization
+validation. Thirty RX 580 AB/BA pairs passed exact readback and rollback;
+the measured GPU interval improvement is scoped to the owned synthetic workload.
+
+## Historical v0.21.2 Gate
+
 FluidRuntime v0.21.2 is verified locally as of 2026-08-14. It hardens process
 lifecycle, report persistence, native-probe deadlines, compiler defenses, and
 static-analysis gates without changing the v0.21 D3D12 transfer contract.
