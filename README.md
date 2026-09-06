@@ -120,6 +120,7 @@ layer stays loaded until that application exits; stopping capture is not an unlo
 
 ## Documentation
 
+- [Code review and regression evidence](docs/evidence/2026-09-05-code-review.md)
 - [Current status and release gate](docs/STATUS.md)
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)

@@ -42,6 +42,7 @@ internal static class ApplicationSessionRunner
 
     internal static async Task<ApplicationSessionReport> RunAsync(ApplicationSessionOptions options, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         WindowsPriorityLease.RequireUnelevated();
         ApplicationSessionOptions.RequireApplicationPath(options.Executable);
         var library = Path.Combine(options.LayerDirectory, "fluidruntime-vulkan-observe.dll");
@@ -67,8 +68,6 @@ internal static class ApplicationSessionRunner
         }
         else if (Existing("VK_INSTANCE_LAYERS").Contains("VK_LAYER_FLUIDRUNTIME_observe"))
             throw new InvalidOperationException("Baseline refuses an inherited FluidRuntime observation layer.");
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Cannot launch application.");
-        var timer = Stopwatch.StartNew();
         var samples = new List<ApplicationSample>();
         var verified = false;
         string? failure = null;
@@ -78,6 +77,11 @@ internal static class ApplicationSessionRunner
         using var stopSignal = new EventWaitHandle(false, EventResetMode.ManualReset, stopName);
         var leasePath = options.Output + ".priority-" + Guid.NewGuid().ToString("N") + ".json";
         PriorityLeaseReport? lease = null;
+        token.ThrowIfCancellationRequested();
+        var timer = Stopwatch.StartNew();
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Cannot launch application.");
+        using var exitWaitCancellation = new CancellationTokenSource();
+        var processExit = process.WaitForExitAsync(exitWaitCancellation.Token);
         try
         {
             while (timer.Elapsed.TotalSeconds < options.Seconds)
@@ -102,14 +106,21 @@ internal static class ApplicationSessionRunner
                 }
                 samples.Add(new(timer.Elapsed.TotalMilliseconds, process.TotalProcessorTime.TotalMilliseconds,
                     process.WorkingSet64, process.PrivateMemorySize64, process.Threads.Count, counters));
-                await Task.Delay(250, token);
+                var remaining = TimeSpan.FromSeconds(options.Seconds) - timer.Elapsed;
+                if (remaining > TimeSpan.Zero)
+                    await WaitForSampleAsync(processExit, remaining, token);
             }
         }
         catch (OperationCanceledException) { failure = "Session cancelled; telemetry stopped and priority restoration requested."; }
         catch (Exception error) { failure = error.Message; }
         finally
         {
+            observation.Stop();
+            timer.Stop();
             stopSignal.Set();
+            exitWaitCancellation.Cancel();
+            try { await processExit; }
+            catch (OperationCanceledException) { }
             if (watchdog is not null)
             {
                 try
@@ -124,7 +135,6 @@ internal static class ApplicationSessionRunner
                 catch (Exception error) { failure = $"Priority restoration unverified: {error.Message}"; }
                 finally { watchdog.Dispose(); }
             }
-            observation.Stop();
         }
         process.Refresh();
         var exited = process.HasExited;
@@ -151,6 +161,8 @@ internal static class ApplicationSessionRunner
              "Recorded copy bytes are not executed GPU bytes; command buffers may be replayed or discarded.",
              "Allocation sizes are logical Vulkan requests, not measured VRAM residency or physical traffic.",
              "Counters are independently atomic, not a simultaneous snapshot; extension coverage is partial.",
+             "Elapsed time is the collector capture window, not frame latency or an exact application benchmark.",
+             "The terminal sample carries final Vulkan counters and the last available CPU/memory sample.",
              "Stopping capture disables counter writes. The layer remains loaded until the application exits.",
              "No game-performance claim; compare repeated baseline/observed runs and inspect overhead.",
              "Anti-cheat/protected applications are unsupported; acknowledgement is not automatic compatibility detection.",
@@ -158,6 +170,13 @@ internal static class ApplicationSessionRunner
         await AtomicJsonFile.WriteTextAsync(options.Output, JsonSerializer.Serialize(report, JsonOptions) + Environment.NewLine,
             CancellationToken.None);
         return report;
+    }
+
+    internal static async Task WaitForSampleAsync(Task processExit, TimeSpan remaining, CancellationToken token)
+    {
+        var interval = remaining < TimeSpan.FromMilliseconds(250) ? remaining : TimeSpan.FromMilliseconds(250);
+        try { await processExit.WaitAsync(interval, token); }
+        catch (TimeoutException) { }
     }
 
     internal static void ValidateManifest(JsonElement root)

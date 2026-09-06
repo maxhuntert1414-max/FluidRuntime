@@ -98,8 +98,11 @@ independent atomic operations, not a coherent multi-field snapshot.
 - Present counts are API calls, not displayed FPS or input latency. Negative
   VkResult counts include recoverable conditions such as out-of-date swapchains.
 - CPU/RAM sampling is approximately every 250 ms, not continuous. Final CPU/RAM
-  values reuse the last live sample if the process has exited; short spikes and
+  values reuse the last live sample; short spikes and
   shutdown CPU time may be absent. Vulkan final counters are read separately.
+- Process exit wakes the collector between sampling ticks. Capture duration stops
+  before watchdog cleanup and is not a frame-latency or exact application benchmark.
+  A pre-cancelled session does not launch the selected application.
 - Coverage includes legacy buffer/image copies, buffer-copy2, bind2, barrier2
   and submit2 core/KHR aliases. Newer image-copy2/map2, sparse/external memory,
   complete image layouts, resource generations, shader writes and queue-family

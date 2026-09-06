@@ -11,6 +11,36 @@ public sealed class ApplicationSessionTests
         "--out", "session.json", "--acknowledge-no-anticheat", "true"];
 
     [Fact]
+    public async Task Cancelled_session_is_rejected_before_touching_files_or_launching()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ApplicationSessionRunner.RunAsync(
+            new("missing.exe", "missing", "unused.json", 10, 0, false, []), cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Completed_application_does_not_wait_for_next_sampling_tick()
+    {
+        var wait = ApplicationSessionRunner.WaitForSampleAsync(Task.CompletedTask,
+            TimeSpan.FromSeconds(10), CancellationToken.None);
+        Assert.True(wait.IsCompletedSuccessfully);
+        await wait;
+    }
+
+    [Fact]
+    public async Task Sampling_wait_honors_capture_deadline_and_cancellation()
+    {
+        var running = new TaskCompletionSource();
+        await ApplicationSessionRunner.WaitForSampleAsync(running.Task,
+            TimeSpan.Zero, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ApplicationSessionRunner.WaitForSampleAsync(running.Task, TimeSpan.FromSeconds(10), cancellation.Token));
+    }
+
+    [Fact]
     public void Launch_is_opt_in_and_application_arguments_are_not_options()
     {
         var options = ApplicationSessionOptions.Parse([.. Args, "--", "--priority-seconds", "999", "with spaces", "--help"]);

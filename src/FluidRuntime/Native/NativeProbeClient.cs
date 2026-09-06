@@ -57,6 +57,7 @@ public sealed class NativeProbeClient
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(intervalMs);
@@ -91,16 +92,24 @@ public sealed class NativeProbeClient
             startInfo.ArgumentList.Add(sampleCount.Value.ToString());
         }
 
+        return await RunProcessAsync(startInfo, timeout, cancellationToken);
+    }
+
+    internal static async Task<string> RunProcessAsync(
+        ProcessStartInfo startInfo, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(timeout);
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Unable to start the native probe.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        deadline.CancelAfter(timeout);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(deadline.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(deadline.Token);
         try
         {
             await process.WaitForExitAsync(deadline.Token);
+            // Descendants may still own the pipes after the probe itself exits.
+            await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(deadline.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -109,8 +118,10 @@ public sealed class NativeProbeClient
         }
         finally
         {
+            deadline.Cancel();
             await OwnedProcessLifetime.TerminateAsync(process);
-            await Task.WhenAll(stdoutTask, stderrTask);
+            try { await Task.WhenAll(stdoutTask, stderrTask); }
+            catch (OperationCanceledException) { }
         }
         var stdout = await stdoutTask;
         var stderr = await stderrTask;

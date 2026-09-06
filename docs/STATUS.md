@@ -1,5 +1,15 @@
 # Project Status
 
+## Code Review: 2026-09-05
+
+Main hardens cancellation, probe pipe deadlines and application capture timing.
+The paired Gateway fixes stale copy/reuse state, retained-work dependencies,
+metric confidence and report/input validation. Local gate: 294 Python tests,
+250 managed tests and 32 native cases each in Release/Debug/ASAN, plus
+cross-process/native/application regressions. See
+[review evidence and remaining work](evidence/2026-09-05-code-review.md).
+No broader game-performance or third-party GPU-actuation claim is introduced.
+
 ## Current Development: v0.23 Application Integration
 
 `main` adds opt-in third-party Vulkan launch observation and a separately
