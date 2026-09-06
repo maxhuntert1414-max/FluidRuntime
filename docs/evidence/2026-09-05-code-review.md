@@ -9,8 +9,10 @@ for findings, Gateway provenance/dependency corrections and unresolved risks.
 - Pre-cancelled probes/application sessions stop before filesystem work and launch.
   Application preparation checks cancellation again immediately before launching.
 - Native probe stdout/stderr reads share the process deadline, including when a
-  descendant inherits the pipes. The regression creates a ten-second pipe holder,
-  checks the probe's own two-second timeout, and cleans up the owned descendant.
+  descendant inherits the pipes. The regression creates a thirty-second pipe holder,
+  checks the probe's own ten-second timeout, and cleans up the owned descendant.
+  Its startup allowance accommodates cold PowerShell on hosted Windows; the
+  production probe timeout remains caller-configured and unchanged.
 - Application sampling waits for process exit or the remaining sampling window;
   it no longer deliberately rounds exit detection to the next 250 ms poll.
 - Capture counters and the capture stopwatch stop before watchdog cleanup.

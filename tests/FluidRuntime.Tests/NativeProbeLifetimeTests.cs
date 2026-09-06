@@ -27,12 +27,14 @@ public sealed class NativeProbeLifetimeTests
             start.ArgumentList.Add("-NoProfile");
             start.ArgumentList.Add("-Command");
             start.ArgumentList.Add("$s = New-Object Diagnostics.ProcessStartInfo; " +
-                "$s.FileName = 'powershell.exe'; $s.Arguments = '-NoProfile -Command Start-Sleep -Seconds 10'; " +
+                "$s.FileName = 'powershell.exe'; $s.Arguments = '-NoProfile -Command Start-Sleep -Seconds 30'; " +
                 "$s.UseShellExecute = $false; $s.CreateNoWindow = $true; " +
                 "$p = [Diagnostics.Process]::Start($s); " +
                 $"[IO.File]::WriteAllText('{path.Replace("'", "''")}', [string]$p.Id)");
+            // Cold PowerShell startup on hosted Windows can exceed two seconds.
+            // The descendant must still outlive both the probe and test deadlines.
             var error = await Assert.ThrowsAsync<TimeoutException>(() => NativeProbeClient.RunProcessAsync(
-                start, TimeSpan.FromSeconds(2), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(6)));
+                start, TimeSpan.FromSeconds(10), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(20)));
             Assert.Contains("Native probe exceeded", error.Message);
             Assert.True(File.Exists(path), "The parent must have launched the pipe-holding descendant.");
         }
