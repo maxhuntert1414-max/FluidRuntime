@@ -195,7 +195,11 @@ public static class FluidLinkProbeCommand
                 "The returned decision is advisory and does not authorize the native hook.",
                 "Delta snapshots and shared-memory transport are not part of FluidLink v2.",
                 "FluidLink v2 is a local user-space protocol without hostile-peer authentication."
-            ]);
+            ])
+        {
+            V1BaselinePort = options.V1BaselinePort ?? options.Port,
+            V2Port = options.Port
+        };
     }
 
     private static async Task<LegacyProbeResult> RunLegacyBaselineAsync(
@@ -204,7 +208,7 @@ public static class FluidLinkProbeCommand
     {
         await using var client = new FluidLinkClient(
             options.Host,
-            options.Port,
+            options.V1BaselinePort ?? options.Port,
             TimeSpan.FromMilliseconds(options.TimeoutMs));
         var welcome = await client.HandshakeAsync(
             ClientName,

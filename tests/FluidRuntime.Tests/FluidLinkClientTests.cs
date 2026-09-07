@@ -72,6 +72,18 @@ public sealed class FluidLinkClientTests
     }
 
     [Fact]
+    public void Probe_can_compare_against_an_explicit_separate_legacy_peer()
+    {
+        var options = FluidLinkProbeOptions.Parse(
+            ["link-probe", "--out", "probe.json", "--v1-baseline-port", "9124"]);
+        Assert.Equal(9124, options.V1BaselinePort);
+        Assert.Equal(8765, options.Port);
+        Assert.Null(FluidLinkProbeOptions.Parse(["link-probe", "--out", "probe.json"]).V1BaselinePort);
+        Assert.Throws<ArgumentException>(() => FluidLinkProbeOptions.Parse(
+            ["link-probe", "--out", "probe.json", "--v1-baseline-port", "0"]));
+    }
+
+    [Fact]
     public void Protocol_uses_single_byte_numeric_opcodes()
     {
         Assert.Equal(10, (byte)FluidLinkOpcode.RuntimeEvent);

@@ -14,6 +14,20 @@ jobs:
           dotnet-version: 10.0.x
       - name: Test managed runtime
         run: dotnet test FluidRuntime.slnx -c Release -warnaserror
+      - name: Build development authorization comparison
+        run: dotnet build tools/GatewayComparison/GatewayComparison.csproj -c Release -warnaserror
+      - name: Check native-Gateway integration formatting
+        shell: pwsh
+        run: |
+          dotnet format whitespace FluidRuntime.slnx --no-restore --verify-no-changes --include `
+            src/FluidRuntime/Cli/FluidLinkProbeOptions.cs `
+            src/FluidRuntime/Cli/FluidLinkProbeCommand.cs `
+            src/FluidRuntime/Runtime/FluidLinkProbeReport.cs `
+            tests/FluidRuntime.Tests/FluidLinkClientTests.cs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet format whitespace tools/GatewayComparison/GatewayComparison.csproj `
+            --no-restore --verify-no-changes --include tools/GatewayComparison/Program.cs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Configure native probe
         run: cmake -S native -B native/build -A x64
       - name: Build native probe

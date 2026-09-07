@@ -45,4 +45,8 @@ public sealed record FluidLinkProbeReport(
     bool SharedMemoryTransportEnabled,
     bool IntercommunicationVerified,
     string Scope,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<string> Limitations)
+{
+    public int V1BaselinePort { get; init; }
+    public int V2Port { get; init; }
+}

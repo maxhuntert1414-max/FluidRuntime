@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$GatewayPath = ""
+    [string]$GatewayPath = "",
+    [ValidateSet("Python", "Native")] [string]$GatewayBackend = "Python",
+    [string]$GatewayExecutable = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,23 +41,45 @@ New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
 $reportPath = Join-Path $artifactDirectory "fluidlink-cross-process.json"
 $serverOutput = Join-Path $artifactDirectory "fluidlink-server.stdout.log"
 $serverError = Join-Path $artifactDirectory "fluidlink-server.stderr.log"
-$python = (Get-Command python -ErrorAction Stop).Source
+. (Join-Path $PSScriptRoot "GatewayServerCommand.ps1")
+$gatewayCommand = Get-GatewayServerCommand -GatewayRoot $gatewayRoot -Backend $GatewayBackend `
+    -Executable $GatewayExecutable -Port $port
 $server = Start-Process `
-    -FilePath $python `
-    -ArgumentList @(
-        "-u",
-        "-m", "fluidgateway",
-        "runtime", "serve-events",
-        "--host", "127.0.0.1",
-        "--port", "$port"
-    ) `
+    -FilePath $gatewayCommand.Executable `
+    -ArgumentList $gatewayCommand.Arguments `
     -WorkingDirectory $gatewayRoot `
     -RedirectStandardOutput $serverOutput `
     -RedirectStandardError $serverError `
     -WindowStyle Hidden `
     -PassThru
 
+$baselineServer = $null
 try {
+    $baselineArguments = @()
+    if ($GatewayBackend -eq "Native") {
+        $legacyListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $legacyListener.Start()
+        $legacyPort = ([Net.IPEndPoint]$legacyListener.LocalEndpoint).Port
+        $legacyListener.Stop()
+        $legacyCommand = Get-GatewayServerCommand -GatewayRoot $gatewayRoot -Backend Python -Port $legacyPort
+        $legacyOutput = Join-Path $artifactDirectory "fluidlink-legacy.stdout.log"
+        $legacyError = Join-Path $artifactDirectory "fluidlink-legacy.stderr.log"
+        $baselineServer = Start-Process -FilePath $legacyCommand.Executable -ArgumentList $legacyCommand.Arguments `
+            -WorkingDirectory $gatewayRoot -RedirectStandardOutput $legacyOutput -RedirectStandardError $legacyError `
+            -WindowStyle Hidden -PassThru
+        $legacyReady = $false
+        for ($attempt = 0; $attempt -lt 100; ++$attempt) {
+            if ($baselineServer.HasExited) { throw "Explicit legacy baseline server exited." }
+            if ((Test-Path -LiteralPath $legacyOutput) -and
+                (Select-String -LiteralPath $legacyOutput -Pattern "listening" -Quiet)) {
+                $legacyReady = $true
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $legacyReady) { throw "Legacy baseline startup timed out." }
+        $baselineArguments = @("--v1-baseline-port", "$legacyPort")
+    }
     $ready = $false
     for ($attempt = 0; $attempt -lt 50; $attempt += 1) {
         if ($server.HasExited) {
@@ -82,7 +106,8 @@ try {
         --host 127.0.0.1 `
         --port $port `
         --timeout-ms 5000 `
-        --out $reportPath
+        --out $reportPath `
+        @baselineArguments
     if ($LASTEXITCODE -ne 0) {
         throw "FluidRuntime link-probe exited with code $LASTEXITCODE."
     }
@@ -166,6 +191,10 @@ try {
     }
 }
 finally {
+    if ($null -ne $baselineServer -and -not $baselineServer.HasExited) {
+        Stop-Process -Id $baselineServer.Id -Force
+        Wait-Process -Id $baselineServer.Id -ErrorAction SilentlyContinue
+    }
     if (-not $server.HasExited) {
         Stop-Process -Id $server.Id -Force
         Wait-Process -Id $server.Id -ErrorAction SilentlyContinue

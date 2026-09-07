@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$GatewayPath = "",
+    [ValidateSet("Python", "Native")] [string]$GatewayBackend = "Python",
+    [string]$GatewayExecutable = "",
     [string]$TargetPath = "",
     [string]$HookPath = "",
     [string]$OutputPath = "",
@@ -192,15 +194,12 @@ function Invoke-FaultCase {
     return $fallback
 }
 
+. (Join-Path $PSScriptRoot "GatewayServerCommand.ps1")
+$gatewayCommand = Get-GatewayServerCommand -GatewayRoot $gatewayRoot -Backend $GatewayBackend `
+    -Executable $GatewayExecutable -Port $port
 $server = Start-Process `
-    -FilePath $python `
-    -ArgumentList @(
-        "-u",
-        "-m", "fluidgateway",
-        "runtime", "serve-events",
-        "--host", "127.0.0.1",
-        "--port", "$port"
-    ) `
+    -FilePath $gatewayCommand.Executable `
+    -ArgumentList $gatewayCommand.Arguments `
     -WorkingDirectory $gatewayRoot `
     -RedirectStandardOutput $serverOutput `
     -RedirectStandardError $serverError `
@@ -238,7 +237,7 @@ try {
         --port $port `
         --timeout-ms 5000 `
         --gateway-pid $server.Id `
-        --gateway-executable-sha256 $pythonSha256 `
+        --gateway-executable-sha256 $gatewayCommand.Sha256 `
         --trial-pairs $TrialPairs `
         --warmup-pairs $WarmupPairs `
         --hold-ms 50 `
@@ -273,7 +272,7 @@ if ($report.mode -ne "fluidruntime-gateway-update-upload-control-trace-v0.19.0" 
     -not $report.peer_process_binding_verified -or
     $report.peer_cryptographically_authenticated -or
     $report.peer_process_id -ne $server.Id -or
-    $report.peer_executable_sha256 -ne $pythonSha256 -or
+    $report.peer_executable_sha256 -ne $gatewayCommand.Sha256 -or
     $report.authorization_deadline_milliseconds -ne 5000 -or
     $report.target_sha256 -notmatch "^[0-9a-f]{64}$" -or
     $report.hook_sha256 -notmatch "^[0-9a-f]{64}$" -or
@@ -367,7 +366,7 @@ if ($report.authorizations | Where-Object {
     -not $_.peer_process_binding_verified -or
     $_.peer_cryptographically_authenticated -or
     $_.peer_process_id -ne $server.Id -or
-    $_.peer_executable_sha256 -ne $pythonSha256 -or
+    $_.peer_executable_sha256 -ne $gatewayCommand.Sha256 -or
     $_.authorization_context_sha256 -notmatch "^[0-9a-f]{64}$" -or
     $_.target_sha256 -ne $report.target_sha256 -or
     $_.hook_sha256 -ne $report.hook_sha256 -or

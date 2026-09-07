@@ -6,9 +6,11 @@ public sealed record FluidLinkProbeOptions(
     int TimeoutMs,
     string OutputPath)
 {
+    public int? V1BaselinePort { get; init; }
     public const string Usage =
         "Usage: fluidruntime link-probe --out <report.json> " +
-        "[--host <loopback-host>] [--port <port>] [--timeout-ms <milliseconds>]";
+        "[--host <loopback-host>] [--port <port>] [--timeout-ms <milliseconds>] " +
+        "[--v1-baseline-port <explicit-legacy-peer-port>]";
 
     public static FluidLinkProbeOptions Parse(string[] args)
     {
@@ -22,6 +24,7 @@ public sealed record FluidLinkProbeOptions(
         var host = "127.0.0.1";
         var port = 8765;
         var timeoutMs = 5000;
+        int? baselinePort = null;
         string? output = null;
         for (var index = 1; index < args.Length; index += 2)
         {
@@ -44,6 +47,9 @@ public sealed record FluidLinkProbeOptions(
                 case "--out":
                     output = value;
                     break;
+                case "--v1-baseline-port":
+                    baselinePort = ParseInt(value, "--v1-baseline-port", 1, 65535);
+                    break;
                 default:
                     throw new ArgumentException($"Unknown option '{args[index]}'. {Usage}");
             }
@@ -52,7 +58,7 @@ public sealed record FluidLinkProbeOptions(
         {
             throw new ArgumentException($"Host and output are required. {Usage}");
         }
-        return new(host, port, timeoutMs, output);
+        return new(host, port, timeoutMs, output) { V1BaselinePort = baselinePort };
     }
 
     private static int ParseInt(string value, string name, int minimum, int maximum)

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$GatewayPath = "",
+    [ValidateSet("Python", "Native")] [string]$GatewayBackend = "Python",
+    [string]$GatewayExecutable = "",
     [string]$BuildPath = "native/build",
     [ValidateSet("Release", "Debug")][string]$Configuration = "Release",
     [ValidateRange(1, 30)][int]$TrialPairs = 2,
@@ -25,6 +27,7 @@ New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 if ($OutputPrefix -notmatch '^[a-zA-Z0-9_-]+$') { throw "OutputPrefix must be a filename prefix, not a path." }
 $python = (Get-Command python -ErrorAction Stop).Source
 $pythonSha = (Get-FileHash -LiteralPath $python -Algorithm SHA256).Hash.ToLowerInvariant()
+. (Join-Path $PSScriptRoot "GatewayServerCommand.ps1")
 
 function Invoke-Case([string]$Mode) {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -37,15 +40,21 @@ function Invoke-Case([string]$Mode) {
     $stderr = Join-Path $artifacts "$OutputPrefix-$Mode.stderr.log"
     $output = Join-Path $artifacts "$OutputPrefix-$Mode.json"
     if ($Mode -eq "success") {
-        $arguments = @("-u", "-m", "fluidgateway", "runtime", "serve-events", "--host", "127.0.0.1", "--port", "$port")
+        $gatewayCommand = Get-GatewayServerCommand -GatewayRoot $gatewayRoot -Backend $GatewayBackend `
+            -Executable $GatewayExecutable -Port $port
+        $arguments = $gatewayCommand.Arguments
+        $peerExecutable = $gatewayCommand.Executable
+        $peerSha = $gatewayCommand.Sha256
         $working = $gatewayRoot
     } else {
+        $peerExecutable = $python
+        $peerSha = $pythonSha
         $faultScript = Join-Path $PSScriptRoot "fluidlink_fault_server.py"
         $arguments = @("-u", "`"$faultScript`"", "--port", "$port", "--mode", $Mode,
             "--ready", "`"$ready`"", "--gateway-path", "`"$gatewayRoot`"", "--delay-ms", "200")
         $working = $runtimeRoot
     }
-    $server = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $working `
+    $server = Start-Process -FilePath $peerExecutable -ArgumentList $arguments -WorkingDirectory $working `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WindowStyle Hidden -PassThru
     try {
         $started = $false
@@ -63,7 +72,7 @@ function Invoke-Case([string]$Mode) {
         $warmups = if ($Mode -eq "success") { $WarmupPairs } else { 0 }
         $timeout = if ($Mode -eq "success") { 5000 } elseif ($Mode -eq "slow") { 1200 } else { 500 }
         & dotnet $runtime gateway-vulkan-copy-lab --target $target --library $library --out $output `
-            --port $port --timeout-ms $timeout --gateway-pid $server.Id --gateway-executable-sha256 $pythonSha `
+            --port $port --timeout-ms $timeout --gateway-pid $server.Id --gateway-executable-sha256 $peerSha `
             --trial-pairs $pairs --warmup-pairs $warmups --candidate-action-count $CandidateActionCount `
             --hardware (-not $Software.IsPresent).ToString().ToLowerInvariant() `
             --validation $Validation.IsPresent.ToString().ToLowerInvariant() | Out-Host
