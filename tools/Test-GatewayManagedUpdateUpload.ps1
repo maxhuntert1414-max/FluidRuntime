@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GatewayPath = "",
-    [ValidateSet("Python", "Native")] [string]$GatewayBackend = "Python",
+    [ValidateSet("Python", "Native")] [string]$GatewayBackend = "Native",
     [string]$GatewayExecutable = "",
     [string]$TargetPath = "",
     [string]$HookPath = "",

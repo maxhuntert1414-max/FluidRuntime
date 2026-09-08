@@ -19,7 +19,7 @@ action can be applied without changing the result.
 | --- | --- |
 | FluidLink v2 | Strict binary IPC with numeric opcodes and no JSON payloads |
 | FluidLink batch | 129 logical operations in one ordered request/vector pair |
-| Native Gateway | C++20 endpoint integration with the same PID/hash and authority checks |
+| Native Gateway | Default C++20 endpoint in lab scripts; same PID/hash and authority checks |
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
@@ -93,11 +93,16 @@ PresentMon + Windows telemetry
 ## Verify Locally
 
 Requirements: Windows, Python 3.11+, .NET 10 SDK, CMake, and an x64 C++
-toolchain for native labs.
+toolchain for the full test suite. Native positive operation does not need Python;
+reference comparisons and fault fixtures do. See [Gateway setup](docs/native-gateway.md).
 
 ```powershell
 dotnet test FluidRuntime.slnx -c Debug
 dotnet build FluidRuntime.slnx -c Release -warnaserror
+cmake -S ../FluidGateway/native -B ../FluidGateway/native/build -A x64
+cmake --build ../FluidGateway/native/build --config Release
+cmake -S native -B native/build -A x64
+cmake --build native/build --config Release
 
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File tools/Test-FluidLinkIntegration.ps1 `

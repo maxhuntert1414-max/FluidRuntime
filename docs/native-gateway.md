@@ -6,10 +6,21 @@ The Gateway wire contracts and FluidLink package version do not change.
 
 ## Select the Endpoint
 
-The native backend is opt-in until the v0.68 release promotion gates are recorded.
-The validation scripts currently retain Python as their default.
+The validation scripts now default to **Native**, following the published
+[v0.68.0 promotion evidence](https://github.com/maxhuntert1414-max/FluidGateway/blob/v0.68.0/docs/release-v0.68.0.md).
+The CI pins that release and tests Native and the explicit Python reference in
+separate jobs. A missing native executable is an error, never an implicit fallback.
 
-Start the native Gateway explicitly:
+Build the sibling Gateway checkout first, or extract its Windows x64 release ZIP
+and pass `-GatewayExecutable <path-to-fluidgateway-native.exe>` to the scripts:
+
+```powershell
+cmake -S ../FluidGateway/native -B ../FluidGateway/native/build -A x64
+cmake --build ../FluidGateway/native/build --config Release
+```
+
+For manual Runtime commands, start the native Gateway explicitly (the validation
+scripts launch and clean up their own server):
 
 ```powershell
 ..\FluidGateway\native\build\Release\fluidgateway-native.exe serve-events --host 127.0.0.1 --port 8765
@@ -30,6 +41,21 @@ checks. `-GatewayBackend Python` explicitly selects the reference implementation
 Neither mode changes system configuration or introduces an automatic fallback to
 another language. Fault-injection fixtures use Python as test machinery only.
 
+The standalone smoke test verifies the entire positive path without Python on
+PATH, including actual native D3D11 actuation, content checks and rollback:
+
+```powershell
+.\tools\Test-NativeGatewayStandalone.ps1 `
+    -GatewayExecutable ..\FluidGateway\native\build\Release\fluidgateway-native.exe
+```
+
+It needs prebuilt Release Runtime/owned-target binaries and the .NET runtime,
+not Python. Use `-BuildPath native/build-vulkan` for that local build layout.
+Only the test process environment is restricted; machine/user settings are not
+modified. Its JSON report is paired with an `.environment.json` verification.
+`Test-GatewayServerCommand.ps1 -GatewayPath ../FluidGateway` separately verifies
+selection, executable hashes, script defaults and missing-executable rejection.
+
 ## Compatibility and Measurement
 
 The C++ endpoint supports FluidLink v2 base and batch, not v1 or JSONL. The
@@ -48,6 +74,8 @@ Then run Gateway's `tools/compare_runtime_gateway.py`. It compares five warmup
 and thirty measured AB/BA pairs using the real authorizer with PID, executable
 hash, nonce/context, capability, topology and decision checks. Negative PID/hash
 controls must fail. No native policy is published by this benchmark.
+It returns a nonzero exit code if either correctness or the p95/p99/CPU comparison
+fails; the JSON is still written so negative measurements remain inspectable.
 
 CPU cycles are measured with QueryProcessCycleTime. Windows process-time samples
 can round short intervals to zero; they do not establish zero CPU consumption.

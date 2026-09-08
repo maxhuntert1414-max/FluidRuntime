@@ -4,7 +4,7 @@ function Get-GatewayServerCommand {
         [Parameter(Mandatory = $true)]
         [string]$GatewayRoot,
         [ValidateSet("Python", "Native")]
-        [string]$Backend = "Python",
+        [string]$Backend = "Native",
         [string]$Executable = "",
         [ValidateRange(1, 65535)]
         [int]$Port = 8765

@@ -107,7 +107,7 @@ try
     await File.WriteAllTextAsync(args[8], JsonSerializer.Serialize(report,
         new JsonSerializerOptions { WriteIndented = true }), cancellation.Token);
     Console.WriteLine($"30 paired authorizations: comparison gate {passed}; identity guards {identityGuards}.");
-    return identityGuards ? 0 : 1;
+    return passed ? 0 : 1;
 }
 finally
 {

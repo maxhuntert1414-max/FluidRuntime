@@ -13,6 +13,10 @@ jobs:
   cross-process-contract:
     runs-on: windows-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        gateway-backend: [Python, Native]
 
     steps:
       - name: Check out FluidRuntime
@@ -22,7 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: maxhuntert1414-max/FluidGateway
-          ref: v0.67.1
+          ref: v0.68.0
           path: FluidGateway
 
       - name: Set up Python
@@ -43,6 +47,19 @@ jobs:
           tests.test_fluidlink_v2
           -v
 
+      - name: Configure native Gateway
+        if: matrix.gateway-backend == 'Native'
+        run: cmake -S FluidGateway/native -B FluidGateway/native/build -A x64
+
+      - name: Build native Gateway
+        if: matrix.gateway-backend == 'Native'
+        run: cmake --build FluidGateway/native/build --config Release
+
+      - name: Verify explicit Gateway selection and no fallback
+        if: matrix.gateway-backend == 'Native'
+        shell: powershell
+        run: ./tools/Test-GatewayServerCommand.ps1 -GatewayPath "$PWD/FluidGateway"
+
       - name: Restore .NET projects
         run: dotnet restore FluidRuntime.slnx
 
@@ -55,11 +72,12 @@ jobs:
           --no-restore
           --filter "FullyQualifiedName~FluidLink|FullyQualifiedName~GatewayUpdateUpload|FullyQualifiedName~D3D12CopyElision|FullyQualifiedName~VulkanCopyLab|FullyQualifiedName~OwnedBinaryBinding|FullyQualifiedName~WindowsLoopbackPeerVerifier"
 
-      - name: Test Python and .NET intercommunication
+      - name: Test selected Gateway and .NET intercommunication
         shell: powershell
         run: >-
           ./tools/Test-FluidLinkIntegration.ps1
           -GatewayPath "$PWD/FluidGateway"
+          -GatewayBackend ${{ matrix.gateway-backend }}
 
       - name: Configure native owned target
         run: cmake -S native -B native/build -A x64
@@ -67,11 +85,19 @@ jobs:
       - name: Build native owned target
         run: cmake --build native/build --config Release
 
+      - name: Verify native authorization and actuation without Python on PATH
+        if: matrix.gateway-backend == 'Native'
+        shell: powershell
+        run: >-
+          ./tools/Test-NativeGatewayStandalone.ps1
+          -GatewayExecutable "$PWD/FluidGateway/native/build/Release/fluidgateway-native.exe"
+
       - name: Test Gateway-authorized native actuation and fallback
         shell: powershell
         run: >-
           ./tools/Test-GatewayManagedUpdateUpload.ps1
           -GatewayPath "$PWD/FluidGateway"
+          -GatewayBackend ${{ matrix.gateway-backend }}
           -CandidateActionCount 128
           -TrialPairs 2
           -WarmupPairs 0
@@ -82,6 +108,7 @@ jobs:
         run: >-
           ./tools/Test-GatewayManagedD3D12Copy.ps1
           -GatewayPath "$PWD/FluidGateway"
+          -GatewayBackend ${{ matrix.gateway-backend }}
           -CandidateActionCount 128
           -TrialPairs 2
           -WarmupPairs 0
@@ -97,10 +124,11 @@ jobs:
       - name: Upload FluidLink package and probe report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: fluidlink-v2
+          name: fluidlink-v2-${{ matrix.gateway-backend }}
           path: |
             artifacts/packages/FluidLink.0.3.0.nupkg
             artifacts/fluidlink-cross-process.json
+            artifacts/native-gateway-standalone*.json
             artifacts/gateway-update-upload-control-128.json
             artifacts/gateway-update-upload-invalid-response-fail-closed-128.json
             artifacts/gateway-update-upload-fail-closed-128.json

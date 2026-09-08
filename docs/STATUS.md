@@ -1,5 +1,23 @@
 # Project Status
 
+## Native Gateway Promotion: v0.68.0
+
+Gateway v0.68.0 is published and pinned by the interop workflow. Lab scripts now
+default to Native, preserving explicit Python selection and all PID/hash,
+content, expiry, budget and rollback gates. CI covers both backends separately,
+including D3D11/D3D12 faults and native operation without Python on the child PATH.
+
+The shipped Gateway passed 60 uninterrupted minutes / 18,186,240 operations /
+4,440 sessions and 30 real-authorizer pairs. The latter measured 94.5% fewer
+server CPU cycles per operation and p99 of 7.58 ms versus 31.21 ms for Python.
+These are control-endpoint measurements, not game-performance evidence.
+See [setup and validation](native-gateway.md) and the
+[published results](https://github.com/maxhuntert1414-max/FluidGateway/blob/v0.68.0/docs/release-v0.68.0.md).
+
+Local regression gates: 251 managed tests, 32 native CTests each in
+Release/Debug/ASAN, actual C# interop and all three owned graphics backends with
+malformed/stalled/slow peers. No production Runtime actuation code was changed.
+
 ## Code Review: 2026-09-05
 
 Main hardens cancellation, probe pipe deadlines and application capture timing.
@@ -17,8 +35,8 @@ authorized Windows priority lease. It does not authorize external GPU copy
 elision. See [application sessions](application-sessions.md) and
 [the v0.23 evidence](evidence/v0.23.0-application-integration.md) for reproduction,
 measured coverage, overhead limits and the collector-crash restoration test.
-The FluidLink contract and Gateway v0.67.1 pin are unchanged. The new Gateway
-`analyze-app` importer requires current Gateway `main`, not the older release tag.
+The FluidLink contract is unchanged. The pinned Gateway v0.68.0 includes the
+`analyze-app` importer as well as the native online endpoint.
 
 ## Previous Milestone: v0.22 Native Vulkan
 
@@ -28,7 +46,7 @@ external game hook. Build instructions and authority limits are in
 [Native Vulkan](vulkan-native.md); current validation and measured results are
 in [the v0.22 evidence report](evidence/v0.22.0-vulkan-native.md).
 
-The v0.22 wire contract is unchanged and remains compatible with the pinned
+The v0.22 wire contract was compatible with the then-pinned
 FluidGateway v0.67.1 server. Release/publication status belongs to the current
 workspace checkpoint and GitHub Actions, not the historical gate below.
 
@@ -45,7 +63,7 @@ static-analysis gates without changing the v0.21 D3D12 transfer contract.
 Authority remains bounded to one owned COPY queue, two command lists, two 4 MiB
 destinations, two isolated lanes, one fence, and 128 exact actions.
 
-## Release Target
+## Historical v0.21.2 Release Target
 
 - Target branch/tag: `main` / `v0.21.2`
 - Canonical Gateway contract: [FluidGateway v0.67.1](https://github.com/maxhuntert1414-max/FluidGateway/releases/tag/v0.67.1)
@@ -53,7 +71,7 @@ destinations, two isolated lanes, one fence, and 128 exact actions.
 - FluidLink workflow: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
 - Runtime validation: [GitHub Actions](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
 
-## Local Release Gate
+## Historical v0.21.2 Local Gate
 
 - Managed tests: 194/194 passed.
 - FluidGateway complete suite: 268/268 passed on Python 3.12 and Python 3.14.
