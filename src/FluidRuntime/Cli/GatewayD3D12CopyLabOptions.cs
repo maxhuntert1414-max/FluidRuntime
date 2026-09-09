@@ -18,6 +18,7 @@ public sealed record GatewayD3D12CopyLabOptions(
     int CandidateActionCount,
     bool UseHardware)
 {
+    public GatewayBackendOptions GatewayConnection { get; init; } = GatewayBackendOptions.Server;
     public const ulong BufferBytes = 4UL * 1024UL * 1024UL;
     public const ulong UploadResourceBytes = 2 * BufferBytes;
     public const ulong SourceSnapshotBytes = 2 * UploadResourceBytes;
@@ -33,11 +34,12 @@ public sealed record GatewayD3D12CopyLabOptions(
         "[--host 127.0.0.1] [--port <port>] [--timeout-ms <milliseconds>] " +
         "[--trial-pairs <1-30>] [--warmup-pairs <0-5>] " +
         "[--hold-ms <1-5000>] [--gpu-timeout-ms <1-30000>] " +
-        "[--candidate-action-count <1-128>] [--hardware <true|false>]";
+        "[--candidate-action-count <1-128>] [--hardware <true|false>] " + GatewayBackendOptions.Usage;
 
     public static GatewayD3D12CopyLabOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
+        var connection = GatewayBackendOptions.Extract(ref args);
         if (args.Length == 0 ||
             !string.Equals(
                 args[0],
@@ -118,8 +120,8 @@ public sealed record GatewayD3D12CopyLabOptions(
         if (string.IsNullOrWhiteSpace(target) ||
             string.IsNullOrWhiteSpace(hook) ||
             string.IsNullOrWhiteSpace(output) ||
-            gatewayProcessId == 0 ||
-            gatewayExecutableSha256 is null)
+            (connection.Mode == "server" && (gatewayProcessId == 0 ||
+            gatewayExecutableSha256 is null)))
         {
             throw new ArgumentException(
                 "Target, hook, output, Gateway PID, and Gateway executable " +
@@ -139,22 +141,18 @@ public sealed record GatewayD3D12CopyLabOptions(
             port,
             timeoutMs,
             gatewayProcessId,
-            gatewayExecutableSha256,
+            gatewayExecutableSha256 ?? string.Empty,
             trialPairs,
             warmupPairs,
             holdMs,
             gpuTimeoutMs,
             candidateActionCount,
-            useHardware);
+            useHardware)
+        { GatewayConnection = connection };
     }
 
-    public IGatewayUpdateUploadAuthorizer CreateAuthorizer() =>
-        new FluidLinkGatewayUpdateUploadAuthorizer(
-            Host,
-            Port,
-            TimeSpan.FromMilliseconds(TimeoutMs),
-            GatewayProcessId,
-            GatewayExecutableSha256);
+    public FluidLinkGatewayUpdateUploadAuthorizer CreateAuthorizer() =>
+        GatewayConnection.Create(Host, Port, TimeoutMs, GatewayProcessId, GatewayExecutableSha256);
 
     public NativeTransferTopology CreateTransferTopology() =>
         NativeTransferTopology.D3D12MultiLane((ulong)CandidateActionCount);

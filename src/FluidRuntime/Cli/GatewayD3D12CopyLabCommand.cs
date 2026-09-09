@@ -19,9 +19,10 @@ public static class GatewayD3D12CopyLabCommand
         try
         {
             var options = GatewayD3D12CopyLabOptions.Parse(args);
+            using var authorizer = options.CreateAuthorizer();
             var report = await new D3D12CopyElisionLabRunner().RunAsync(
                 options,
-                options.CreateAuthorizer(),
+                authorizer,
                 cancellationToken);
             await WriteReportAsync(options.OutputPath, report, cancellationToken);
             Console.WriteLine(

@@ -16,6 +16,8 @@ jobs:
         run: dotnet test FluidRuntime.slnx -c Release -warnaserror
       - name: Build development authorization comparison
         run: dotnet build tools/GatewayComparison/GatewayComparison.csproj -c Release -warnaserror
+      - name: Build Gateway backend A/B benchmark
+        run: dotnet build tools/FluidGateway.BackendBenchmark/FluidGateway.BackendBenchmark.csproj -c Release -warnaserror
       - name: Check native-Gateway integration formatting
         shell: pwsh
         run: |
@@ -24,6 +26,9 @@ jobs:
             src/FluidRuntime/Cli/FluidLinkProbeCommand.cs `
             src/FluidRuntime/Runtime/FluidLinkProbeReport.cs `
             tests/FluidRuntime.Tests/FluidLinkClientTests.cs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet format whitespace tools/FluidGateway.BackendBenchmark/FluidGateway.BackendBenchmark.csproj `
+            --no-restore --verify-no-changes --include tools/FluidGateway.BackendBenchmark/Program.cs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet format whitespace tools/GatewayComparison/GatewayComparison.csproj `
             --no-restore --verify-no-changes --include tools/GatewayComparison/Program.cs

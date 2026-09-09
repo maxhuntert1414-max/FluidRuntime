@@ -8,6 +8,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
     private readonly string host;
     private readonly int port;
     private readonly TimeSpan timeout;
+    private readonly IFluidLinkV2Transport? transport;
     private readonly SemaphoreSlim operationGate = new(1, 1);
     private TcpClient? tcpClient;
     private NetworkStream? stream;
@@ -43,6 +44,12 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         }
         this.host = host;
         this.port = port;
+    }
+
+    public FluidLinkV2Client(IFluidLinkV2Transport transport, TimeSpan? timeout = null)
+        : this(timeout: timeout)
+    {
+        this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
     }
 
     public string? SessionId => sessionId.IsEmpty
@@ -312,6 +319,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
             }
             disposed = true;
             InvalidateConnection();
+            transport?.Dispose();
         }
         finally
         {
@@ -321,6 +329,24 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
 
     private async Task ConnectCoreAsync(CancellationToken cancellationToken)
     {
+        if (transport is not null)
+        {
+            using var deadline = CreateTimeoutSource(cancellationToken);
+            try
+            {
+                if (!transport.IsConnected)
+                {
+                    await transport.ConnectAsync(deadline.Token);
+                }
+                deadline.Token.ThrowIfCancellationRequested();
+            }
+            catch
+            {
+                InvalidateConnection();
+                throw;
+            }
+            return;
+        }
         if (tcpClient is not null && stream is not null)
         {
             return;
@@ -548,7 +574,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         bool includeSession,
         CancellationToken cancellationToken)
     {
-        if (tcpClient is null || stream is null)
+        if (transport is null ? tcpClient is null || stream is null : !transport.IsConnected)
         {
             throw new InvalidOperationException("FluidLink v2 is not connected.");
         }
@@ -596,11 +622,18 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         try
         {
             using var timeoutSource = CreateTimeoutSource(cancellationToken);
-            await stream.WriteAsync(encoded, timeoutSource.Token);
-            BytesSent += encoded.Length;
-            response = await FluidLinkV2FrameCodec.ReadAsync(
-                stream,
-                timeoutSource.Token);
+            if (transport is null)
+            {
+                await stream!.WriteAsync(encoded, timeoutSource.Token);
+                BytesSent += encoded.Length;
+                response = await FluidLinkV2FrameCodec.ReadAsync(stream, timeoutSource.Token);
+            }
+            else
+            {
+                response = await transport.ExchangeAsync(encoded, timeoutSource.Token);
+                BytesSent += encoded.Length;
+            }
+            timeoutSource.Token.ThrowIfCancellationRequested();
             BytesReceived += response.WireSize;
             ValidateCorrelation(response, messageId, sequence, includeSession);
         }
@@ -747,6 +780,7 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
 
     private void InvalidateConnection()
     {
+        transport?.Abort();
         localEndPoint = null;
         remoteEndPoint = null;
         stream?.Dispose();

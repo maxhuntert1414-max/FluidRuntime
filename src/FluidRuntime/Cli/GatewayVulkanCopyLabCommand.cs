@@ -15,12 +15,14 @@ public static class GatewayVulkanCopyLabCommand
         try
         {
             var options = GatewayVulkanCopyLabOptions.Parse(args);
-            var report = await new VulkanCopyLabRunner().RunAsync(options, options.CreateAuthorizer(), cancellationToken);
+            using var authorizer = options.CreateAuthorizer();
+            var report = await new VulkanCopyLabRunner().RunAsync(options, authorizer, cancellationToken);
             var path = Path.GetFullPath(options.OutputPath);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await AtomicJsonFile.WriteTextAsync(path, JsonSerializer.Serialize(report, new JsonSerializerOptions
             {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower, WriteIndented = true
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                WriteIndented = true
             }) + Environment.NewLine, cancellationToken);
             if (report.FailClosed is not null)
             {

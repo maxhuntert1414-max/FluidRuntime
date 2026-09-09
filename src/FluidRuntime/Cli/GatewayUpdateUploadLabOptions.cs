@@ -21,6 +21,7 @@ public sealed record GatewayUpdateUploadLabOptions(
     int AuthorizationP99BudgetMs,
     bool UseHardware)
 {
+    public GatewayBackendOptions GatewayConnection { get; init; } = GatewayBackendOptions.Server;
     public const string Usage =
         "Usage: fluidruntime gateway-update-upload-lab " +
         "--target <hook-target.exe> --hook <hook.dll> --out <report.json> " +
@@ -32,11 +33,12 @@ public sealed record GatewayUpdateUploadLabOptions(
         "[--authorization-max-concurrency <1|2|4|8>] " +
         "[--authorization-samples-per-level <1-256>] " +
         "[--authorization-p99-budget-ms <milliseconds>] " +
-        "[--hardware <true|false>]";
+        "[--hardware <true|false>] " + GatewayBackendOptions.Usage;
 
     public static GatewayUpdateUploadLabOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
+        var connection = GatewayBackendOptions.Extract(ref args);
         if (args.Length == 0 ||
             !string.Equals(
                 args[0],
@@ -148,8 +150,8 @@ public sealed record GatewayUpdateUploadLabOptions(
             string.IsNullOrWhiteSpace(hook) ||
             string.IsNullOrWhiteSpace(output) ||
             string.IsNullOrWhiteSpace(host) ||
-            gatewayProcessId == 0 ||
-            gatewayExecutableSha256 is null)
+            (connection.Mode == "server" && (gatewayProcessId == 0 ||
+            gatewayExecutableSha256 is null)))
         {
             throw new ArgumentException(
                 "Target, hook, output, Gateway PID, Gateway executable SHA-256, " +
@@ -174,7 +176,7 @@ public sealed record GatewayUpdateUploadLabOptions(
             port,
             timeoutMs,
             gatewayProcessId,
-            gatewayExecutableSha256,
+            gatewayExecutableSha256 ?? string.Empty,
             trialPairs,
             warmupPairs,
             holdMs,
@@ -183,7 +185,8 @@ public sealed record GatewayUpdateUploadLabOptions(
             authorizationMaxConcurrency,
             authorizationSamplesPerLevel,
             authorizationP99BudgetMs,
-            useHardware);
+            useHardware)
+        { GatewayConnection = connection };
     }
 
     public UpdateUploadElisionLabOptions ToNativeOptions() =>
@@ -198,13 +201,8 @@ public sealed record GatewayUpdateUploadLabOptions(
             CandidateActionCount,
             UseHardware);
 
-    public IGatewayUpdateUploadAuthorizer CreateAuthorizer() =>
-        new FluidLinkGatewayUpdateUploadAuthorizer(
-            Host,
-            Port,
-            TimeSpan.FromMilliseconds(TimeoutMs),
-            GatewayProcessId,
-            GatewayExecutableSha256);
+    public FluidLinkGatewayUpdateUploadAuthorizer CreateAuthorizer() =>
+        GatewayConnection.Create(Host, Port, TimeoutMs, GatewayProcessId, GatewayExecutableSha256);
 
     public GatewayAuthorizationBenchmarkConfiguration
         ToAuthorizationBenchmarkConfiguration() =>

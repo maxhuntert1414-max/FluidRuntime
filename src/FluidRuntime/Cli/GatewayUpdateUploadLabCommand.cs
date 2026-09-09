@@ -19,7 +19,7 @@ public static class GatewayUpdateUploadLabCommand
         try
         {
             var options = GatewayUpdateUploadLabOptions.Parse(args);
-            var authorizer = options.CreateAuthorizer();
+            using var authorizer = options.CreateAuthorizer();
             var report = await new UpdateUploadElisionLabRunner()
                 .RunGatewayManagedAsync(
                     options.ToNativeOptions(),

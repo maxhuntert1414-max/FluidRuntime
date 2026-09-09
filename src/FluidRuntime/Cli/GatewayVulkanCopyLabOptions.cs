@@ -8,17 +8,19 @@ public sealed record GatewayVulkanCopyLabOptions(
     int TrialPairs, int WarmupPairs, int CandidateActionCount,
     int GpuTimeoutMs, bool UseHardware, bool RequireValidation)
 {
+    public GatewayBackendOptions GatewayConnection { get; init; } = GatewayBackendOptions.Server;
     public const ulong BufferBytes = 4UL * 1024 * 1024;
     public const string Usage = "Usage: fluidruntime gateway-vulkan-copy-lab " +
         "--target <vulkan-transfer-target.exe> --library <vulkan-transfer.dll> " +
         "--out <report.json> --gateway-pid <pid> --gateway-executable-sha256 <sha256> " +
         "[--port <1-65535>] [--timeout-ms <100-30000>] [--trial-pairs <1-30>] " +
         "[--warmup-pairs <0-5>] [--candidate-action-count <1-128>] " +
-        "[--gpu-timeout-ms <1-30000>] [--hardware <true|false>] [--validation <true|false>]";
+        "[--gpu-timeout-ms <1-30000>] [--hardware <true|false>] [--validation <true|false>] " + GatewayBackendOptions.Usage;
 
     public static GatewayVulkanCopyLabOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
+        var connection = GatewayBackendOptions.Extract(ref args);
         if (args.Length == 0 || args[0] != "gateway-vulkan-copy-lab" || args.Length % 2 != 1)
             throw new ArgumentException(Usage);
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -46,23 +48,23 @@ public sealed record GatewayVulkanCopyLabOptions(
             return bool.TryParse(text, out var value) ? value :
                 throw new ArgumentException($"{key} must be true or false.");
         }
-        var sha = Required("--gateway-executable-sha256").ToLowerInvariant();
-        if (sha.Length != 64 || !sha.All(Uri.IsHexDigit))
+        var sha = connection.Mode == "server" ? Required("--gateway-executable-sha256").ToLowerInvariant() : string.Empty;
+        if (connection.Mode == "server" && (sha.Length != 64 || !sha.All(Uri.IsHexDigit)))
             throw new ArgumentException("Gateway SHA-256 must have 64 hexadecimal characters.");
-        _ = Required("--gateway-pid");
+        if (connection.Mode == "server") _ = Required("--gateway-pid");
         return new(Required("--target"), Required("--library"), Required("--out"),
             Number("--port", 8765, 1, 65535), Number("--timeout-ms", 5000, 100, 30000),
             Number("--gateway-pid", 0, 1, int.MaxValue), sha,
             Number("--trial-pairs", 10, 1, 30), Number("--warmup-pairs", 1, 0, 5),
             Number("--candidate-action-count", 128, 1, 128),
             Number("--gpu-timeout-ms", 10000, 1, 30000),
-            Boolean("--hardware", true), Boolean("--validation", false));
+            Boolean("--hardware", true), Boolean("--validation", false))
+        { GatewayConnection = connection };
     }
 
     public NativeTransferTopology CreateTransferTopology() =>
         NativeTransferTopology.VulkanMultiLane((ulong)CandidateActionCount);
 
-    public IGatewayUpdateUploadAuthorizer CreateAuthorizer() =>
-        new FluidLinkGatewayUpdateUploadAuthorizer("127.0.0.1", Port,
-            TimeSpan.FromMilliseconds(TimeoutMs), GatewayProcessId, GatewayExecutableSha256);
+    public FluidLinkGatewayUpdateUploadAuthorizer CreateAuthorizer() =>
+        GatewayConnection.Create("127.0.0.1", Port, TimeoutMs, GatewayProcessId, GatewayExecutableSha256);
 }

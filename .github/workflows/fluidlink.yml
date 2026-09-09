@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: maxhuntert1414-max/FluidGateway
-          ref: v0.68.0
+          ref: v0.69.0
           path: FluidGateway
 
       - name: Set up Python
@@ -79,11 +79,29 @@ jobs:
           -GatewayPath "$PWD/FluidGateway"
           -GatewayBackend ${{ matrix.gateway-backend }}
 
+      - name: Test real in-process DLL binding and lifetime
+        if: matrix.gateway-backend == 'Native'
+        shell: pwsh
+        run: |
+          $env:FLUIDGATEWAY_DLL = "$PWD/FluidGateway/native/build/Release/FluidGatewayNative.dll"
+          dotnet test tests/FluidRuntime.Tests/FluidRuntime.Tests.csproj -c Release --no-restore `
+            --filter FullyQualifiedName~NativeGatewayTests
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Configure native owned target
         run: cmake -S native -B native/build -A x64
 
       - name: Build native owned target
         run: cmake --build native/build --config Release
+
+      - name: Test both Gateway backends with owned graphics targets
+        if: matrix.gateway-backend == 'Native'
+        shell: powershell
+        run: >-
+          ./tools/Test-GatewayBackends.ps1
+          -GatewayLibrary "$PWD/FluidGateway/native/build/Release/FluidGatewayNative.dll"
+          -GatewayExecutable "$PWD/FluidGateway/native/build/Release/fluidgateway-native.exe"
+          -SkipVulkan
 
       - name: Verify native authorization and actuation without Python on PATH
         if: matrix.gateway-backend == 'Native'
@@ -126,7 +144,8 @@ jobs:
         with:
           name: fluidlink-v2-${{ matrix.gateway-backend }}
           path: |
-            artifacts/packages/FluidLink.0.3.0.nupkg
+            artifacts/packages/FluidLink.0.4.0.nupkg
+            artifacts/gateway-backends/*.json
             artifacts/fluidlink-cross-process.json
             artifacts/native-gateway-standalone*.json
             artifacts/gateway-update-upload-control-128.json

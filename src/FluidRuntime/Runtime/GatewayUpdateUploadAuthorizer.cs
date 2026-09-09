@@ -64,6 +64,11 @@ public sealed record GatewayUpdateUploadAuthorization(
     string AuthorizationScope,
     IReadOnlyList<string> NativeSafetyGuards)
 {
+    public string GatewayBackend { get; init; } = "server";
+    public GatewayLibraryIdentity? GatewayLibrary { get; init; }
+    public int TransportRoundTripCount => GatewayBackend == "server" ? RoundTripCount : 0;
+    public int WireExchangeCount => RoundTripCount;
+
     public GatewayUploadBackend Backend { get; init; } =
         GatewayUploadBackend.D3D11UpdateSubresource;
 
@@ -118,8 +123,10 @@ public sealed record GatewayUpdateUploadAuthorization(
                 PeerProcessStartedAtUtc,
                 request,
                 profile.NativeActionMask,
-                expectedActionCount);
+                expectedActionCount,
+                GatewayLibrary);
         if (!Authorized ||
+            GatewayBackend != (GatewayLibrary is null ? "server" : "inprocess") ||
             Protocol != FluidLinkV2Protocol.Version ||
             ContractSha256 != FluidLinkV2BatchProtocol.ContractSha256 ||
             WireSessionId.Length != 32 ||
@@ -256,7 +263,7 @@ public interface IGatewayUpdateUploadAuthorizer
 }
 
 public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
-    IGatewayUpdateUploadAuthorizer
+    IGatewayUpdateUploadAuthorizer, IDisposable
 {
     private const string ClientName = "fluidruntime-gateway-manager";
     private const string ClientVersion = "0.23.0";
@@ -268,6 +275,39 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
     private readonly int deadlineMilliseconds;
     private readonly int expectedGatewayProcessId;
     private readonly string expectedGatewayExecutableSha256;
+    private readonly NativeGatewayLibrary? library;
+    private bool ownsLibrary;
+    private bool disposed;
+    public string GatewayBackend => library is null ? "server" : "inprocess";
+
+    public FluidLinkGatewayUpdateUploadAuthorizer(NativeGatewayLibrary library, TimeSpan deadline)
+        : this("127.0.0.1", 8765, deadline,
+            (library ?? throw new ArgumentNullException(nameof(library))).HostIdentity.ProcessId,
+            library.HostIdentity.ExecutableSha256)
+    {
+        this.library = library;
+    }
+
+    public static FluidLinkGatewayUpdateUploadAuthorizer InProcess(
+        string path, string sha256, TimeSpan deadline)
+    {
+        var module = new NativeGatewayLibrary(path, sha256);
+        try
+        {
+            return new FluidLinkGatewayUpdateUploadAuthorizer(module, deadline) { ownsLibrary = true };
+        }
+        catch
+        {
+            module.Dispose();
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        if (ownsLibrary) library?.Dispose();
+    }
 
     public FluidLinkGatewayUpdateUploadAuthorizer(
         string host,
@@ -310,6 +350,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         GatewayUpdateUploadAuthorizationRequest request,
         CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         ValidateRequest(request);
         var completedRoundTrips = 0;
         var startedAt = Stopwatch.GetTimestamp();
@@ -324,15 +365,13 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             var ramResourceId = $"ram-source-{token}";
             var vramResourceId = $"vram-target-{token}";
 
-            await using var client = new FluidLinkV2Client(host, port, deadline);
+            await using var client = library is null
+                ? new FluidLinkV2Client(host, port, deadline)
+                : new FluidLinkV2Client(library.CreateTransport(), deadline);
             await client.ConnectAsync(deadlineSource.Token);
-            var localEndPoint = client.LocalEndPoint ?? throw new InvalidDataException(
-                "FluidLink did not expose its connected local endpoint.");
-            var remoteEndPoint = client.RemoteEndPoint ?? throw new InvalidDataException(
-                "FluidLink did not expose its connected remote endpoint.");
-            var peer = WindowsLoopbackPeerVerifier.Verify(
-                localEndPoint,
-                remoteEndPoint,
+            var peer = library?.HostIdentity ?? WindowsLoopbackPeerVerifier.Verify(
+                client.LocalEndPoint ?? throw new InvalidDataException("Missing local endpoint."),
+                client.RemoteEndPoint ?? throw new InvalidDataException("Missing remote endpoint."),
                 expectedGatewayProcessId,
                 expectedGatewayExecutableSha256);
             deadlineSource.Token.ThrowIfCancellationRequested();
@@ -344,7 +383,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 peer.ProcessStartedAtUtc,
                 request,
                 profile.NativeActionMask,
-                request.CandidateActionCount);
+                request.CandidateActionCount,
+                library?.Identity);
             var runtimeSessionId = $"{profile.SessionPrefix}-{contextSha256}";
             var requiredCapabilities = FluidLinkV2Protocol.RequiredCapabilities |
                 FluidLinkV2Capability.Heartbeat |
@@ -451,7 +491,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 completedRoundTrips,
                 client.BytesSent,
                 client.BytesReceived,
-                elapsed);
+                elapsed,
+                library?.Identity);
         }
         catch (OperationCanceledException exception)
             when (!cancellationToken.IsCancellationRequested)
@@ -490,7 +531,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         int roundTripCount,
         long bytesSent,
         long bytesReceived,
-        long authorizationLatencyMicroseconds)
+        long authorizationLatencyMicroseconds,
+        GatewayLibraryIdentity? libraryIdentity = null)
     {
         ValidateRequest(request);
         ArgumentNullException.ThrowIfNull(peer);
@@ -511,7 +553,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             peer.ProcessStartedAtUtc,
             request,
             profile.NativeActionMask,
-            request.CandidateActionCount);
+            request.CandidateActionCount,
+            libraryIdentity);
         var decisionsMatch = candidateDecisions.Count ==
                 checked((int)request.CandidateActionCount) &&
             candidateDecisions.All(decision =>
@@ -595,9 +638,13 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             authorizationLatencyMicroseconds,
             Authorized: true,
             profile.AuthorizationScope,
-            profile.NativeSafetyGuards)
+            libraryIdentity is null ? profile.NativeSafetyGuards :
+                ["hash-pinned Gateway DLL loaded in the verified host process; no TCP peer or crash isolation",
+                 .. profile.NativeSafetyGuards.Skip(1)])
         {
             Backend = request.Backend,
+            GatewayBackend = libraryIdentity is null ? "server" : "inprocess",
+            GatewayLibrary = libraryIdentity,
             TransferTopology = topology
         };
         evidence.EnsureMatchesNativePolicy(
@@ -619,7 +666,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         DateTimeOffset peerProcessStartedAtUtc,
         GatewayUpdateUploadAuthorizationRequest request,
         ulong nativeActionMask,
-        ulong nativeActionBudget)
+        ulong nativeActionBudget,
+        GatewayLibraryIdentity? libraryIdentity = null)
     {
         ValidateRequest(request);
         if (string.IsNullOrWhiteSpace(nonce) || peerProcessId <= 0 ||
@@ -649,6 +697,15 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             $"native_action_mask={nativeActionMask}",
             $"native_action_budget={nativeActionBudget}"
         };
+        if (libraryIdentity is not null)
+        {
+            if (!Path.IsPathFullyQualified(libraryIdentity.Path) ||
+                libraryIdentity.AbiVersion != NativeGatewayLibrary.AbiVersion)
+                throw new ArgumentException("Gateway library identity is incomplete.");
+            canonicalLines.Add("gateway_backend=inprocess");
+            canonicalLines.Add($"gateway_library_sha256={RequireSha256(libraryIdentity.Sha256, nameof(libraryIdentity))}");
+            canonicalLines.Add($"gateway_abi_version={libraryIdentity.AbiVersion}");
+        }
         if (request.Topology is not null)
         {
             canonicalLines.InsertRange(1,

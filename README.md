@@ -20,6 +20,7 @@ action can be applied without changing the result.
 | FluidLink v2 | Strict binary IPC with numeric opcodes and no JSON payloads |
 | FluidLink batch | 129 logical operations in one ordered request/vector pair |
 | Native Gateway | Default C++20 endpoint in lab scripts; same PID/hash and authority checks |
+| In-process Gateway | Opt-in hash-pinned C++ DLL; same FluidLink validation and native gates |
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
@@ -32,6 +33,8 @@ action can be applied without changing the result.
 
 [Native C++ Gateway setup and validation](docs/native-gateway.md) keeps Python
 outside the online decision path; offline diagnosis remains in FluidGateway.
+[In-process setup and A/B validation](docs/inprocess-gateway.md) removes localhost
+transport when explicitly selected. The isolated server remains the default.
 
 The v0.23 source on `main` can observe a selected x64 Vulkan application through
 an explicit loader layer, collect CPU/RAM and Vulkan counters, and send the

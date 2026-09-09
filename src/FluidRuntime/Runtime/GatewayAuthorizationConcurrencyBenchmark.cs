@@ -60,7 +60,11 @@ public sealed record GatewayAuthorizationConcurrencyBenchmarkReport(
     bool SharedMemoryPrototypeJustified,
     string TransportDecision,
     IReadOnlyList<string> ReliabilityBlockers,
-    IReadOnlyList<GatewayAuthorizationConcurrencyLevelReport> Levels);
+    IReadOnlyList<GatewayAuthorizationConcurrencyLevelReport> Levels)
+{
+    public string GatewayBackend { get; init; } = "server";
+    public GatewayLibraryIdentity? GatewayLibrary { get; init; }
+}
 
 public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
 {
@@ -75,6 +79,7 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
     {
         Validate(configuration, targetSha256, hookSha256);
         ArgumentNullException.ThrowIfNull(authorizer);
+        var inProcess = authorizer is FluidLinkGatewayUpdateUploadAuthorizer { GatewayBackend: "inprocess" };
 
         var nextPairIndex = -1;
         var levels = new List<GatewayAuthorizationConcurrencyLevelReport>();
@@ -115,7 +120,7 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
                 GatewayLatencyStatistics.Distribution(
                     successfulMeasured.Select(item => item.ElapsedMicroseconds)),
                 RoundTripCount: successfulMeasured.Sum(item =>
-                    (long)item.Authorization!.RoundTripCount),
+                    (long)item.Authorization!.TransportRoundTripCount),
                 CandidateDecisionCount: successfulMeasured.Sum(item =>
                     checked((long)item.Authorization!.CandidateDecisionCount)),
                 BytesSent: successfulMeasured.Sum(item => item.Authorization!.BytesSent),
@@ -168,18 +173,19 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
         {
             blockers.Add("authorization-peer-identity-drift");
         }
+        var tailBlocker = inProcess ? "inprocess-p99-budget-exceeded" : "tcp-p99-budget-exceeded";
         if (levels.Any(item => item.LatencyMicroseconds.P99 >
             configuration.P99BudgetMilliseconds * 1000d))
         {
-            blockers.Add("tcp-p99-budget-exceeded");
+            blockers.Add(tailBlocker);
         }
 
         var nonTailBlocker = blockers.Any(item =>
             item != "tcp-p99-budget-exceeded");
-        var sharedMemoryPrototypeJustified = !nonTailBlocker &&
+        var sharedMemoryPrototypeJustified = !inProcess && !nonTailBlocker &&
             blockers.Contains("tcp-p99-budget-exceeded", StringComparer.Ordinal);
         var transportDecision = blockers.Count == 0
-            ? "retain-loopback-tcp-for-current-session-level-control"
+            ? inProcess ? "retain-opt-in-inprocess-backend" : "retain-loopback-tcp-for-current-session-level-control"
             : sharedMemoryPrototypeJustified
                 ? "investigate-shared-memory-transport-prototype"
                 : "repair-authorization-reliability-before-transport-decision";
@@ -215,7 +221,8 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
             sharedMemoryPrototypeJustified,
             transportDecision,
             blockers,
-            levels);
+            levels)
+        { GatewayBackend = inProcess ? "inprocess" : "server", GatewayLibrary = peer?.GatewayLibrary };
 
         async Task<AuthorizationSample[]> RunWaveAsync(
             int concurrency,
@@ -226,7 +233,7 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
             var samples = new ConcurrentBag<AuthorizationSample>();
             var nextSample = -1;
             var workers = Enumerable.Range(0, Math.Min(concurrency, requestCount))
-                .Select(async _ =>
+                .Select(_ => Task.Run(async () =>
                 {
                     while (true)
                     {
@@ -285,7 +292,7 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
                                         : 0));
                         }
                     }
-                });
+                }, token));
             await Task.WhenAll(workers);
             return samples.ToArray();
         }
@@ -331,6 +338,8 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkRunner
                 item.AdvertisedServerName,
                 item.AdvertisedServerVersion,
                 item.PeerProcessId,
+                item.GatewayBackend,
+                item.GatewayLibrary,
                 PeerExecutablePath = item.PeerExecutablePath.ToUpperInvariant(),
                 item.PeerExecutableSha256,
                 item.PeerProcessStartedAtUtc
