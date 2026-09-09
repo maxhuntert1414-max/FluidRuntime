@@ -77,19 +77,45 @@ held read-only and the loaded module is checked against the selected hash.
 Path/denylist checks and the same-user named mapping are not a sandbox against
 a malicious application or administrator.
 
-The 288-byte little-endian shared ABI has four uint32 fields (magic `0x4f564746`,
-version 1, size 288, count 32), then aligned int64 owner PID and enable flag,
-then 32 atomic int64 counters. The canonical order is
+The 400-byte little-endian shared ABI has four uint32 fields (magic `0x4f564746`,
+version 2, size 400, count 46), then aligned int64 owner PID and enable flag,
+then 46 atomic int64 counters. The canonical order is
 [`vulkan_observation.h`](../native/include/vulkan_observation.h), mirrored and
 validated by the managed reader and Gateway importer. There are no names or
 JSON payloads in this hot path. JSON is for bounded offline report export.
 
-Fixed capacities: 16 live instances, 64 devices, 8,192 tracked allocations.
+Fixed capacities: 16 live instances, 64 devices, 8,192 tracked allocations and
+8,192 tracked buffers. The allocation/buffer tables together have a compile-time
+2 MiB ceiling and reuse fixed slots without allocating on their lookup/churn path.
 Instance/device exhaustion returns an explicit out-of-host-memory creation
 error; this is an instrumentation compatibility limit, not the driver's actual
 capacity. Allocation overflow does not block the application; it increments
 `untracked_allocations` and makes live/peak-byte coverage partial. Counters use
 independent atomic operations, not a coherent multi-field snapshot.
+
+The resource hook observes `vkCreateBuffer`/`vkDestroyBuffer`, allocation lifetime,
+legacy/core/KHR buffer binds and legacy/core/KHR buffer copies. Bindings retain an
+allocation generation; freeing and recycling a numeric handle cannot revive an
+old binding. Resources are retired before downstream destruction. Tracking is
+locked, while driver calls always execute outside that lock.
+
+Recorded buffer-copy bytes are classified by the bound memory type: host-visible
+only to device-local only, reverse, device-to-device, host-to-host, either endpoint
+with both flags, or unknown. These names do **not** measure physical RAM/VRAM
+placement. Same-allocation bytes are an additional, overlapping counter, not a
+redundancy finding. No buffer contents are read or retained by the observer.
+
+Unknown allocation/create/bind/copy extension chains, sparse/protected buffers,
+missing records and unmodeled binds remain unclassified. Failed bind2 batches
+invalidate attribution for all supplied buffers, including possible partial
+success. At capacity, the application proceeds and coverage counters increase.
+Counters saturate rather than wrap; `counter_overflows` marks partial totals.
+
+Runtime now exports `fluidruntime-application-session-v2`. Use the matching DLL
+and managed collector; mixed shared ABI versions cannot produce a verified
+session. Gateway `main` imports both old v1 (32 counters) and v2 (46 counters)
+without inventing new evidence for old captures. FluidLink v2 and the Gateway
+DLL C ABI are unchanged.
 
 - Recorded buffer copy bytes are not executed bytes: command buffers can be
   replayed, discarded or never submitted. Images have counts, not byte estimates.
@@ -105,8 +131,9 @@ independent atomic operations, not a coherent multi-field snapshot.
   A pre-cancelled session does not launch the selected application.
 - Coverage includes legacy buffer/image copies, buffer-copy2, bind2, barrier2
   and submit2 core/KHR aliases. Newer image-copy2/map2, sparse/external memory,
-  complete image layouts, resource generations, shader writes and queue-family
-  provenance are not modeled. `telemetry_failures` is reserved, not a promise
+  complete image layouts, buffer content/write generations, shader writes and
+  queue-family provenance are not modeled. Allocation lifetime generations are
+  not content provenance. `telemetry_failures` is reserved, not a promise
   that all missing coverage can be detected.
 
 ## Validation
@@ -116,6 +143,7 @@ dotnet test FluidRuntime.slnx -c Release -warnaserror
 ctest --test-dir native/build -C Release --output-on-failure
 ./tools/Test-ApplicationSessions.ps1 -VkcubePath C:\VulkanTools\vkcube.exe `
   -BuildPath native/build -Pairs 4 -Frames 120
+./tools/Test-VulkanBufferHooks.ps1 -BuildPath native/build -Pairs 2
 ```
 
 The script is only for a disposable, explicitly supplied Khronos cube binary.
@@ -124,6 +152,8 @@ and forced collector termination. It never runs that destructive fault test
 against arbitrary application names. Native mock tests require no Vulkan ICD.
 Hardware validation and ASAN coverage are recorded separately in
 [the evidence report](evidence/v0.23.0-application-integration.md).
+The new resource-hook checks and raw v2 sessions are in
+[the buffer-hook evidence](evidence/vulkan-buffer-hook.md).
 
 Primary contracts: [Khronos loader/layer interface](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderLayerInterface.md)
 and [Windows SetPriorityClass](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setpriorityclass).

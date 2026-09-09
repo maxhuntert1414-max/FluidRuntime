@@ -2,6 +2,8 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 #include "vulkan_observation.h"
+#include "vulkan_buffer_tracking.h"
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <cwchar>
@@ -33,7 +35,8 @@ constexpr auto device_names = std::to_array<const char*>({
     "vkBindImageMemory2KHR", "vkCmdCopyBuffer", "vkCmdCopyBuffer2", "vkCmdCopyBuffer2KHR",
     "vkCmdCopyBufferToImage", "vkCmdCopyImageToBuffer", "vkCmdFillBuffer", "vkCmdPipelineBarrier",
     "vkCmdPipelineBarrier2", "vkCmdPipelineBarrier2KHR", "vkQueueSubmit", "vkQueueSubmit2",
-    "vkQueueSubmit2KHR", "vkQueuePresentKHR", "vkQueueWaitIdle", "vkWaitForFences"});
+    "vkQueueSubmit2KHR", "vkQueuePresentKHR", "vkQueueWaitIdle", "vkWaitForFences",
+    "vkCreateBuffer", "vkDestroyBuffer"});
 struct Device {
     bool used{};
     void* dispatch{};
@@ -44,8 +47,12 @@ struct Device {
 };
 std::array<Instance, 16> instances_table{};
 std::array<Device, 64> devices_table{};
-struct Allocation { void* device{}; VkDeviceMemory handle{}; VkDeviceSize bytes{}; };
-std::array<Allocation, 8192> allocation_table{};
+BufferTracker<> resources;
+static_assert(sizeof(resources) <= 2 * 1024 * 1024);
+static_assert(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT == 1 && VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT == 2);
+template<class T> std::uint64_t resource_id(T handle) {
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
+}
 INIT_ONCE sink_once = INIT_ONCE_STATIC_INIT;
 HANDLE sink_mapping{};
 Shared* sink{};
@@ -76,8 +83,26 @@ BOOL CALLBACK initialize_sink(PINIT_ONCE, PVOID, PVOID*) {
     return TRUE;
 }
 void add(Counter counter, LONG64 value = 1) {
-    if (sink && InterlockedCompareExchange64(&sink->enabled, 0, 0) == 1)
-        InterlockedAdd64(&sink->counters[counter], value);
+    if (!sink || InterlockedCompareExchange64(&sink->enabled, 0, 0) != 1) return;
+    auto* target = &sink->counters[counter];
+    auto current = InterlockedCompareExchange64(target, 0, 0);
+    for (;;) {
+        constexpr auto maximum = std::numeric_limits<LONG64>::max();
+        const bool overflow = current < 0 || (value > 0 && current > maximum - value) ||
+            (value < 0 && value < -current);
+        const auto updated = overflow ? (value < 0 ? 0 : maximum) : current + value;
+        const auto observed = InterlockedCompareExchange64(target, updated, current);
+        if (observed == current) {
+            if (overflow && counter != counter_overflows) add(counter_overflows);
+            return;
+        }
+        current = observed;
+    }
+}
+void add_bytes(Counter counter, std::uint64_t bytes) {
+    constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<LONG64>::max());
+    if (bytes > maximum) add(counter_overflows);
+    add(counter, static_cast<LONG64>(bytes > maximum ? maximum : bytes));
 }
 void seen(Counter counter) { add(counter); add(intercepted_calls); }
 VkResult result(VkResult value) { if (value < 0) add(api_errors); return value; }
@@ -98,16 +123,17 @@ template<class F> F device_function(const Device& d, const char* name) {
 }
 void track(const Device& d, VkDeviceMemory memory, const VkMemoryAllocateInfo* info) {
     seen(allocations);
-    add(allocation_bytes, static_cast<LONG64>(info->allocationSize));
+    add_bytes(allocation_bytes, info->allocationSize);
+    VkMemoryPropertyFlags flags{};
     if (info->memoryTypeIndex < d.memory.memoryTypeCount) {
-        const auto flags = d.memory.memoryTypes[info->memoryTypeIndex].propertyFlags;
-        if (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) add(host_visible_bytes, static_cast<LONG64>(info->allocationSize));
-        if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) add(device_local_bytes, static_cast<LONG64>(info->allocationSize));
+        flags = d.memory.memoryTypes[info->memoryTypeIndex].propertyFlags;
+        if (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) add_bytes(host_visible_bytes, info->allocationSize);
+        if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) add_bytes(device_local_bytes, info->allocationSize);
     }
     Lock lock;
-    for (auto& entry : allocation_table) if (!entry.handle) {
-        entry = {d.dispatch, memory, info->allocationSize};
-        add(live_bytes, static_cast<LONG64>(info->allocationSize));
+    if (resources.add_memory(d.dispatch, resource_id(memory), info->allocationSize, flags,
+            !info->pNext && info->memoryTypeIndex < d.memory.memoryTypeCount)) {
+        add_bytes(live_bytes, info->allocationSize);
         if (sink) {
             const auto live = InterlockedCompareExchange64(&sink->counters[live_bytes], 0, 0);
             if (live > InterlockedCompareExchange64(&sink->counters[peak_bytes], 0, 0))
@@ -119,10 +145,45 @@ void track(const Device& d, VkDeviceMemory memory, const VkMemoryAllocateInfo* i
 }
 void untrack(void* dispatch, VkDeviceMemory memory) {
     Lock lock;
-    for (auto& entry : allocation_table) if (entry.device == dispatch && entry.handle == memory) {
-        add(live_bytes, -static_cast<LONG64>(entry.bytes));
-        entry = {};
-        return;
+    if (const auto entry = resources.remove_memory(dispatch, resource_id(memory))) {
+        constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<LONG64>::max());
+        add(live_bytes, -static_cast<LONG64>((std::min)(entry->bytes, maximum)));
+    }
+}
+
+void bind_buffer(const Device& device, VkBuffer buffer, VkDeviceMemory memory,
+                 VkDeviceSize offset, bool understood, VkResult value) {
+    Lock lock;
+    if (value != VK_SUCCESS) add(buffer_binding_failures);
+    if (!resources.bind(device.dispatch, resource_id(buffer), resource_id(memory), offset,
+                        understood && value == VK_SUCCESS)) {
+        add(unclassified_buffer_bindings);
+    }
+}
+
+template<class Region>
+void record_buffer_copy(const Device& device, VkBuffer source, VkBuffer destination,
+                        uint32_t count, const Region* regions, bool understood = true) {
+    seen(buffer_copies);
+    Lock lock;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& region = regions[i];
+        bool known = understood;
+        if constexpr (requires { region.pNext; }) known = known && !region.pNext;
+        const auto attribution = known ? resources.attribute(device.dispatch, resource_id(source),
+            resource_id(destination), region.srcOffset, region.dstOffset, region.size) : CopyAttribution{};
+        Counter category = unknown_buffer_copy_bytes;
+        switch (attribution.memory_class) {
+        case CopyMemoryClass::host_to_device: category = host_to_device_copy_bytes; break;
+        case CopyMemoryClass::device_to_host: category = device_to_host_copy_bytes; break;
+        case CopyMemoryClass::device_to_device: category = device_to_device_copy_bytes; break;
+        case CopyMemoryClass::host_to_host: category = host_to_host_copy_bytes; break;
+        case CopyMemoryClass::shared: category = shared_memory_copy_bytes; break;
+        case CopyMemoryClass::unknown: break;
+        }
+        add_bytes(buffer_copy_bytes, region.size);
+        add_bytes(category, region.size);
+        if (attribution.same_allocation) add_bytes(same_allocation_copy_bytes, region.size);
     }
 }
 }
@@ -191,20 +252,48 @@ VKAPI_ATTR void VKAPI_CALL fgDestroyDevice(VkDevice handle, const VkAllocationCa
     if (!handle) return;
     const auto d = device_for(key(handle));
     const auto destroy = device_function<PFN_vkDestroyDevice>(d, "vkDestroyDevice");
-    destroy(handle, allocator);
     {
         Lock lock;
-        for (auto& entry : allocation_table) if (entry.device == d.dispatch) {
-            add(live_bytes, -static_cast<LONG64>(entry.bytes)); entry = {};
-        }
+        resources.remove_device(d.dispatch, [](const MemoryRecord& entry) {
+            constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<LONG64>::max());
+            add(live_bytes, -static_cast<LONG64>((std::min)(entry.bytes, maximum)));
+        }, [](const BufferRecord&) { add(live_buffers, -1); });
         for (auto& entry : devices_table) if (entry.handle == handle) entry = {};
     }
     add(active_devices, -1);
+    // Retire before forwarding, including driver callbacks that can create a
+    // replacement device with the same dispatch key during destruction.
+    destroy(handle, allocator);
 }
 
 // Only these entry points are observed. Arguments, return values and ordering
 // are forwarded; no barriers, copies, allocations or waits are removed.
 #define DEVICE(name, handle) const auto d = device_for(key(handle)); const auto next = device_function<PFN_vk##name>(d, "vk" #name)
+VKAPI_ATTR VkResult VKAPI_CALL fgCreateBuffer(VkDevice device, const VkBufferCreateInfo* info,
+    const VkAllocationCallbacks* allocator, VkBuffer* output) {
+    DEVICE(CreateBuffer, device);
+    const auto value = next(device, info, allocator, output);
+    if (value == VK_SUCCESS) {
+        seen(buffers_created);
+        Lock lock;
+        if (resources.add_buffer(d.dispatch, resource_id(*output), info->size, !info->pNext && !info->flags)) {
+            add(live_buffers);
+        } else {
+            add(untracked_buffers);
+        }
+    }
+    return result(value);
+}
+VKAPI_ATTR void VKAPI_CALL fgDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks* allocator) {
+    DEVICE(DestroyBuffer, device);
+    if (buffer) {
+        seen(buffers_destroyed);
+        // Retire before driver callbacks can create a buffer reusing this numeric handle.
+        Lock lock;
+        if (resources.remove_buffer(d.dispatch, resource_id(buffer))) add(live_buffers, -1);
+    }
+    next(device, buffer, allocator);
+}
 VKAPI_ATTR VkResult VKAPI_CALL fgAllocateMemory(VkDevice h, const VkMemoryAllocateInfo* i, const VkAllocationCallbacks* a, VkDeviceMemory* o) {
     DEVICE(AllocateMemory, h); const auto v = next(h, i, a, o); if (v == VK_SUCCESS) track(d, *o, i); return result(v);
 }
@@ -226,7 +315,11 @@ VKAPI_ATTR VkResult VKAPI_CALL fgInvalidateMappedMemoryRanges(VkDevice h, uint32
     DEVICE(InvalidateMappedMemoryRanges, h); seen(invalidates); return result(next(h, n, r));
 }
 VKAPI_ATTR VkResult VKAPI_CALL fgBindBufferMemory(VkDevice h, VkBuffer b, VkDeviceMemory m, VkDeviceSize o) {
-    DEVICE(BindBufferMemory, h); seen(buffer_binds); return result(next(h, b, m, o));
+    DEVICE(BindBufferMemory, h);
+    seen(buffer_binds);
+    const auto value = next(h, b, m, o);
+    bind_buffer(d, b, m, o, true, value);
+    return result(value);
 }
 VKAPI_ATTR VkResult VKAPI_CALL fgBindImageMemory(VkDevice h, VkImage b, VkDeviceMemory m, VkDeviceSize o) {
     DEVICE(BindImageMemory, h); seen(image_binds); return result(next(h, b, m, o));
@@ -234,19 +327,26 @@ VKAPI_ATTR VkResult VKAPI_CALL fgBindImageMemory(VkDevice h, VkImage b, VkDevice
 #define BIND2(Name, Type, counter) \
 VKAPI_ATTR VkResult VKAPI_CALL fg##Name(VkDevice h, uint32_t n, const Type* i) { \
     DEVICE(Name, h); seen(counter); return result(next(h, n, i)); }
-BIND2(BindBufferMemory2, VkBindBufferMemoryInfo, buffer_binds)
-BIND2(BindBufferMemory2KHR, VkBindBufferMemoryInfo, buffer_binds)
 BIND2(BindImageMemory2, VkBindImageMemoryInfo, image_binds)
 BIND2(BindImageMemory2KHR, VkBindImageMemoryInfo, image_binds)
+#define BUFFER_BIND2(Name) \
+VKAPI_ATTR VkResult VKAPI_CALL fg##Name(VkDevice h, uint32_t n, const VkBindBufferMemoryInfo* info) { \
+    DEVICE(Name, h); seen(buffer_binds); const auto value = next(h, n, info); \
+    for (uint32_t i = 0; i < n; ++i) { \
+        bind_buffer(d, info[i].buffer, info[i].memory, info[i].memoryOffset, !info[i].pNext, value); \
+    } \
+    return result(value); }
+BUFFER_BIND2(BindBufferMemory2)
+BUFFER_BIND2(BindBufferMemory2KHR)
 VKAPI_ATTR void VKAPI_CALL fgCmdCopyBuffer(VkCommandBuffer h, VkBuffer s, VkBuffer t, uint32_t n, const VkBufferCopy* r) {
-    DEVICE(CmdCopyBuffer, h); seen(buffer_copies);
-    for (uint32_t j = 0; j < n; ++j) add(buffer_copy_bytes, static_cast<LONG64>(r[j].size));
+    DEVICE(CmdCopyBuffer, h);
+    record_buffer_copy(d, s, t, n, r);
     next(h, s, t, n, r);
 }
 #define COPY2(Name) \
 VKAPI_ATTR void VKAPI_CALL fg##Name(VkCommandBuffer h, const VkCopyBufferInfo2* i) { \
-    DEVICE(Name, h); seen(buffer_copies); add(copy2_calls); \
-    for (uint32_t j = 0; j < i->regionCount; ++j) add(buffer_copy_bytes, static_cast<LONG64>(i->pRegions[j].size)); \
+    DEVICE(Name, h); add(copy2_calls); \
+    record_buffer_copy(d, i->srcBuffer, i->dstBuffer, i->regionCount, i->pRegions, !i->pNext); \
     next(h, i); }
 COPY2(CmdCopyBuffer2)
 COPY2(CmdCopyBuffer2KHR)
@@ -286,6 +386,7 @@ namespace {
 PFN_vkVoidFunction intercepted(const char* name) {
 #define ENTRY(Name) if (std::strcmp(name, "vk" #Name) == 0) return reinterpret_cast<PFN_vkVoidFunction>(fg##Name)
     ENTRY(DestroyDevice); ENTRY(AllocateMemory); ENTRY(FreeMemory); ENTRY(MapMemory); ENTRY(UnmapMemory);
+    ENTRY(CreateBuffer); ENTRY(DestroyBuffer);
     ENTRY(FlushMappedMemoryRanges); ENTRY(InvalidateMappedMemoryRanges);
     ENTRY(BindBufferMemory); ENTRY(BindBufferMemory2); ENTRY(BindBufferMemory2KHR);
     ENTRY(BindImageMemory); ENTRY(BindImageMemory2); ENTRY(BindImageMemory2KHR);

@@ -38,7 +38,10 @@ jobs:
             src/FluidRuntime/Runtime/ReadbackElisionLabReport.cs `
             tests/FluidRuntime.Tests/FluidLinkV2CodecTests.cs `
             tests/FluidRuntime.Tests/NativeGatewayTests.cs `
-            tests/FluidRuntime.Tests/GatewayReadbackTests.cs
+            tests/FluidRuntime.Tests/GatewayReadbackTests.cs `
+            src/FluidRuntime/Runtime/VulkanObservationReader.cs `
+            src/FluidRuntime/Runtime/ApplicationSessionRunner.cs `
+            tests/FluidRuntime.Tests/ApplicationSessionTests.cs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet format whitespace tools/FluidGateway.BackendBenchmark/FluidGateway.BackendBenchmark.csproj `
             --no-restore --verify-no-changes --include tools/FluidGateway.BackendBenchmark/Program.cs
@@ -76,7 +79,8 @@ jobs:
       - name: Analyze Vulkan application observation layer and dispatch tests
         run: >-
           cmake --build native/build --config Release
-          --target fluidruntime-vulkan-observe fluidruntime-vulkan-observation-tests --
+          --target fluidruntime-vulkan-observe fluidruntime-vulkan-observation-tests
+          fluidruntime-vulkan-buffer-tracking-tests --
           /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
           /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
       - name: Test native probe (Debug)

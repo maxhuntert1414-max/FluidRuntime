@@ -88,7 +88,11 @@ public sealed class ApplicationSessionTests
         using var reader = new VulkanObservationReader();
         using var mapping = MemoryMappedFile.OpenExisting(reader.Name);
         using var writer = mapping.CreateViewAccessor();
-        Assert.Equal(32, reader.Read(42).Count);
+        Assert.Equal(46, reader.Read(42).Count);
+        Assert.Equal(400, VulkanObservationReader.Size);
+        Assert.Equal(2, writer.ReadInt32(4));
+        writer.Write(32 + 36 * 8, 4096L);
+        Assert.Equal(4096, reader.Read(42)["host_to_device_copy_bytes"]);
         writer.Write(16, 42L);
         writer.Write(32 + 19 * 8, 123L);
         Assert.Equal(123, reader.Read(42)["presents"]);
@@ -99,6 +103,20 @@ public sealed class ApplicationSessionTests
         Assert.Throws<InvalidDataException>(() => reader.Read(42));
         writer.Write(32, 0L);
         writer.Write(4, 99);
+        Assert.Throws<InvalidDataException>(() => reader.Read(42));
+    }
+
+    [Theory]
+    [InlineData(4, 1)]
+    [InlineData(8, 288)]
+    [InlineData(12, 32)]
+    public void Observation_rejects_legacy_or_inconsistent_shared_layout(int offset, int value)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var reader = new VulkanObservationReader();
+        using var mapping = MemoryMappedFile.OpenExisting(reader.Name);
+        using var writer = mapping.CreateViewAccessor();
+        writer.Write(offset, value);
         Assert.Throws<InvalidDataException>(() => reader.Read(42));
     }
 

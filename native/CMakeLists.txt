@@ -97,6 +97,9 @@ if(FLUIDRUNTIME_ENABLE_VULKAN)
     configure_fluidruntime_native_target(fluidruntime-vulkan-observation-tests)
     target_include_directories(fluidruntime-vulkan-observation-tests PRIVATE include)
     target_link_libraries(fluidruntime-vulkan-observation-tests PRIVATE Vulkan::Headers)
+    add_executable(fluidruntime-vulkan-buffer-tracking-tests src/vulkan_buffer_tracking_tests.cpp)
+    configure_fluidruntime_native_target(fluidruntime-vulkan-buffer-tracking-tests)
+    target_include_directories(fluidruntime-vulkan-buffer-tracking-tests PRIVATE include)
     configure_file(vulkan-observe.json.in vulkan-observe.json COPYONLY)
     add_custom_command(TARGET fluidruntime-vulkan-observe POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -119,6 +122,8 @@ if(FLUIDRUNTIME_ENABLE_VULKAN)
     add_test(NAME fluidruntime-vulkan-observation-dispatch
         COMMAND fluidruntime-vulkan-observation-tests $<TARGET_FILE:fluidruntime-vulkan-observe>)
     set_tests_properties(fluidruntime-vulkan-observation-dispatch PROPERTIES TIMEOUT 30)
+    add_test(NAME fluidruntime-vulkan-buffer-tracking COMMAND fluidruntime-vulkan-buffer-tracking-tests)
+    set_tests_properties(fluidruntime-vulkan-buffer-tracking PROPERTIES TIMEOUT 30)
     add_test(NAME fluidruntime-vulkan-policy-tests COMMAND fluidruntime-vulkan-policy-tests)
     add_test(NAME fluidruntime-vulkan-rejects-invalid-count
         COMMAND fluidruntime-vulkan-transfer-target --candidate-count 129)

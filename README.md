@@ -26,7 +26,7 @@ action can be applied without changing the result.
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
 | Vulkan | Native cooperative buffer-copy library, FluidLink authorization, exact readback and rollback |
-| Third-party Vulkan | Opt-in launch observation; verified with unmodified Khronos cube applications |
+| Third-party Vulkan | Opt-in resource hooks, buffer/memory lifetime and copy categories; verified with unmodified Khronos cube applications |
 | Windows integration | Optional Normal -> AboveNormal priority lease with independent rollback watchdog |
 | General game optimization | Not established; external GPU operations are never removed |
 
