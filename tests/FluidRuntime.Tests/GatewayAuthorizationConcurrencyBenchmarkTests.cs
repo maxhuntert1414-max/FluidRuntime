@@ -74,6 +74,17 @@ public sealed class GatewayAuthorizationConcurrencyBenchmarkTests
                     BinarySha256)
                 .AttachAuthorizationConcurrencyBenchmark(
                     report with { PeerProcessId = 43 }));
+        Assert.Throws<InvalidDataException>(() =>
+            GatewayUpdateUploadLabReport.Build(
+                    GatewayUpdateUploadLabReportTests.CreateNativeEvidence(), BinarySha256, BinarySha256)
+                .AttachAuthorizationConcurrencyBenchmark(report with { GatewayBackend = "inprocess" }));
+        Assert.Throws<InvalidDataException>(() =>
+            GatewayUpdateUploadLabReport.Build(
+                    GatewayUpdateUploadLabReportTests.CreateNativeEvidence(), BinarySha256, BinarySha256)
+                .AttachAuthorizationConcurrencyBenchmark(report with
+                {
+                    GatewayLibrary = new GatewayLibraryIdentity(Path.GetFullPath("Gateway.dll"), BinarySha256, 65536)
+                }));
     }
 
     [Fact]

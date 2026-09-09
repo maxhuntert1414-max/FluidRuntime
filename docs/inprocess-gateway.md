@@ -47,6 +47,12 @@ Authorization evidence adds `gateway_backend`, `gateway_library`,
 in-process transport round trips are zero. Peer process fields refer to the actual
 host image, not a nonexistent TCP server, and the context includes DLL hash/ABI.
 
+Paired runs reject changes to the backend or DLL identity. Attaching a concurrency
+benchmark also requires a matching backend and, when its peer was verified,
+matching DLL identity. D3D11/D3D12 aggregate reports expose `gateway_backend`,
+`gateway_library` and `gateway_transport_round_trip_count`; their legacy
+`gateway_round_trip_count` still counts protocol exchanges, not TCP operations.
+
 ## Tests and A/B
 
 ```powershell

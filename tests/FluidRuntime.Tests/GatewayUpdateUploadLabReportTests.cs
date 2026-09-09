@@ -189,6 +189,36 @@ public sealed class GatewayUpdateUploadLabReportTests
             Trials: [trial]);
     }
 
+    [Fact]
+    public void Build_rejects_individually_valid_authorizations_from_different_backends()
+    {
+        var evidence = CreateNativeEvidence();
+        var trial = Assert.Single(evidence.Trials);
+        var original = trial.Optimized.GatewayAuthorization!;
+        var library = new GatewayLibraryIdentity(Path.GetFullPath("Gateway.dll"), BinarySha256, 65536);
+        var request = new GatewayUpdateUploadAuthorizationRequest(1, "measured", BufferBytes,
+            CandidateCount, BinarySha256, BinarySha256);
+        var context = FluidLinkGatewayUpdateUploadAuthorizer.ComputeAuthorizationContextSha256(
+            original.AuthorizationNonce, original.PeerProcessId, original.PeerExecutableSha256,
+            original.PeerProcessStartedAtUtc, request, original.NativeActionMask, CandidateCount, library);
+        var other = original with
+        {
+            PairIndex = 1,
+            GatewayBackend = "inprocess",
+            GatewayLibrary = library,
+            AuthorizationContextSha256 = context,
+            RuntimeSessionId = $"gateway-update-{context}"
+        };
+        other.EnsureMatchesNativePolicy(BufferBytes, CandidateCount, 1, "measured", BinarySha256, BinarySha256);
+        var mixed = evidence with
+        {
+            TrialPairsRequested = 2,
+            IncludedTrialPairs = 2,
+            Trials = [trial, trial with { PairIndex = 1, Optimized = trial.Optimized with { GatewayAuthorization = other } }]
+        };
+        Assert.Throws<InvalidDataException>(() => GatewayUpdateUploadLabReport.Build(mixed, BinarySha256, BinarySha256));
+    }
+
     private static GatewayUpdateUploadAuthorization Authorization()
     {
         var request = new GatewayUpdateUploadAuthorizationRequest(

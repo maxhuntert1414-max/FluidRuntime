@@ -803,6 +803,7 @@ public sealed class D3D12CopyElisionLabRunner
         if (verified.Select(item => item.AuthorizationContextSha256)
                 .Distinct(StringComparer.Ordinal).Count() != verified.Length ||
             verified.Select(item => item.PeerProcessId).Distinct().Count() != 1 ||
+            verified.Select(item => new { item.GatewayBackend, item.GatewayLibrary }).Distinct().Count() != 1 ||
             verified.Select(item => item.PeerExecutableSha256).Distinct().Count() != 1 ||
             verified.Select(item => item.PeerProcessStartedAtUtc).Distinct().Count() != 1 ||
             verified.Select(item => item.AdvertisedServerVersion).Distinct().Count() != 1 ||
@@ -949,6 +950,8 @@ public sealed class D3D12CopyElisionLabRunner
             trials)
         {
             TransferTopology = options.CreateTransferTopology(),
+            GatewayBackend = verified[0].GatewayBackend,
+            GatewayLibrary = verified[0].GatewayLibrary,
             TransferBackendId = (int)NativeTransferBackend.D3D12,
             RequiredForwardedCopiesPerOptimizedRun = 8,
             LaneIsolationVerifiedInAllRuns = true,

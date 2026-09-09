@@ -1,3 +1,5 @@
+using FluidRuntime.Native;
+
 namespace FluidRuntime.Runtime;
 
 public sealed record GatewayUpdateUploadLabReport(
@@ -44,6 +46,9 @@ public sealed record GatewayUpdateUploadLabReport(
     UpdateUploadElisionLabReport NativeEvidence,
     IReadOnlyList<GatewayUpdateUploadAuthorization> Authorizations)
 {
+    public string GatewayBackend { get; init; } = "server";
+    public GatewayLibraryIdentity? GatewayLibrary { get; init; }
+    public long GatewayTransportRoundTripCount => GatewayBackend == "server" ? GatewayRoundTripCount : 0;
     private const int RequiredAuthorizationConcurrency = 8;
     private const int RequiredAuthorizationSamplesPerLevel = 32;
     private const int MaximumAuthorizationP99BudgetMilliseconds = 250;
@@ -107,6 +112,7 @@ public sealed record GatewayUpdateUploadLabReport(
             verified.Select(item => item.AdvertisedServerName).Distinct().Count() != 1 ||
             verified.Select(item => item.AdvertisedServerVersion).Distinct().Count() != 1 ||
             verified.Select(item => item.PeerProcessId).Distinct().Count() != 1 ||
+            verified.Select(item => new { item.GatewayBackend, item.GatewayLibrary }).Distinct().Count() != 1 ||
             verified.Select(item => item.PeerExecutablePath)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1 ||
             verified.Select(item => item.PeerExecutableSha256).Distinct().Count() != 1 ||
@@ -211,7 +217,11 @@ public sealed record GatewayUpdateUploadLabReport(
             PerformanceClaimBlockers: distinctBlockers,
             AuthorizationConcurrencyBenchmark: null,
             nativeEvidence,
-            verified);
+            verified)
+        {
+            GatewayBackend = verified[0].GatewayBackend,
+            GatewayLibrary = verified[0].GatewayLibrary
+        };
     }
 
     public GatewayUpdateUploadLabReport AttachAuthorizationConcurrencyBenchmark(
@@ -224,6 +234,8 @@ public sealed record GatewayUpdateUploadLabReport(
                 "An authorization concurrency benchmark is already attached.");
         }
         if (benchmark.TargetSha256 != TargetSha256 ||
+            benchmark.GatewayBackend != GatewayBackend ||
+            (benchmark.PeerProcessId != 0 && benchmark.GatewayLibrary != GatewayLibrary) ||
             benchmark.HookSha256 != HookSha256 ||
             benchmark.CandidateActionCount !=
                 NativeEvidence.RedundantUpdateCountPerOptimizedRun)

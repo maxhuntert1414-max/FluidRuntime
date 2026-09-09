@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FluidRuntime.Native;
 
 namespace FluidRuntime.Runtime;
 
@@ -161,6 +162,10 @@ public sealed record GatewayD3D12CopyLabReport(
     IReadOnlyList<GatewayUpdateUploadAuthorization> Authorizations,
     IReadOnlyList<D3D12CopyElisionTrialReport> Trials)
 {
+    public string GatewayBackend { get; init; } = "server";
+    public GatewayLibraryIdentity? GatewayLibrary { get; init; }
+    public long GatewayTransportRoundTripCount => GatewayBackend == "server" ? GatewayRoundTripCount : 0;
+
     public NativeTransferDescriptor TransferDescriptor { get; init; } =
         NativeTransferDescriptors.D3D12CopyBuffer;
 

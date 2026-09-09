@@ -16,6 +16,7 @@ public sealed class VulkanCopyLabRunner
         using var binding = OwnedBinaryBinding.Open(options.TargetPath, options.LibraryPath);
         var pairs = new List<VulkanCopyPairReport>();
         VulkanAuthorizationFailure? failure = null;
+        GatewayUpdateUploadAuthorization? firstAuthorization = null;
         for (var index = 0; index < options.TrialPairs + options.WarmupPairs; ++index)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -42,6 +43,11 @@ public sealed class VulkanCopyLabRunner
                         authorization.EnsureMatchesNativePolicy(request.ResourceBytes, request.CandidateActionCount,
                             pairIndex, phase, binding.TargetSha256, binding.HookSha256,
                             request.Backend, request.Topology);
+                        if (firstAuthorization is not null &&
+                            (authorization.GatewayBackend != firstAuthorization.GatewayBackend ||
+                             authorization.GatewayLibrary != firstAuthorization.GatewayLibrary))
+                            throw new InvalidDataException("Gateway backend or DLL identity changed between Vulkan pairs.");
+                        firstAuthorization ??= authorization;
                     }
                     catch (Exception error) when (error is not OperationCanceledException)
                     {
@@ -95,8 +101,10 @@ public sealed class VulkanCopyLabRunner
         var optimized = authorization is not null;
         var start = new ProcessStartInfo(binding.TargetPath)
         {
-            UseShellExecute = false, RedirectStandardOutput = true,
-            RedirectStandardError = true, CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(binding.TargetPath)!
         };
         string[] arguments = ["--library", binding.HookPath, "--mode", optimized ? "managed" : "baseline",
