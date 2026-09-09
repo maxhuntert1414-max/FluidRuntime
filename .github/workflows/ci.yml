@@ -25,7 +25,20 @@ jobs:
             src/FluidRuntime/Cli/FluidLinkProbeOptions.cs `
             src/FluidRuntime/Cli/FluidLinkProbeCommand.cs `
             src/FluidRuntime/Runtime/FluidLinkProbeReport.cs `
-            tests/FluidRuntime.Tests/FluidLinkClientTests.cs
+            tests/FluidRuntime.Tests/FluidLinkClientTests.cs `
+            src/FluidLink/V2 `
+            src/FluidRuntime/Program.cs `
+            src/FluidRuntime/Cli/GatewayReadbackLabCommand.cs `
+            src/FluidRuntime/Cli/GatewayReadbackLabOptions.cs `
+            src/FluidRuntime/Runtime/GatewayReadbackLabRunner.cs `
+            src/FluidRuntime/Runtime/GatewayReadbackLabReport.cs `
+            src/FluidRuntime/Runtime/GatewayUpdateUploadAuthorizer.cs `
+            src/FluidRuntime/Runtime/NativeTransferContract.cs `
+            src/FluidRuntime/Runtime/ReadbackElisionLabRunner.cs `
+            src/FluidRuntime/Runtime/ReadbackElisionLabReport.cs `
+            tests/FluidRuntime.Tests/FluidLinkV2CodecTests.cs `
+            tests/FluidRuntime.Tests/NativeGatewayTests.cs `
+            tests/FluidRuntime.Tests/GatewayReadbackTests.cs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet format whitespace tools/FluidGateway.BackendBenchmark/FluidGateway.BackendBenchmark.csproj `
             --no-restore --verify-no-changes --include tools/FluidGateway.BackendBenchmark/Program.cs

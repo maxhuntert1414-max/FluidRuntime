@@ -17,11 +17,12 @@ action can be applied without changing the result.
 
 | Area | State |
 | --- | --- |
-| FluidLink v2 | Strict binary IPC with numeric opcodes and no JSON payloads |
+| FluidLink v2 | Strict binary protocol; pooled buffers and caller-owned encoding in package 0.5.0 |
 | FluidLink batch | 129 logical operations in one ordered request/vector pair |
 | Native Gateway | Default C++20 endpoint in lab scripts; same PID/hash and authority checks |
 | In-process Gateway | Opt-in hash-pinned C++ DLL; same FluidLink validation and native gates |
 | D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
+| Gateway readback | GPU-to-staging copy authorization through server or DLL; read maps remain forwarded |
 | D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
 | Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
 | Vulkan | Native cooperative buffer-copy library, FluidLink authorization, exact readback and rollback |
@@ -35,6 +36,8 @@ action can be applied without changing the result.
 outside the online decision path; offline diagnosis remains in FluidGateway.
 [In-process setup and A/B validation](docs/inprocess-gateway.md) removes localhost
 transport when explicitly selected. The isolated server remains the default.
+[FluidLink optimization and Gateway readback](docs/fluidlink-v0.5-readback.md)
+documents the new controlled GPU-to-CPU path and its failure boundaries.
 
 The v0.23 source on `main` can observe a selected x64 Vulkan application through
 an explicit loader layer, collect CPU/RAM and Vulkan counters, and send the

@@ -13,9 +13,9 @@ public sealed record FluidLinkV2Frame(
     ReadOnlyMemory<byte> SessionId,
     ReadOnlyMemory<byte> Payload)
 {
-    public bool Ok => Flags.HasFlag(FluidLinkV2FrameFlags.Ok);
+    public bool Ok => (Flags & FluidLinkV2FrameFlags.Ok) != 0;
 
-    public bool HasSession => Flags.HasFlag(FluidLinkV2FrameFlags.HasSession);
+    public bool HasSession => (Flags & FluidLinkV2FrameFlags.HasSession) != 0;
 
     public int WireSize { get; init; }
 }
@@ -34,7 +34,29 @@ public static class FluidLinkV2FrameCodec
         ValidateFrame(frame);
         var result = new byte[
             FluidLinkV2Protocol.HeaderSize + frame.Payload.Length];
-        var header = result.AsSpan(0, FluidLinkV2Protocol.HeaderSize);
+        WriteFrame(frame, result);
+        return result;
+    }
+
+    /// <summary>Writes into caller-owned storage without allocating. Input and output must not overlap.</summary>
+    public static int Encode(FluidLinkV2Frame frame, Span<byte> destination)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        ValidateFrame(frame);
+        var size = FluidLinkV2Protocol.HeaderSize + frame.Payload.Length;
+        if (destination.Length < size)
+            throw new ArgumentException("Destination is too small for the complete frame.", nameof(destination));
+        var output = destination[..size];
+        if (frame.Payload.Span.Overlaps(output) || frame.MessageId.Span.Overlaps(output) ||
+            frame.SessionId.Span.Overlaps(output))
+            throw new ArgumentException("Frame input and destination must not overlap.", nameof(destination));
+        WriteFrame(frame, output);
+        return size;
+    }
+
+    private static void WriteFrame(FluidLinkV2Frame frame, Span<byte> output)
+    {
+        var header = output[..FluidLinkV2Protocol.HeaderSize];
         Magic.CopyTo(header);
         header[4] = FluidLinkV2Protocol.WireVersion;
         header[5] = (byte)frame.Kind;
@@ -49,11 +71,14 @@ public static class FluidLinkV2FrameCodec
         {
             frame.SessionId.Span.CopyTo(header[36..52]);
         }
+        else
+        {
+            header[36..52].Clear();
+        }
         BinaryPrimitives.WriteUInt32LittleEndian(
             header[52..56],
             checked((uint)frame.Payload.Length));
-        frame.Payload.Span.CopyTo(result.AsSpan(FluidLinkV2Protocol.HeaderSize));
-        return result;
+        frame.Payload.Span.CopyTo(output[FluidLinkV2Protocol.HeaderSize..]);
     }
 
     public static FluidLinkV2Frame Decode(ReadOnlySpan<byte> data)
@@ -78,9 +103,16 @@ public static class FluidLinkV2FrameCodec
                 $"received {data.Length}.");
         }
 
+        // Public Decode owns its result even when the caller reuses pooled input.
+        return FromOwnedMemory(data.ToArray());
+    }
+
+    private static FluidLinkV2Frame FromOwnedMemory(ReadOnlyMemory<byte> data)
+    {
+        var header = data.Span[..FluidLinkV2Protocol.HeaderSize];
         var flags = (FluidLinkV2FrameFlags)header[9];
-        var sessionId = flags.HasFlag(FluidLinkV2FrameFlags.HasSession)
-            ? header[36..52].ToArray()
+        var sessionId = (flags & FluidLinkV2FrameFlags.HasSession) != 0
+            ? data[36..52]
             : ReadOnlyMemory<byte>.Empty;
         return new FluidLinkV2Frame(
             Kind: (FluidLinkV2FrameKind)header[5],
@@ -89,9 +121,9 @@ public static class FluidLinkV2FrameCodec
             DecisionOpcode: header[8],
             Flags: flags,
             Sequence: BinaryPrimitives.ReadUInt64LittleEndian(header[12..20]),
-            MessageId: header[20..36].ToArray(),
+            MessageId: data[20..36],
             SessionId: sessionId,
-            Payload: data[FluidLinkV2Protocol.HeaderSize..].ToArray())
+            Payload: data[FluidLinkV2Protocol.HeaderSize..])
         {
             WireSize = data.Length
         };
@@ -116,7 +148,7 @@ public static class FluidLinkV2FrameCodec
                 frame.AsMemory(FluidLinkV2Protocol.HeaderSize, payloadSize),
                 cancellationToken);
         }
-        return Decode(frame);
+        return FromOwnedMemory(frame);
     }
 
     public static async ValueTask<int> WriteAsync(
@@ -185,7 +217,7 @@ public static class FluidLinkV2FrameCodec
                 "FluidLink v2 frame contains unknown flags.");
         }
         if ((FluidLinkV2FrameKind)header[5] == FluidLinkV2FrameKind.Request &&
-            flags.HasFlag(FluidLinkV2FrameFlags.Ok))
+            (flags & FluidLinkV2FrameFlags.Ok) != 0)
         {
             throw new FluidLinkV2ProtocolException(
                 "invalid_flags",
@@ -203,7 +235,7 @@ public static class FluidLinkV2FrameCodec
                 "invalid_message_id",
                 "FluidLink v2 message_id must contain 16 nonzero bytes.");
         }
-        var hasSession = flags.HasFlag(FluidLinkV2FrameFlags.HasSession);
+        var hasSession = (flags & FluidLinkV2FrameFlags.HasSession) != 0;
         var sessionIsZero = AllZero(header[36..52]);
         if (hasSession == sessionIsZero)
         {

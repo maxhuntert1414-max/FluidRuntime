@@ -1,6 +1,6 @@
 # Gateway Backends
 
-The owned D3D11, D3D12 and Vulkan authorization paths accept two explicit modes:
+The owned D3D11 upload/readback, D3D12 and Vulkan authorization paths accept two explicit modes:
 `--gateway-backend server` (default) or `--gateway-backend inprocess`.
 The existing `-GatewayBackend Python|Native` PowerShell server selector is
 unchanged; it selects the implementation of the isolated server, not a DLL.
@@ -21,7 +21,7 @@ dotnet run --project src/FluidRuntime -c Release -- gateway-d3d12-copy-lab `
 ```
 
 The same three Gateway switches work with `gateway-update-upload-lab` and
-`gateway-vulkan-copy-lab`. The Vulkan `--library` is still the GPU actuator;
+`gateway-vulkan-copy-lab`, plus `gateway-readback-lab`. The Vulkan `--library` is still the GPU actuator;
 `--gateway-library` is the decision DLL. TCP host/port/PID/hash options cannot
 be mixed with in-process mode. Nothing is installed or enabled globally.
 
@@ -69,6 +69,9 @@ dotnet run --project tools/FluidGateway.BackendBenchmark -c Release -- `
 It starts/stops only its owned server and cooperative targets. The managed tests
 explicitly skip DLL integration if `FLUIDGATEWAY_DLL` is not set, rather than
 pretending that a mock proved native integration.
+Set `FLUIDRUNTIME_NATIVE` to the native Release directory as well to run owned
+readback negative tests (wrong action and disposed authorizer). CI runs these
+after building the native targets.
 
 The benchmark uses five warmup pairs and 30 alternating AB/BA pairs, separately
 measuring batches and complete authorization. Output contains individual samples,
@@ -77,7 +80,8 @@ and scoped DLL PMR/payload-copy counters. Module load/hash verification is exclu
 from steady-state timing. Native total allocation counts and OS/kernel copies are
 not measured; this is not a zero-copy or universal performance claim.
 
-The optional transport interface belongs to FluidLink 0.4.0; wire contracts remain
+The optional transport interface was introduced in FluidLink 0.4.0; package 0.5.0
+adds pooled requests and lower-allocation codecs. Wire contracts remain
 the same. The server and DLL share the Gateway C++ core. Typed calls are a later,
 separately versioned extension, not a parallel policy implementation.
 

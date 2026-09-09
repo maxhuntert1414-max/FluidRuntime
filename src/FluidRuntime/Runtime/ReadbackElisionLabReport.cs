@@ -36,7 +36,11 @@ public sealed record ReadbackElisionRunReport(
     string PostDetachDestinationHash,
     double CpuWorkloadMicroseconds,
     double? GpuWorkloadMicroseconds,
-    JsonElement TargetReport);
+    JsonElement TargetReport)
+{
+    public GatewayUpdateUploadAuthorization? GatewayAuthorization { get; init; }
+    public long ManagedEndToEndMicroseconds { get; init; }
+}
 
 public sealed record ReadbackElisionTrialReport(
     int PairIndex,

@@ -107,13 +107,20 @@ public sealed class ReadbackElisionLabRunner
             optimized);
     }
 
-    private static async Task<ReadbackElisionRunReport> RunOneAsync(
+    internal static async Task<ReadbackElisionRunReport> RunOneAsync(
         ReadbackElisionLabOptions options,
         string targetPath,
         string hookPath,
         bool optimized,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        OwnedBinaryBinding? binaryBinding = null,
+        GatewayUpdateUploadAuthorization? authorization = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var startedAt = Stopwatch.GetTimestamp();
+        if (authorization is not null && (!optimized || binaryBinding is null) ||
+            optimized && binaryBinding is not null && authorization is null)
+            throw new InvalidOperationException("Gateway readback requires bound binaries and an authorization.");
         var startInfo = new ProcessStartInfo
         {
             FileName = targetPath,
@@ -151,12 +158,15 @@ public sealed class ReadbackElisionLabRunner
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
             using var reader = await HookLabRunner.OpenRingAsync(process, cancellationToken);
+            if (reader.ProcessId != (ulong)process.Id)
+                throw new InvalidDataException("Readback ring identity does not match the owned process.");
+            binaryBinding?.ValidateLaunchedProcess(process);
             HookControlPolicy? policy = null;
             if (optimized)
             {
                 policy = reader.PublishReadbackElisionPolicy(
                     TimeSpan.FromSeconds(4),
-                    ReadbackElisionLabOptions.RedundantCopyCount);
+                    authorization?.NativeActionBudget ?? ReadbackElisionLabOptions.RedundantCopyCount);
                 await reader.WaitForControlAcknowledgmentAsync(
                     policy.Epoch,
                     TimeSpan.FromSeconds(5),
@@ -189,7 +199,11 @@ public sealed class ReadbackElisionLabRunner
                 reader.ControlSnapshot,
                 reader,
                 events,
-                document.RootElement.Clone());
+                document.RootElement.Clone()) with
+            {
+                GatewayAuthorization = authorization,
+                ManagedEndToEndMicroseconds = checked((long)Math.Ceiling(Stopwatch.GetElapsedTime(startedAt).TotalMicroseconds))
+            };
         }
         finally
         {
@@ -550,7 +564,7 @@ public sealed class ReadbackElisionLabRunner
             trials);
     }
 
-    private static bool SameAdapter(
+    internal static bool SameAdapter(
         ReadbackElisionRunReport first,
         ReadbackElisionRunReport second) =>
         !string.IsNullOrWhiteSpace(first.AdapterLuid) &&

@@ -12,6 +12,56 @@ public sealed class FluidLinkV2CodecTests
     private static readonly byte[] SessionId =
         Enumerable.Range(17, 16).Select(value => (byte)value).ToArray();
 
+    [Theory]
+    [InlineData("fluidlink-v2.golden.json")]
+    [InlineData("fluidlink-v2-batch.golden.json")]
+    public void Caller_owned_encoder_matches_every_golden_and_clears_reused_headers(string fixtureName)
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory, "contracts", fixtureName)));
+        foreach (var vector in fixture.RootElement.GetProperty("vectors").EnumerateArray())
+        {
+            var wire = Convert.FromHexString(vector.GetProperty("wire_hex").GetString()!);
+            var frame = FluidLinkV2FrameCodec.Decode(wire);
+            var output = Enumerable.Repeat((byte)0xcc, wire.Length + 8).ToArray();
+            var size = FluidLinkV2FrameCodec.Encode(frame, output);
+            Assert.Equal(wire.Length, size);
+            Assert.Equal(wire, output[..size]);
+            Assert.All(output[size..], item => Assert.Equal(0xcc, item));
+            var snapshot = output.ToArray();
+            Assert.Throws<ArgumentException>(() => FluidLinkV2FrameCodec.Encode(frame, output.AsSpan(0, size - 1)));
+            Assert.Equal(snapshot, output);
+        }
+    }
+
+    [Fact]
+    public void Decode_owns_memory_and_encoder_rejects_overlapping_input_without_mutation()
+    {
+        var frame = new FluidLinkV2Frame(FluidLinkV2FrameKind.Request, FluidLinkV2Opcode.Ping,
+            0, 0, FluidLinkV2FrameFlags.HasSession, 1, MessageId, SessionId, new byte[] { 1, 2, 3 });
+        var encoded = FluidLinkV2FrameCodec.Encode(frame);
+        var decoded = FluidLinkV2FrameCodec.Decode(encoded);
+        var expected = encoded.ToArray();
+        Array.Fill(encoded, (byte)0);
+        Assert.Equal(expected, FluidLinkV2FrameCodec.Encode(decoded));
+        var overlapping = frame with { Payload = expected.AsMemory(0, 3) };
+        var snapshot = expected.ToArray();
+        Assert.Throws<ArgumentException>(() => FluidLinkV2FrameCodec.Encode(overlapping, expected));
+        Assert.Equal(snapshot, expected);
+    }
+
+    [Fact]
+    public void Caller_owned_encoding_allocates_no_per_frame_storage_after_warmup()
+    {
+        var frame = new FluidLinkV2Frame(FluidLinkV2FrameKind.Request, FluidLinkV2Opcode.Ping,
+            0, 0, FluidLinkV2FrameFlags.None, 1, MessageId, ReadOnlyMemory<byte>.Empty, new byte[] { 1 });
+        var output = new byte[128];
+        for (var i = 0; i < 256; ++i) FluidLinkV2FrameCodec.Encode(frame, output);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; ++i) FluidLinkV2FrameCodec.Encode(frame, output);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
     [Fact]
     public void Bundled_batch_contract_has_the_exact_extension_fingerprint()
     {

@@ -11,7 +11,8 @@ public enum GatewayUploadBackend
 {
     D3D11UpdateSubresource = 0,
     D3D12CopyBufferRegion = 1,
-    VulkanCopyBuffer = 2
+    VulkanCopyBuffer = 2,
+    D3D11ReadbackCopy = 3
 }
 
 public sealed record GatewayUpdateUploadAuthorizationRequest(
@@ -74,6 +75,13 @@ public sealed record GatewayUpdateUploadAuthorization(
 
     public NativeTransferDescriptor TransferDescriptor =>
         GatewayUploadAuthorizationProfiles.For(Backend).TransferDescriptor;
+
+    public bool SeedTransferExecuted => SeedUploadExecuted;
+    public FluidLinkV2OperationType OperationType => GatewayUploadAuthorizationProfiles.For(Backend).OperationType;
+    public FluidLinkV2MemoryLayer SourceMemoryLayer => GatewayUploadAuthorizationProfiles.For(Backend).DeviceToHost
+        ? FluidLinkV2MemoryLayer.Vram : FluidLinkV2MemoryLayer.Ram;
+    public FluidLinkV2MemoryLayer DestinationMemoryLayer => GatewayUploadAuthorizationProfiles.For(Backend).DeviceToHost
+        ? FluidLinkV2MemoryLayer.Ram : FluidLinkV2MemoryLayer.Vram;
 
     public NativeTransferTopology? TransferTopology { get; init; }
 
@@ -189,13 +197,46 @@ internal sealed record GatewayUploadAuthorizationProfile(
     string AuthorizationScope,
     IReadOnlyList<string> NativeSafetyGuards,
     NativeTransferDescriptor TransferDescriptor,
-    Func<ulong, NativeTransferTopology> CreateDefaultTopology);
+    Func<ulong, NativeTransferTopology> CreateDefaultTopology)
+{
+    public FluidLinkV2OperationType OperationType { get; init; } = FluidLinkV2OperationType.Upload;
+    public bool DeviceToHost { get; init; }
+}
 
 internal static class GatewayUploadAuthorizationProfiles
 {
+    private static readonly IReadOnlyDictionary<GatewayUploadBackend, GatewayUploadAuthorizationProfile> Profiles =
+        Enum.GetValues<GatewayUploadBackend>().ToDictionary(backend => backend, backend =>
+        {
+            var profile = Create(backend);
+            return profile with { NativeSafetyGuards = Array.AsReadOnly(profile.NativeSafetyGuards.ToArray()) };
+        });
+
     public static GatewayUploadAuthorizationProfile For(
+        GatewayUploadBackend backend) => Profiles.TryGetValue(backend, out var profile)
+        ? profile : throw new ArgumentOutOfRangeException(nameof(backend));
+
+    private static GatewayUploadAuthorizationProfile Create(
         GatewayUploadBackend backend) => backend switch
         {
+            GatewayUploadBackend.D3D11ReadbackCopy => new(
+                HookRingReader.SkipRedundantReadbackCopyAction,
+                "gateway-readback",
+                "gateway-readback",
+                "fluidruntime-gateway-readback-authorization-context-v1",
+                "owned-d3d11-process-bound-device-to-staging-readback-final-gate",
+                [
+                    "expected loopback peer PID and executable SHA matched through the OS TCP owner table",
+                    "owned target and hook binaries frozen before authorization",
+                    "tracked device source and staging destination provenance",
+                    "native generation and resource identity guards before skipped copies",
+                    "read maps and synchronization remain forwarded",
+                    "one short-lived native policy epoch with a fixed action budget",
+                    "full readback content equivalence and post-detach rollback verified"
+                ],
+                NativeTransferDescriptors.D3D11ReadbackBuffer,
+                NativeTransferTopology.D3D11SingleLane)
+            { OperationType = FluidLinkV2OperationType.Copy, DeviceToHost = true },
             GatewayUploadBackend.D3D11UpdateSubresource => new(
                 HookRingReader.SkipRedundantUpdateSubresourceAction,
                 "gateway-update",
@@ -362,8 +403,8 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
             var profile = GatewayUploadAuthorizationProfiles.For(request.Backend);
             var token = Guid.NewGuid().ToString("N");
             var authorizationNonce = $"{profile.NoncePrefix}-{token}";
-            var ramResourceId = $"ram-source-{token}";
-            var vramResourceId = $"vram-target-{token}";
+            var ramResourceId = $"{(profile.DeviceToHost ? "ram-staging" : "ram-source")}-{token}";
+            var vramResourceId = $"{(profile.DeviceToHost ? "vram-source" : "vram-target")}-{token}";
 
             await using var client = library is null
                 ? new FluidLinkV2Client(host, port, deadline)
@@ -442,12 +483,12 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
                 new FluidLinkV2OperationBatchEvent(
                     token,
                     checked((int)request.CandidateActionCount + 1),
-                    FluidLinkV2OperationType.Upload,
+                    profile.OperationType,
                     FluidLinkV2Queue.Copy,
                     CostMicroseconds: 0,
                     SizeBytes: request.ResourceBytes,
-                    Source: ramResourceId,
-                    Target: vramResourceId,
+                    Source: profile.DeviceToHost ? vramResourceId : ramResourceId,
+                    Target: profile.DeviceToHost ? ramResourceId : vramResourceId,
                     Reason:
                         $"authorization-context-sha256:{contextSha256}",
                     Frame: 0),
@@ -735,7 +776,7 @@ public sealed class FluidLinkGatewayUpdateUploadAuthorizer :
         ArgumentNullException.ThrowIfNull(request);
         if (request.PairIndex < 0 ||
             request.Phase is not ("warmup" or "measured") ||
-            request.ResourceBytes == 0 ||
+            request.ResourceBytes is 0 or > ulong.MaxValue / 4 ||
             request.CandidateActionCount is 0 or
                 > HookRingReader.MaxControlActionBudget ||
             !Enum.IsDefined(request.Backend))

@@ -358,11 +358,10 @@ public sealed record FluidLinkV2RuntimeDecisionPayload(
     ulong SavedMicroseconds,
     ulong SavedBytes)
 {
-    public bool Accepted => Status.HasFlag(FluidLinkV2DecisionStatus.Accepted);
+    public bool Accepted => (Status & FluidLinkV2DecisionStatus.Accepted) != 0;
 
-    public bool? Executed => Status.HasFlag(
-        FluidLinkV2DecisionStatus.HasExecutionState)
-        ? Status.HasFlag(FluidLinkV2DecisionStatus.Executed)
+    public bool? Executed => (Status & FluidLinkV2DecisionStatus.HasExecutionState) != 0
+        ? (Status & FluidLinkV2DecisionStatus.Executed) != 0
         : null;
 }
 
@@ -373,11 +372,10 @@ public sealed record FluidLinkV2RuntimeDecision(
     ulong SavedMicroseconds,
     ulong SavedBytes)
 {
-    public bool Accepted => Status.HasFlag(FluidLinkV2DecisionStatus.Accepted);
+    public bool Accepted => (Status & FluidLinkV2DecisionStatus.Accepted) != 0;
 
-    public bool? Executed => Status.HasFlag(
-        FluidLinkV2DecisionStatus.HasExecutionState)
-        ? Status.HasFlag(FluidLinkV2DecisionStatus.Executed)
+    public bool? Executed => (Status & FluidLinkV2DecisionStatus.HasExecutionState) != 0
+        ? (Status & FluidLinkV2DecisionStatus.Executed) != 0
         : null;
 }
 

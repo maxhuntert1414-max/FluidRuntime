@@ -357,8 +357,8 @@ public static class FluidLinkV2PayloadCodec
         var decisions = new FluidLinkV2RuntimeDecision[decisionCount];
         for (var index = 0; index < decisions.Length; index += 1)
         {
-            var decisionOpcode = reader.ReadEnum<FluidLinkV2DecisionOpcode>(
-                "decision_opcode");
+            var decisionOpcode = (FluidLinkV2DecisionOpcode)reader.ReadByte("decision_opcode");
+            ValidateEnum(decisionOpcode, "decision_opcode");
             var status = (FluidLinkV2DecisionStatus)reader.ReadByte("status_flags");
             var decision = new FluidLinkV2RuntimeDecision(
                 FluidLinkV2EventOpcode.Operation,
@@ -927,8 +927,8 @@ public static class FluidLinkV2PayloadCodec
     private static void ValidateDecisionStatus(FluidLinkV2DecisionStatus value)
     {
         if ((value & ~AllowedDecisionStatus) != 0 ||
-            (value.HasFlag(FluidLinkV2DecisionStatus.Executed) &&
-             !value.HasFlag(FluidLinkV2DecisionStatus.HasExecutionState)))
+            ((value & FluidLinkV2DecisionStatus.Executed) != 0 &&
+             (value & FluidLinkV2DecisionStatus.HasExecutionState) == 0))
         {
             throw InvalidPayload("status_flags contains an invalid combination.");
         }
@@ -1009,17 +1009,17 @@ public static class FluidLinkV2PayloadCodec
             string field,
             bool requireNonEmpty)
         {
-            var encoded = EncodeText(
+            var length = TextLength(
                 value,
                 maximumUtf8Bytes,
                 field,
                 requireNonEmpty);
-            if (encoded.Length > byte.MaxValue)
+            if (length > byte.MaxValue)
             {
                 throw InvalidPayload($"{field} cannot fit in a text8 field.");
             }
-            WriteByte(checked((byte)encoded.Length));
-            WriteBytes(encoded);
+            WriteByte(checked((byte)length));
+            WriteText(value, length);
         }
 
         public void WriteText16(
@@ -1028,13 +1028,19 @@ public static class FluidLinkV2PayloadCodec
             string field,
             bool requireNonEmpty)
         {
-            var encoded = EncodeText(
+            var length = TextLength(
                 value,
                 maximumUtf8Bytes,
                 field,
                 requireNonEmpty);
-            WriteUInt16(checked((ushort)encoded.Length));
-            WriteBytes(encoded);
+            WriteUInt16(checked((ushort)length));
+            WriteText(value, length);
+        }
+
+        private void WriteText(string value, int length)
+        {
+            StrictUtf8.GetBytes(value.AsSpan(), buffer.GetSpan(length));
+            buffer.Advance(length);
         }
 
         public byte[] ToArray()
@@ -1049,7 +1055,7 @@ public static class FluidLinkV2PayloadCodec
             return buffer.WrittenSpan.ToArray();
         }
 
-        private static byte[] EncodeText(
+        private static int TextLength(
             string value,
             int maximumUtf8Bytes,
             string field,
@@ -1059,21 +1065,21 @@ public static class FluidLinkV2PayloadCodec
             {
                 throw InvalidPayload($"{field} must not be empty.");
             }
-            byte[] encoded;
+            int length;
             try
             {
-                encoded = StrictUtf8.GetBytes(value);
+                length = StrictUtf8.GetByteCount(value);
             }
             catch (EncoderFallbackException exception)
             {
                 throw InvalidPayload($"{field} is not valid UTF-8 text.", exception);
             }
-            if (encoded.Length > maximumUtf8Bytes)
+            if (length > maximumUtf8Bytes)
             {
                 throw InvalidPayload(
                     $"{field} exceeds its {maximumUtf8Bytes}-byte UTF-8 limit.");
             }
-            return encoded;
+            return length;
         }
     }
 

@@ -19,6 +19,8 @@ public static class RuntimeApplication
         {
             return await GatewayVulkanCopyLabCommand.RunAsync(args);
         }
+        if (args.Length > 0 && string.Equals(args[0], "gateway-readback-lab", StringComparison.OrdinalIgnoreCase))
+            return await GatewayReadbackLabCommand.RunAsync(args);
 
         if (args.Length > 0 &&
             string.Equals(
@@ -122,6 +124,7 @@ public static class RuntimeApplication
             Console.WriteLine(ControlPolicyMatrixOptions.Usage);
             Console.WriteLine(SustainedCopyLabOptions.Usage);
             Console.WriteLine(ReadbackElisionLabOptions.Usage);
+            Console.WriteLine(GatewayReadbackLabOptions.Usage);
             Console.WriteLine(UploadElisionLabOptions.Usage);
             Console.WriteLine(UpdateUploadElisionLabOptions.Usage);
             Console.WriteLine(GatewayUpdateUploadLabOptions.Usage);

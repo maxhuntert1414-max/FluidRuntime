@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 
@@ -616,11 +617,13 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
                 ? sessionId
                 : ReadOnlyMemory<byte>.Empty,
             Payload: payload);
-        var encoded = FluidLinkV2FrameCodec.Encode(request);
+        var buffer = ArrayPool<byte>.Shared.Rent(FluidLinkV2Protocol.HeaderSize + payload.Length);
 
         FluidLinkV2Frame response;
         try
         {
+            var size = FluidLinkV2FrameCodec.Encode(request, buffer);
+            var encoded = buffer.AsMemory(0, size);
             using var timeoutSource = CreateTimeoutSource(cancellationToken);
             if (transport is null)
             {
@@ -641,6 +644,10 @@ public sealed class FluidLinkV2Client : IAsyncDisposable
         {
             InvalidateConnection();
             throw;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
         }
         nextSequence += 1;
 

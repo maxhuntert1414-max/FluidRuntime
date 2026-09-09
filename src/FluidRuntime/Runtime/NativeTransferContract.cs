@@ -89,6 +89,12 @@ public sealed record NativeTransferTopology(
 
 public static class NativeTransferDescriptors
 {
+    public static readonly NativeTransferDescriptor D3D11ReadbackBuffer = new(
+        NativeTransferTopology.ContractVersion,
+        NativeTransferBackend.D3D11,
+        NativeTransferOperation.CopyBuffer,
+        "owned-d3d11-device-to-staging-readback-copy");
+
     public static readonly NativeTransferDescriptor D3D11UpdateBuffer = new(
         NativeTransferTopology.ContractVersion,
         NativeTransferBackend.D3D11,

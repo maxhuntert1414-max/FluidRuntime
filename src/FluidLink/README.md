@@ -1,7 +1,7 @@
 # FluidLink
 
 FluidLink is the versioned local transport library between FluidRuntime and
-FluidGateway. Package 0.3.0 has no third-party dependencies and keeps both wire
+FluidGateway. Package 0.5.0 has no third-party dependencies and keeps both wire
 generations available:
 
 | Protocol | Payload | Units | Status |
@@ -110,10 +110,32 @@ properties while connected. A Windows consumer can correlate that exact TCP
 tuple with the OS owner table without receiving the underlying socket. Endpoint
 inspection is transport evidence, not cryptographic peer authentication.
 
-`BytesSent` and `BytesReceived` count complete FluidLink frames handed to TCP.
-They exclude TCP/IP overhead. In the v0.14 cross-process probe, the same 11
+`BytesSent` and `BytesReceived` count complete FluidLink frames processed by the
+selected transport, including an in-process transport. They are not TCP counters
+and exclude TCP/IP overhead. In the v0.14 cross-process probe, the same 11
 request/response semantics used 3,189 v1 frame bytes and 1,880 v2 frame bytes,
 reducing this control-flow byte count by 1,309 bytes, or 41.05%.
+
+## Buffer Ownership
+
+Version 0.5.0 adds `FluidLinkV2FrameCodec.Encode(frame, destinationSpan)`, returning
+the number of bytes written. The destination must fit the entire frame and must
+not overlap its inputs. Validation and capacity failures do not modify it; bytes
+past the returned length are untouched. Absent session fields are cleared even
+when the buffer contains a previous frame. The allocating overload remains.
+
+`Decode` owns its result using one backing array. Input may be reused after it
+returns. Stream decoding retains owned memory without cloning the payload again.
+The client pools request buffers and clears them on return, including errors.
+An `IFluidLinkV2Transport` borrows request memory only until its asynchronous
+exchange completes and must return independently owned response memory. Abort
+retires the session; it never switches backends or reuses old authority.
+
+UTF-8 writes go directly into the payload writer. Hot decision opcode and flag
+checks avoid boxing, including before tiered JIT optimization. Public schemas,
+numeric opcodes, units, golden vectors and negotiated hashes are unchanged.
+This reduces managed overhead, not all allocations or copies. The DLL still
+encodes/decodes FluidLink internally; typed native calls are a future step.
 
 ## Scope
 

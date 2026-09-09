@@ -118,6 +118,7 @@ public sealed class NativeGatewayTests
             {
                 GatewayUploadBackend.D3D12CopyBufferRegion => NativeTransferTopology.D3D12MultiLane(128),
                 GatewayUploadBackend.VulkanCopyBuffer => NativeTransferTopology.VulkanMultiLane(128),
+                GatewayUploadBackend.D3D11ReadbackCopy => NativeTransferTopology.D3D11SingleLane(128),
                 _ => null
             };
             var request = new GatewayUpdateUploadAuthorizationRequest(0, "measured", 4194304, 128,
@@ -126,6 +127,18 @@ public sealed class NativeGatewayTests
             void Validate(GatewayUpdateUploadAuthorization value) => value.EnsureMatchesNativePolicy(
                 request.ResourceBytes, 128, 0, "measured", TestHash, TestHash, backend, topology);
             Validate(result);
+            if (backend == GatewayUploadBackend.D3D11ReadbackCopy)
+            {
+                Assert.Equal(FluidLinkV2OperationType.Copy, result.OperationType);
+                Assert.Equal(FluidLinkV2MemoryLayer.Vram, result.SourceMemoryLayer);
+                Assert.Equal(FluidLinkV2MemoryLayer.Ram, result.DestinationMemoryLayer);
+                Assert.Equal(HookRingReader.SkipRedundantReadbackCopyAction, result.NativeActionMask);
+                Assert.True(result.SeedTransferExecuted);
+                Assert.Throws<InvalidDataException>(() => Validate(result with
+                {
+                    NativeActionMask = HookRingReader.SkipRedundantUpdateSubresourceAction
+                }));
+            }
             Assert.Equal("inprocess", result.GatewayBackend);
             Assert.Equal(0, result.TransportRoundTripCount);
             Assert.Equal(10, result.WireExchangeCount);
