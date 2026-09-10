@@ -54,6 +54,13 @@ It did **not** exercise buffer-to-buffer copies, so it is compatibility/lifetime
 evidence, not proof of the transfer byte categories. Its executable SHA-256:
 `af8ac60765bd0d489e2de3f40b852332aea02ba92c07acbd7c7d368a05c8be1c`.
 
+The initial remote interop run also exposed a timing assumption in an existing
+D3D11 readback negative test: its baseline could exit before ring discovery with
+a 50 ms hold. That test now holds the owned baseline for the collector's bounded
+five-second discovery window. Production deadlines and all identity, denial,
+original-copy and content assertions are unchanged. This is a test-collection
+correction, not a Vulkan or FluidLink contract change.
+
 ## Raw Evidence
 
 [Session archive](traces/vulkan-buffer-hook.zip), SHA-256:

@@ -108,8 +108,10 @@ public sealed class GatewayReadbackTests
     private static ReadbackElisionLabOptions Options()
     {
         var directory = Environment.GetEnvironmentVariable("FLUIDRUNTIME_NATIVE")!;
+        // These test authorization failure, not startup speed. Keep the original
+        // baseline alive for the collector's bounded five-second discovery window.
         return new(Path.Combine(directory, "fluidruntime-hook-target.exe"),
-            Path.Combine(directory, "fluidruntime-present-hook.dll"), "unused.json", 1, 0, 50, 5000, false);
+            Path.Combine(directory, "fluidruntime-present-hook.dll"), "unused.json", 1, 0, 5000, 5000, false);
     }
 
     private sealed class AlteredAuthorizer(IGatewayUpdateUploadAuthorizer original) : IGatewayUpdateUploadAuthorizer
