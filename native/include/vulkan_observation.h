@@ -4,7 +4,7 @@
 
 namespace fluid::observation {
 constexpr std::uint32_t magic = 0x4f564746;
-constexpr std::uint32_t version = 2;
+constexpr std::uint32_t version = 3;
 enum Counter : unsigned {
     instances, devices, allocations, frees, allocation_bytes, live_bytes, peak_bytes,
     host_visible_bytes, device_local_bytes, maps, flushes, invalidates, buffer_binds,
@@ -16,7 +16,13 @@ enum Counter : unsigned {
     host_to_device_copy_bytes, device_to_host_copy_bytes, device_to_device_copy_bytes,
     host_to_host_copy_bytes, shared_memory_copy_bytes, unknown_buffer_copy_bytes,
     same_allocation_copy_bytes, buffer_binding_failures, unclassified_buffer_bindings,
-    counter_overflows, counter_count
+    counter_overflows,
+    command_buffers_allocated, command_buffers_freed, live_command_buffers, untracked_command_buffers,
+    command_buffer_begins, command_buffer_ends, command_buffer_resets, command_pool_resets,
+    command_execute_calls, command_tracking_failures, successful_submit_calls, failed_submit_calls,
+    submitted_primary_command_buffers, submitted_secondary_command_buffers, resubmitted_command_buffers,
+    submitted_buffer_copies, submitted_buffer_copy_bytes, unresolved_submit_calls,
+    command_tracking_overflows, untracked_command_pools, counter_count
 };
 struct alignas(8) Shared {
     std::uint32_t signature;
@@ -27,6 +33,6 @@ struct alignas(8) Shared {
     volatile LONG64 enabled;
     volatile LONG64 counters[counter_count];
 };
-static_assert(counter_count == 46);
-static_assert(sizeof(Shared) == 400);
+static_assert(counter_count == 66);
+static_assert(sizeof(Shared) == 560);
 }

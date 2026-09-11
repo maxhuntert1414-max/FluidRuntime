@@ -5,8 +5,8 @@ namespace FluidRuntime.Runtime;
 internal sealed class VulkanObservationReader : IDisposable
 {
     internal const uint Magic = 0x4f564746;
-    internal const int Version = 2;
-    internal const int Size = 400;
+    internal const int Version = 3;
+    internal const int Size = 560;
     internal static readonly string[] Counters = ["instances", "devices", "allocations", "frees",
         "allocation_bytes", "live_bytes", "peak_bytes", "host_visible_bytes", "device_local_bytes",
         "maps", "flushes", "invalidates", "buffer_binds", "buffer_copies", "buffer_copy_bytes",
@@ -16,7 +16,13 @@ internal sealed class VulkanObservationReader : IDisposable
         "buffers_created", "buffers_destroyed", "live_buffers", "untracked_buffers",
         "host_to_device_copy_bytes", "device_to_host_copy_bytes", "device_to_device_copy_bytes",
         "host_to_host_copy_bytes", "shared_memory_copy_bytes", "unknown_buffer_copy_bytes",
-        "same_allocation_copy_bytes", "buffer_binding_failures", "unclassified_buffer_bindings", "counter_overflows"];
+        "same_allocation_copy_bytes", "buffer_binding_failures", "unclassified_buffer_bindings", "counter_overflows",
+        "command_buffers_allocated", "command_buffers_freed", "live_command_buffers", "untracked_command_buffers",
+        "command_buffer_begins", "command_buffer_ends", "command_buffer_resets", "command_pool_resets",
+        "command_execute_calls", "command_tracking_failures", "successful_submit_calls", "failed_submit_calls",
+        "submitted_primary_command_buffers", "submitted_secondary_command_buffers", "resubmitted_command_buffers",
+        "submitted_buffer_copies", "submitted_buffer_copy_bytes", "unresolved_submit_calls",
+        "command_tracking_overflows", "untracked_command_pools"];
     private readonly MemoryMappedFile mapping;
     private readonly MemoryMappedViewAccessor view;
     internal string Name { get; } = "Local\\FluidRuntimeObserve-" + Guid.NewGuid().ToString("N");

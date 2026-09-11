@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <atomic>
+#include <array>
 #include <thread>
 #include <vector>
 #include <limits>
@@ -33,6 +34,16 @@ unsigned destroyed_buffers{};
 bool recreate_on_destroy{};
 PFN_vkCreateDevice top_create_device{};
 VkPhysicalDevice reuse_physical{};
+bool testing_commands{};
+VkResult command_result = VK_SUCCESS;
+VkResult command_submit_result = VK_SUCCESS;
+std::array<Handle, 8> command_handles{};
+std::atomic<const void*> last_command_info{};
+std::atomic<unsigned> command_submits{};
+unsigned next_command_handle{};
+const auto command_pool_handle = reinterpret_cast<VkCommandPool>(uintptr_t{701});
+PFN_vkResetCommandBuffer top_reset_command{};
+VkCommandBuffer reset_during_submit{};
 void recreate_device();
 _Post_satisfies_(value) void check(bool value) { ++checks; if (!value) throw std::runtime_error("Observation dispatch regression"); }
 VKAPI_ATTR VkResult VKAPI_CALL create_instance(const VkInstanceCreateInfo*, const VkAllocationCallbacks*, VkInstance* out) {
@@ -59,8 +70,56 @@ VKAPI_ATTR void VKAPI_CALL memory_properties(VkPhysicalDevice, VkPhysicalDeviceM
     out->memoryTypes[2].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 }
 VKAPI_ATTR VkResult VKAPI_CALL submit(VkQueue q, uint32_t n, const VkSubmitInfo* info, VkFence fence) {
+    if (testing_commands) {
+        last_command_info = info;
+        ++command_submits;
+        if (reset_during_submit) {
+            const auto command = reset_during_submit;
+            reset_during_submit = nullptr;
+            check(top_reset_command(command, 0) == VK_SUCCESS);
+        }
+        return command_submit_result;
+    }
     check(q == reinterpret_cast<VkQueue>(&device_handle) && n == 0 && !info && !fence);
     ++submits; return VK_ERROR_DEVICE_LOST;
+}
+VKAPI_ATTR VkResult VKAPI_CALL submit2(VkQueue, uint32_t, const VkSubmitInfo2* info, VkFence) {
+    last_command_info = info;
+    ++command_submits;
+    return command_submit_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL create_command_pool(VkDevice, const VkCommandPoolCreateInfo* info,
+    const VkAllocationCallbacks*, VkCommandPool* output) {
+    last_command_info = info;
+    if (command_result == VK_SUCCESS) *output = command_pool_handle;
+    return command_result;
+}
+VKAPI_ATTR void VKAPI_CALL destroy_command_pool(VkDevice, VkCommandPool, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL reset_command_pool(VkDevice, VkCommandPool, VkCommandPoolResetFlags) {
+    return command_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL allocate_commands(VkDevice, const VkCommandBufferAllocateInfo* info, VkCommandBuffer* output) {
+    last_command_info = info;
+    if (command_result != VK_SUCCESS) return command_result;
+    for (uint32_t i = 0; i < info->commandBufferCount; ++i) {
+        check(next_command_handle < command_handles.size());
+        auto& handle = command_handles[next_command_handle++];
+        handle.dispatch = &device_key;
+        output[i] = reinterpret_cast<VkCommandBuffer>(&handle);
+    }
+    return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL free_commands(VkDevice, VkCommandPool, uint32_t, const VkCommandBuffer* buffers) {
+    last_command_info = buffers;
+}
+VKAPI_ATTR VkResult VKAPI_CALL begin_command(VkCommandBuffer, const VkCommandBufferBeginInfo* info) {
+    last_command_info = info;
+    return command_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL end_command(VkCommandBuffer) { return command_result; }
+VKAPI_ATTR VkResult VKAPI_CALL reset_command(VkCommandBuffer, VkCommandBufferResetFlags) { return command_result; }
+VKAPI_ATTR void VKAPI_CALL execute_commands(VkCommandBuffer, uint32_t, const VkCommandBuffer* buffers) {
+    last_command_info = buffers;
 }
 VKAPI_ATTR void VKAPI_CALL extension() {}
 VKAPI_ATTR VkResult VKAPI_CALL allocate_memory(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) {
@@ -123,6 +182,17 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance, const char* name) {
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL gdpa(VkDevice, const char* name) {
     if (!std::strcmp(name, "vkDestroyDevice")) return late_lookup ? top_destroy_device : reinterpret_cast<PFN_vkVoidFunction>(destroy_device);
     if (!std::strcmp(name, "vkQueueSubmit")) return reinterpret_cast<PFN_vkVoidFunction>(submit);
+    if (!std::strcmp(name, "vkQueueSubmit2") || !std::strcmp(name, "vkQueueSubmit2KHR"))
+        return reinterpret_cast<PFN_vkVoidFunction>(submit2);
+    if (!std::strcmp(name, "vkCreateCommandPool")) return reinterpret_cast<PFN_vkVoidFunction>(create_command_pool);
+    if (!std::strcmp(name, "vkDestroyCommandPool")) return reinterpret_cast<PFN_vkVoidFunction>(destroy_command_pool);
+    if (!std::strcmp(name, "vkResetCommandPool")) return reinterpret_cast<PFN_vkVoidFunction>(reset_command_pool);
+    if (!std::strcmp(name, "vkAllocateCommandBuffers")) return reinterpret_cast<PFN_vkVoidFunction>(allocate_commands);
+    if (!std::strcmp(name, "vkFreeCommandBuffers")) return reinterpret_cast<PFN_vkVoidFunction>(free_commands);
+    if (!std::strcmp(name, "vkBeginCommandBuffer")) return reinterpret_cast<PFN_vkVoidFunction>(begin_command);
+    if (!std::strcmp(name, "vkEndCommandBuffer")) return reinterpret_cast<PFN_vkVoidFunction>(end_command);
+    if (!std::strcmp(name, "vkResetCommandBuffer")) return reinterpret_cast<PFN_vkVoidFunction>(reset_command);
+    if (!std::strcmp(name, "vkCmdExecuteCommands")) return reinterpret_cast<PFN_vkVoidFunction>(execute_commands);
     if (!std::strcmp(name, "vkAllocateMemory")) return reinterpret_cast<PFN_vkVoidFunction>(allocate_memory);
     if (!std::strcmp(name, "vkFreeMemory")) return reinterpret_cast<PFN_vkVoidFunction>(free_memory);
     if (!std::strcmp(name, "vkCreateBuffer")) return reinterpret_cast<PFN_vkVoidFunction>(create_buffer);
@@ -246,9 +316,128 @@ void buffer_hooks(const VkNegotiateLayerInterface& api, VkDevice device, fluid::
     check(shared->counters[buffer_copy_bytes] == std::numeric_limits<LONG64>::max());
     check(shared->counters[counter_overflows] > 0 && copies == 4008);
 }
-}
 
-int main(int argc, char** argv) {
+void command_hooks(const VkNegotiateLayerInterface &api, VkDevice device,
+                   fluid::observation::Shared *shared) {
+    using namespace fluid::observation;
+    testing_commands = true;
+    const auto get = [&](const char *name) { return api.pfnGetDeviceProcAddr(device, name); };
+    const auto create = reinterpret_cast<PFN_vkCreateCommandPool>(get("vkCreateCommandPool"));
+    const auto destroy = reinterpret_cast<PFN_vkDestroyCommandPool>(get("vkDestroyCommandPool"));
+    const auto allocate = reinterpret_cast<PFN_vkAllocateCommandBuffers>(get("vkAllocateCommandBuffers"));
+    const auto free = reinterpret_cast<PFN_vkFreeCommandBuffers>(get("vkFreeCommandBuffers"));
+    const auto begin = reinterpret_cast<PFN_vkBeginCommandBuffer>(get("vkBeginCommandBuffer"));
+    const auto end = reinterpret_cast<PFN_vkEndCommandBuffer>(get("vkEndCommandBuffer"));
+    const auto reset_pool = reinterpret_cast<PFN_vkResetCommandPool>(get("vkResetCommandPool"));
+    const auto execute = reinterpret_cast<PFN_vkCmdExecuteCommands>(get("vkCmdExecuteCommands"));
+    const auto copy = reinterpret_cast<PFN_vkCmdCopyBuffer>(get("vkCmdCopyBuffer"));
+    const auto queue_submit = reinterpret_cast<PFN_vkQueueSubmit>(get("vkQueueSubmit"));
+    top_reset_command = reinterpret_cast<PFN_vkResetCommandBuffer>(get("vkResetCommandBuffer"));
+    VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    VkCommandPool pool{};
+    check(create(device, &pool_info, nullptr, &pool) == VK_SUCCESS && last_command_info == &pool_info);
+    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    allocation.commandPool = pool;
+    allocation.commandBufferCount = 1;
+    VkCommandBuffer primary{}, secondary{};
+    check(allocate(device, &allocation, &primary) == VK_SUCCESS && last_command_info == &allocation);
+    allocation.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    check(allocate(device, &allocation, &secondary) == VK_SUCCESS);
+    VkCommandBufferInheritanceInfo inheritance{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+    VkCommandBufferBeginInfo begin_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+    begin_info.pInheritanceInfo = &inheritance;
+    check(begin(secondary, &begin_info) == VK_SUCCESS && last_command_info == &begin_info);
+    VkBufferCopy region{0, 0, 128};
+    // Mocks isolate command accounting from memory attribution; no ICD sees these
+    // handles.
+    const auto source = reinterpret_cast<VkBuffer>(uintptr_t{901});
+    const auto destination = reinterpret_cast<VkBuffer>(uintptr_t{902});
+    copy(secondary, source, destination, 1, &region);
+    check(end(secondary) == VK_SUCCESS);
+    begin_info.pInheritanceInfo = reinterpret_cast<const VkCommandBufferInheritanceInfo *>(uintptr_t{1});
+    check(begin(primary, &begin_info) == VK_SUCCESS);
+    execute(primary, 1, &secondary);
+    check(last_command_info == &secondary);
+    region.size = 32;
+    copy(primary, source, destination, 1, &region);
+    check(end(primary) == VK_SUCCESS);
+    const auto queue = reinterpret_cast<VkQueue>(device);
+    VkSubmitInfo submission{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submission.commandBufferCount = 1;
+    submission.pCommandBuffers = &primary;
+    command_submit_result = VK_ERROR_DEVICE_LOST;
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_ERROR_DEVICE_LOST);
+    check(last_command_info == &submission && shared->counters[submitted_buffer_copy_bytes] == 0);
+    command_submit_result = VK_SUCCESS;
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_SUCCESS);
+    check(shared->counters[submitted_buffer_copy_bytes] == 160 &&
+          shared->counters[resubmitted_command_buffers] == 0);
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_SUCCESS);
+    check(shared->counters[submitted_buffer_copy_bytes] == 320 &&
+          shared->counters[resubmitted_command_buffers] == 2);
+    for (const auto *name : {"vkQueueSubmit2", "vkQueueSubmit2KHR"}) {
+        const auto submit_new = reinterpret_cast<PFN_vkQueueSubmit2>(get(name));
+        VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+        command_info.commandBuffer = primary;
+        VkSubmitInfo2 info{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        info.commandBufferInfoCount = 1;
+        info.pCommandBufferInfos = &command_info;
+        check(submit_new(queue, 1, &info, nullptr) == VK_SUCCESS && last_command_info == &info);
+        command_info.deviceMask = 2;
+        check(submit_new(queue, 1, &info, nullptr) == VK_SUCCESS);
+    }
+    check(shared->counters[submitted_buffer_copy_bytes] == 640);
+    check(shared->counters[unresolved_submit_calls] == 2);
+    // Concurrent accepted submissions must not lose replay increments.
+    std::vector<std::thread> workers;
+    for (unsigned i = 0; i < 4; ++i) {
+        workers.emplace_back([&] {
+            Handle queue_handle{&device_key};
+            for (unsigned j = 0; j < 100; ++j)
+                queue_submit(reinterpret_cast<VkQueue>(&queue_handle), 1, &submission, nullptr);
+        });
+    }
+    for (auto &worker : workers)
+        worker.join();
+    check(shared->counters[submitted_buffer_copy_bytes] == 64640);
+    check(shared->counters[resubmitted_command_buffers] == 806);
+    check(top_reset_command(secondary, 0) == VK_SUCCESS);
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_SUCCESS);
+    check(shared->counters[submitted_buffer_copy_bytes] == 64640);
+    check(shared->counters[unresolved_submit_calls] == 3);
+    check(begin(primary, &begin_info) == VK_SUCCESS);
+    copy(primary, source, destination, 1, &region);
+    check(end(primary) == VK_SUCCESS);
+    reset_during_submit = primary;
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_SUCCESS);
+    check(shared->counters[submitted_buffer_copy_bytes] == 64640);
+    check(shared->counters[unresolved_submit_calls] == 4);
+    check(begin(primary, &begin_info) == VK_SUCCESS);
+    copy(primary, source, destination, 1, &region);
+    check(end(primary) == VK_SUCCESS);
+    VkBaseInStructure unknown{VK_STRUCTURE_TYPE_APPLICATION_INFO, nullptr};
+    submission.pNext = &unknown;
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_SUCCESS);
+    check(shared->counters[unresolved_submit_calls] == 5);
+    submission.pNext = nullptr;
+    check(reset_pool(device, pool, 0) == VK_SUCCESS);
+    check(queue_submit(queue, 1, &submission, nullptr) == VK_SUCCESS);
+    check(shared->counters[unresolved_submit_calls] == 6);
+    free(device, pool, 1, &secondary);
+    check(last_command_info == &secondary && shared->counters[live_command_buffers] == 1);
+    destroy(device, pool, nullptr);
+    check(shared->counters[live_command_buffers] == 0);
+    check(shared->counters[command_buffers_allocated] == 2 && shared->counters[command_buffers_freed] == 2);
+    check(shared->counters[submitted_primary_command_buffers] == 404);
+    check(shared->counters[submitted_secondary_command_buffers] == 404);
+    check(shared->counters[submitted_buffer_copies] == 808);
+    check(command_submits == 411);
+    testing_commands = false;
+}
+} // namespace
+
+int main(int argc, char **argv) {
     try {
         check(argc == 2);
         const auto mapping_name = L"Local\\FluidRuntimeObserve-test-" + std::to_wstring(GetCurrentProcessId());
@@ -309,7 +498,7 @@ int main(int argc, char** argv) {
             check(cd(reinterpret_cast<VkPhysicalDevice>(instance), &dcreate, nullptr, &device) == VK_SUCCESS);
             top_destroy_device = api.pfnGetDeviceProcAddr(device, "vkDestroyDevice");
             check(api.pfnGetDeviceProcAddr(device, "vkUnknownDeviceExtensionTEST") == extension);
-            check(api.pfnGetDeviceProcAddr(device, "vkQueueSubmit2KHR") == nullptr);
+            check(api.pfnGetDeviceProcAddr(device, "vkQueueBindSparse") == nullptr);
             if (cycle == 0) {
                 top_allocate = reinterpret_cast<PFN_vkAllocateMemory>(api.pfnGetDeviceProcAddr(device, "vkAllocateMemory"));
                 const auto release = reinterpret_cast<PFN_vkFreeMemory>(api.pfnGetDeviceProcAddr(device, "vkFreeMemory"));
@@ -327,6 +516,7 @@ int main(int argc, char** argv) {
                 release(device, second, nullptr);
                 check(shared->counters[fluid::observation::live_bytes] == 0);
                 buffer_hooks(api, device, shared);
+                command_hooks(api, device, shared);
             }
             const auto queue_submit = reinterpret_cast<PFN_vkQueueSubmit>(api.pfnGetDeviceProcAddr(device, "vkQueueSubmit"));
             check(queue_submit(reinterpret_cast<VkQueue>(device), 0, nullptr, VK_NULL_HANDLE) == VK_ERROR_DEVICE_LOST);
@@ -348,7 +538,7 @@ int main(int argc, char** argv) {
             check(destroyed_instances == cycle + 1 && destroyed_devices == cycle + 1 + (cycle == 99 ? 1 : 0));
         }
         check(submits == 100);
-        check(shared->counters[fluid::observation::api_errors] == 103);
+        check(shared->counters[fluid::observation::api_errors] == 104);
         check(shared->counters[fluid::observation::active_devices] == 0);
         check(shared->counters[fluid::observation::allocations] == 6);
         FreeLibrary(module);

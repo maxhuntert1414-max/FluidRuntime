@@ -151,7 +151,7 @@ internal static class ApplicationSessionRunner
         if (options.ObserveVulkan && !verified) failure ??= "The selected process did not expose a verified Vulkan device during this session.";
         if (exited && process.ExitCode != 0) failure ??= $"Application exited with code {process.ExitCode}.";
         var argumentsHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(options.Arguments))));
-        var report = new ApplicationSessionReport("fluidruntime-application-session-v2", DateTimeOffset.UtcNow,
+        var report = new ApplicationSessionReport("fluidruntime-application-session-v3", DateTimeOffset.UtcNow,
             process.Id, options.Executable, binding.TargetSha256, binding.HookSha256, argumentsHash,
             options.Seconds, options.ObserveVulkan,
             verified, false, false, exited, exited ? process.ExitCode : null, timer.Elapsed.TotalMilliseconds,
@@ -159,6 +159,9 @@ internal static class ApplicationSessionRunner
             ["Opt-in x64 process-launch observation; no attach, remote injection, driver or registry changes.",
              "Vulkan calls are forwarded; incomplete write/alias provenance never authorizes copy elision.",
              "Recorded copy bytes are not executed GPU bytes; command buffers may be replayed or discarded.",
+             "Submitted copy totals cover fully attributed successful queue calls, not GPU completion or physical traffic.",
+             "Command generations cover primary/secondary recording and replay, not shader writes, pending-state validation or resource validity.",
+             "Unknown submit chains, nested secondaries, changed generations and capacity limits exclude the whole call from submitted totals.",
              "Allocation sizes are logical Vulkan requests, not measured VRAM residency or physical traffic.",
              "Buffer-copy categories use bound Vulkan memory-type flags at recording time, not physical transfer direction.",
              "Memory both HOST_VISIBLE and DEVICE_LOCAL has its own category; same-allocation copies do not imply redundancy.",

@@ -36,10 +36,15 @@ function Invoke-Sample([int]$Pair, [bool]$Observe, [int]$Priority = 0) {
         if ($v.presents -ne $Frames -or $v.devices -ne 1 -or $v.active_devices -ne 0 -or
             $v.active_instances -ne 0 -or $v.live_bytes -ne 0 -or $v.api_errors -ne 0 -or
             $v.untracked_allocations -ne 0 -or $v.allocations -ne $v.frees -or
-            $r.schema -ne "fluidruntime-application-session-v2" -or
+            $r.schema -ne "fluidruntime-application-session-v3" -or
             $v.buffers_created -le 0 -or $v.buffers_created -ne $v.buffers_destroyed -or
             $v.live_buffers -ne 0 -or $v.untracked_buffers -ne 0 -or
-            $v.buffer_binding_failures -ne 0 -or $v.counter_overflows -ne 0) {
+            $v.buffer_binding_failures -ne 0 -or $v.counter_overflows -ne 0 -or
+            $v.live_command_buffers -ne 0 -or $v.untracked_command_buffers -ne 0 -or
+            $v.untracked_command_pools -ne 0 -or $v.command_tracking_failures -ne 0 -or
+            $v.unresolved_submit_calls -ne 0 -or $v.command_tracking_overflows -ne 0 -or
+            $v.failed_submit_calls -ne 0 -or $v.successful_submit_calls -ne $v.submits -or
+            $v.submitted_primary_command_buffers -ne $v.submits -or $v.resubmitted_command_buffers -le 0) {
             throw "Vulkan observation lifecycle/count mismatch."
         }
     }

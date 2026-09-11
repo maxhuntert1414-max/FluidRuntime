@@ -80,7 +80,7 @@ jobs:
         run: >-
           cmake --build native/build --config Release
           --target fluidruntime-vulkan-observe fluidruntime-vulkan-observation-tests
-          fluidruntime-vulkan-buffer-tracking-tests --
+          fluidruntime-vulkan-buffer-tracking-tests fluidruntime-vulkan-command-tracking-tests --
           /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
           /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
       - name: Test native probe (Debug)

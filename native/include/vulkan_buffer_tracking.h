@@ -86,6 +86,15 @@ template <class Value, std::size_t Capacity> class ResourceTable {
             }
         }
     }
+
+    // Pool lifetime operations may visit live records, never historical events.
+    // Callbacks may erase the current slot but must not insert new entries.
+    template <class Callback> void visit_device(void *device, Callback callback) noexcept {
+        for (auto &slot : slots_) {
+            if (slot.handle && slot.device == device)
+                callback(slot.handle, slot.value);
+        }
+    }
 };
 
 enum class CopyMemoryClass {

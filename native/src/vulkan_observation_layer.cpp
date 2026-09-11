@@ -3,6 +3,7 @@
 #include <vulkan/vk_layer.h>
 #include "vulkan_observation.h"
 #include "vulkan_buffer_tracking.h"
+#include "vulkan_command_tracking.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -36,7 +37,9 @@ constexpr auto device_names = std::to_array<const char*>({
     "vkCmdCopyBufferToImage", "vkCmdCopyImageToBuffer", "vkCmdFillBuffer", "vkCmdPipelineBarrier",
     "vkCmdPipelineBarrier2", "vkCmdPipelineBarrier2KHR", "vkQueueSubmit", "vkQueueSubmit2",
     "vkQueueSubmit2KHR", "vkQueuePresentKHR", "vkQueueWaitIdle", "vkWaitForFences",
-    "vkCreateBuffer", "vkDestroyBuffer"});
+    "vkCreateBuffer", "vkDestroyBuffer", "vkCreateCommandPool", "vkDestroyCommandPool",
+    "vkResetCommandPool", "vkAllocateCommandBuffers", "vkFreeCommandBuffers",
+    "vkBeginCommandBuffer", "vkEndCommandBuffer", "vkResetCommandBuffer", "vkCmdExecuteCommands"});
 struct Device {
     bool used{};
     void* dispatch{};
@@ -48,7 +51,10 @@ struct Device {
 std::array<Instance, 16> instances_table{};
 std::array<Device, 64> devices_table{};
 BufferTracker<> resources;
+CommandTracker<> commands;
 static_assert(sizeof(resources) <= 2 * 1024 * 1024);
+static_assert(sizeof(resources) + sizeof(commands) <= 8 * 1024 * 1024);
+static_assert(sizeof(SubmissionSnapshot<>) <= 12 * 1024);
 static_assert(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT == 1 && VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT == 2);
 template<class T> std::uint64_t resource_id(T handle) {
     return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
@@ -161,36 +167,118 @@ void bind_buffer(const Device& device, VkBuffer buffer, VkDeviceMemory memory,
     }
 }
 
-template<class Region>
-void record_buffer_copy(const Device& device, VkBuffer source, VkBuffer destination,
-                        uint32_t count, const Region* regions, bool understood = true) {
+template <class Region>
+void record_buffer_copy(const Device &device, VkCommandBuffer command, VkBuffer source, VkBuffer destination,
+                        uint32_t count, const Region *regions, bool understood = true) {
     seen(buffer_copies);
     Lock lock;
+    std::uint64_t recorded_bytes{};
+    bool recording_known = understood;
     for (uint32_t i = 0; i < count; ++i) {
-        const auto& region = regions[i];
+        const auto &region = regions[i];
         bool known = understood;
-        if constexpr (requires { region.pNext; }) known = known && !region.pNext;
-        const auto attribution = known ? resources.attribute(device.dispatch, resource_id(source),
-            resource_id(destination), region.srcOffset, region.dstOffset, region.size) : CopyAttribution{};
+        if constexpr (requires { region.pNext; })
+            known = known && !region.pNext;
+        recording_known = recording_known && known;
+        if (region.size > UINT64_MAX - recorded_bytes) {
+            recording_known = false;
+        } else {
+            recorded_bytes += region.size;
+        }
+        const auto attribution =
+            known ? resources.attribute(device.dispatch, resource_id(source), resource_id(destination),
+                                        region.srcOffset, region.dstOffset, region.size)
+                  : CopyAttribution{};
         Counter category = unknown_buffer_copy_bytes;
         switch (attribution.memory_class) {
-        case CopyMemoryClass::host_to_device: category = host_to_device_copy_bytes; break;
-        case CopyMemoryClass::device_to_host: category = device_to_host_copy_bytes; break;
-        case CopyMemoryClass::device_to_device: category = device_to_device_copy_bytes; break;
-        case CopyMemoryClass::host_to_host: category = host_to_host_copy_bytes; break;
-        case CopyMemoryClass::shared: category = shared_memory_copy_bytes; break;
-        case CopyMemoryClass::unknown: break;
+        case CopyMemoryClass::host_to_device:
+            category = host_to_device_copy_bytes;
+            break;
+        case CopyMemoryClass::device_to_host:
+            category = device_to_host_copy_bytes;
+            break;
+        case CopyMemoryClass::device_to_device:
+            category = device_to_device_copy_bytes;
+            break;
+        case CopyMemoryClass::host_to_host:
+            category = host_to_host_copy_bytes;
+            break;
+        case CopyMemoryClass::shared:
+            category = shared_memory_copy_bytes;
+            break;
+        case CopyMemoryClass::unknown:
+            break;
         }
         add_bytes(buffer_copy_bytes, region.size);
         add_bytes(category, region.size);
-        if (attribution.same_allocation) add_bytes(same_allocation_copy_bytes, region.size);
+        if (attribution.same_allocation)
+            add_bytes(same_allocation_copy_bytes, region.size);
     }
-}
+    if (!commands.copy(device.dispatch, resource_id(command), recorded_bytes, recording_known))
+        add(command_tracking_failures);
 }
 
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fgGetInstanceProcAddr(VkInstance, const char*);
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fgGetDeviceProcAddr(VkDevice, const char*);
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fgGetPhysicalDeviceProcAddr(VkInstance, const char*);
+template <class SubmitInfo>
+void prepare_submissions(const Device &device, uint32_t count, const SubmitInfo *infos,
+                         SubmissionSnapshot<> &snapshot) {
+    Lock lock;
+    if (count > snapshot.recordings.size()) {
+        snapshot.known = false;
+        snapshot.overflow = true;
+        return;
+    }
+    for (uint32_t i = 0; i < count && snapshot.known; ++i) {
+        const auto &info = infos[i];
+        if (info.pNext) {
+            snapshot.known = false;
+            break;
+        }
+        if constexpr (requires { info.pCommandBufferInfos; }) {
+            if (info.flags) {
+                snapshot.known = false;
+                break;
+            }
+            for (uint32_t j = 0; j < info.commandBufferInfoCount && snapshot.known; ++j) {
+                const auto &command = info.pCommandBufferInfos[j];
+                if (command.pNext || command.deviceMask > 1) {
+                    snapshot.known = false;
+                    break;
+                }
+                commands.prepare(device.dispatch, resource_id(command.commandBuffer), snapshot);
+            }
+        } else {
+            for (uint32_t j = 0; j < info.commandBufferCount && snapshot.known; ++j)
+                commands.prepare(device.dispatch, resource_id(info.pCommandBuffers[j]), snapshot);
+        }
+    }
+}
+
+VkResult finish_submission(const Device &device, const SubmissionSnapshot<> &snapshot, VkResult value) {
+    if (snapshot.overflow)
+        add(command_tracking_overflows);
+    if (value != VK_SUCCESS) {
+        add(failed_submit_calls);
+        return result(value);
+    }
+    add(successful_submit_calls);
+    Lock lock;
+    const auto totals = commands.commit(device.dispatch, snapshot);
+    if (!totals) {
+        add(unresolved_submit_calls);
+        return value;
+    }
+    add_bytes(submitted_primary_command_buffers, totals->primary);
+    add_bytes(submitted_secondary_command_buffers, totals->secondary);
+    add_bytes(resubmitted_command_buffers, totals->replays);
+    add_bytes(submitted_buffer_copies, totals->copies);
+    add_bytes(submitted_buffer_copy_bytes, totals->bytes);
+    return value;
+}
+} // namespace
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fgGetInstanceProcAddr(VkInstance, const char *);
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fgGetDeviceProcAddr(VkDevice, const char *);
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL fgGetPhysicalDeviceProcAddr(VkInstance, const char *);
 
 VKAPI_ATTR VkResult VKAPI_CALL fgCreateInstance(const VkInstanceCreateInfo* info,
     const VkAllocationCallbacks* allocator, VkInstance* output) {
@@ -258,6 +346,7 @@ VKAPI_ATTR void VKAPI_CALL fgDestroyDevice(VkDevice handle, const VkAllocationCa
             constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<LONG64>::max());
             add(live_bytes, -static_cast<LONG64>((std::min)(entry.bytes, maximum)));
         }, [](const BufferRecord&) { add(live_buffers, -1); });
+        add(live_command_buffers, -static_cast<LONG64>(commands.destroy_device(d.dispatch)));
         for (auto& entry : devices_table) if (entry.handle == handle) entry = {};
     }
     add(active_devices, -1);
@@ -269,8 +358,153 @@ VKAPI_ATTR void VKAPI_CALL fgDestroyDevice(VkDevice handle, const VkAllocationCa
 // Only these entry points are observed. Arguments, return values and ordering
 // are forwarded; no barriers, copies, allocations or waits are removed.
 #define DEVICE(name, handle) const auto d = device_for(key(handle)); const auto next = device_function<PFN_vk##name>(d, "vk" #name)
-VKAPI_ATTR VkResult VKAPI_CALL fgCreateBuffer(VkDevice device, const VkBufferCreateInfo* info,
-    const VkAllocationCallbacks* allocator, VkBuffer* output) {
+VKAPI_ATTR VkResult VKAPI_CALL fgCreateCommandPool(VkDevice device, const VkCommandPoolCreateInfo *info,
+                                                   const VkAllocationCallbacks *allocator,
+                                                   VkCommandPool *output) {
+    DEVICE(CreateCommandPool, device);
+    const auto value = next(device, info, allocator, output);
+    if (value == VK_SUCCESS) {
+        add(intercepted_calls);
+        Lock lock;
+        constexpr auto known_flags =
+            VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        if (!commands.add_pool(d.dispatch, resource_id(*output),
+                               !info->pNext && !(info->flags & ~known_flags)))
+            add(untracked_command_pools);
+    }
+    return result(value);
+}
+
+VKAPI_ATTR void VKAPI_CALL fgDestroyCommandPool(VkDevice device, VkCommandPool pool,
+                                                const VkAllocationCallbacks *allocator) {
+    DEVICE(DestroyCommandPool, device);
+    if (pool) {
+        add(intercepted_calls);
+        Lock lock;
+        const auto retired = commands.destroy_pool(d.dispatch, resource_id(pool));
+        add(live_command_buffers, -static_cast<LONG64>(retired));
+        add_bytes(command_buffers_freed, retired);
+    }
+    next(device, pool, allocator);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgResetCommandPool(VkDevice device, VkCommandPool pool,
+                                                  VkCommandPoolResetFlags flags) {
+    DEVICE(ResetCommandPool, device);
+    seen(command_pool_resets);
+    const auto value = next(device, pool, flags);
+    Lock lock;
+    if (!commands.reset_pool(d.dispatch, resource_id(pool), value == VK_SUCCESS))
+        add(command_tracking_failures);
+    return result(value);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgAllocateCommandBuffers(VkDevice device,
+                                                        const VkCommandBufferAllocateInfo *info,
+                                                        VkCommandBuffer *output) {
+    DEVICE(AllocateCommandBuffers, device);
+    const auto value = next(device, info, output);
+    if (value == VK_SUCCESS) {
+        add(intercepted_calls);
+        add_bytes(command_buffers_allocated, info->commandBufferCount);
+        bool secondary{};
+        bool known_level{true};
+        // VkCommandBufferLevel is an enum, not a bit mask.
+        switch (info->level) {
+        case VK_COMMAND_BUFFER_LEVEL_PRIMARY:
+            break;
+        case VK_COMMAND_BUFFER_LEVEL_SECONDARY:
+            secondary = true;
+            break;
+        default:
+            known_level = false;
+            break;
+        }
+        Lock lock;
+        for (uint32_t i = 0; i < info->commandBufferCount; ++i) {
+            if (commands.allocate(d.dispatch, resource_id(output[i]), resource_id(info->commandPool),
+                                  secondary, known_level && !info->pNext)) {
+                add(live_command_buffers);
+            } else {
+                add(untracked_command_buffers);
+            }
+        }
+    }
+    return result(value);
+}
+
+VKAPI_ATTR void VKAPI_CALL fgFreeCommandBuffers(VkDevice device, VkCommandPool pool, uint32_t count,
+                                                const VkCommandBuffer *buffers) {
+    DEVICE(FreeCommandBuffers, device);
+    add(intercepted_calls);
+    {
+        Lock lock;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (buffers[i])
+                add(command_buffers_freed);
+            if (commands.free(d.dispatch, resource_id(buffers[i])))
+                add(live_command_buffers, -1);
+        }
+    }
+    next(device, pool, count, buffers);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgBeginCommandBuffer(VkCommandBuffer command,
+                                                    const VkCommandBufferBeginInfo *info) {
+    DEVICE(BeginCommandBuffer, command);
+    seen(command_buffer_begins);
+    const auto value = next(command, info);
+    Lock lock;
+    // Vulkan ignores pInheritanceInfo for primaries; it need not point to valid
+    // memory.
+    const bool secondary = commands.is_secondary(d.dispatch, resource_id(command));
+    const bool understood =
+        !info->pNext && (!secondary || (info->pInheritanceInfo && !info->pInheritanceInfo->pNext));
+    if (!commands.begin(d.dispatch, resource_id(command), value == VK_SUCCESS, understood,
+                        (info->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT) != 0))
+        add(command_tracking_failures);
+    return result(value);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgEndCommandBuffer(VkCommandBuffer command) {
+    DEVICE(EndCommandBuffer, command);
+    seen(command_buffer_ends);
+    const auto value = next(command);
+    Lock lock;
+    if (!commands.end(d.dispatch, resource_id(command), value == VK_SUCCESS))
+        add(command_tracking_failures);
+    return result(value);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgResetCommandBuffer(VkCommandBuffer command,
+                                                    VkCommandBufferResetFlags flags) {
+    DEVICE(ResetCommandBuffer, command);
+    seen(command_buffer_resets);
+    const auto value = next(command, flags);
+    Lock lock;
+    if (!commands.reset(d.dispatch, resource_id(command), value == VK_SUCCESS))
+        add(command_tracking_failures);
+    return result(value);
+}
+
+VKAPI_ATTR void VKAPI_CALL fgCmdExecuteCommands(VkCommandBuffer primary, uint32_t count,
+                                                const VkCommandBuffer *secondaries) {
+    DEVICE(CmdExecuteCommands, primary);
+    seen(command_execute_calls);
+    {
+        Lock lock;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!commands.execute(d.dispatch, resource_id(primary), resource_id(secondaries[i]))) {
+                add(command_tracking_failures);
+                break;
+            }
+        }
+    }
+    next(primary, count, secondaries);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgCreateBuffer(VkDevice device, const VkBufferCreateInfo *info,
+                                              const VkAllocationCallbacks *allocator, VkBuffer *output) {
     DEVICE(CreateBuffer, device);
     const auto value = next(device, info, allocator, output);
     if (value == VK_SUCCESS) {
@@ -340,13 +574,13 @@ BUFFER_BIND2(BindBufferMemory2)
 BUFFER_BIND2(BindBufferMemory2KHR)
 VKAPI_ATTR void VKAPI_CALL fgCmdCopyBuffer(VkCommandBuffer h, VkBuffer s, VkBuffer t, uint32_t n, const VkBufferCopy* r) {
     DEVICE(CmdCopyBuffer, h);
-    record_buffer_copy(d, s, t, n, r);
+    record_buffer_copy(d, h, s, t, n, r);
     next(h, s, t, n, r);
 }
 #define COPY2(Name) \
 VKAPI_ATTR void VKAPI_CALL fg##Name(VkCommandBuffer h, const VkCopyBufferInfo2* i) { \
     DEVICE(Name, h); add(copy2_calls); \
-    record_buffer_copy(d, i->srcBuffer, i->dstBuffer, i->regionCount, i->pRegions, !i->pNext); \
+    record_buffer_copy(d, h, i->srcBuffer, i->dstBuffer, i->regionCount, i->pRegions, !i->pNext); \
     next(h, i); }
 COPY2(CmdCopyBuffer2)
 COPY2(CmdCopyBuffer2KHR)
@@ -368,10 +602,15 @@ VKAPI_ATTR void VKAPI_CALL fgCmdPipelineBarrier(VkCommandBuffer h, VkPipelineSta
 BARRIER2(CmdPipelineBarrier2)
 BARRIER2(CmdPipelineBarrier2KHR)
 VKAPI_ATTR VkResult VKAPI_CALL fgQueueSubmit(VkQueue h, uint32_t n, const VkSubmitInfo* i, VkFence f) {
-    DEVICE(QueueSubmit, h); seen(submits); return result(next(h, n, i, f));
+    DEVICE(QueueSubmit, h);
+    seen(submits);
+    SubmissionSnapshot<> snapshot;
+    prepare_submissions(d, n, i, snapshot);
+    return finish_submission(d, snapshot, next(h, n, i, f));
 }
 #define SUBMIT2(Name) VKAPI_ATTR VkResult VKAPI_CALL fg##Name(VkQueue h, uint32_t n, const VkSubmitInfo2* i, VkFence f) { \
-    DEVICE(Name, h); seen(submits); add(submit2_calls); return result(next(h, n, i, f)); }
+    DEVICE(Name, h); seen(submits); add(submit2_calls); SubmissionSnapshot<> snapshot; \
+    prepare_submissions(d, n, i, snapshot); return finish_submission(d, snapshot, next(h, n, i, f)); }
 SUBMIT2(QueueSubmit2)
 SUBMIT2(QueueSubmit2KHR)
 VKAPI_ATTR VkResult VKAPI_CALL fgQueuePresentKHR(VkQueue h, const VkPresentInfoKHR* i) {
@@ -387,6 +626,9 @@ PFN_vkVoidFunction intercepted(const char* name) {
 #define ENTRY(Name) if (std::strcmp(name, "vk" #Name) == 0) return reinterpret_cast<PFN_vkVoidFunction>(fg##Name)
     ENTRY(DestroyDevice); ENTRY(AllocateMemory); ENTRY(FreeMemory); ENTRY(MapMemory); ENTRY(UnmapMemory);
     ENTRY(CreateBuffer); ENTRY(DestroyBuffer);
+    ENTRY(CreateCommandPool); ENTRY(DestroyCommandPool); ENTRY(ResetCommandPool);
+    ENTRY(AllocateCommandBuffers); ENTRY(FreeCommandBuffers);
+    ENTRY(BeginCommandBuffer); ENTRY(EndCommandBuffer); ENTRY(ResetCommandBuffer); ENTRY(CmdExecuteCommands);
     ENTRY(FlushMappedMemoryRanges); ENTRY(InvalidateMappedMemoryRanges);
     ENTRY(BindBufferMemory); ENTRY(BindBufferMemory2); ENTRY(BindBufferMemory2KHR);
     ENTRY(BindImageMemory); ENTRY(BindImageMemory2); ENTRY(BindImageMemory2KHR);
