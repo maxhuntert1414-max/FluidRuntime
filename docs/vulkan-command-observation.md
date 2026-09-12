@@ -62,12 +62,15 @@ submitted bytes than recorded bytes; neither difference proves waste.
 - A one-time recording cannot be attributed twice. For other recordings, this
   observer does not validate pending/completed state or simultaneous-use legality.
   Successful submission is **not** GPU completion, resource validity or content
-  equivalence. Per-queue ordering, fence/semaphore completion and buffer-content
-  generations remain future work.
+  equivalence. Separate [completion observation](vulkan-completion-observation.md)
+  now tracks queue prefixes through existing fence/idle calls; timeline semaphore,
+  cross-queue dependencies and buffer-content generations remain future work.
 - Submitted byte totals do not recompute memory categories: the v2 category
   counters still describe binding flags at recording time. Images have no byte
   attribution. No claim of physical RAM/VRAM residency, PCIe traffic or FPS gain.
-- ABI 3 is 560 bytes / 66 counters. JSON sessions use v3; Gateway accepts v1/v2/v3.
+- Command fields originated in ABI 3 (560 bytes / 66 counters, session v3).
+  Current ABI 4 adds completion fields (672 bytes / 80 counters, session v4);
+  Gateway accepts v1/v2/v3/v4.
   FluidLink wire contracts and the Gateway DLL C ABI are unchanged.
 
 Reference: [Khronos command-buffer lifecycle](https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html).

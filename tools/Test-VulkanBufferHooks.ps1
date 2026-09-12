@@ -29,7 +29,7 @@ for ($pair = 0; $pair -lt $Pairs; $pair++) {
             --library $library --mode baseline --candidate-count 16 --hold-ms 1000
         if ($LASTEXITCODE -ne 0) { throw "Buffer hook $mode session failed: $out" }
         $report = Get-Content -LiteralPath $out -Raw | ConvertFrom-Json
-        if ($report.schema -ne "fluidruntime-application-session-v3" -or $report.failure -or
+        if ($report.schema -ne "fluidruntime-application-session-v4" -or $report.failure -or
             -not $report.process_exited -or $report.exit_code -ne 0 -or
             $report.layer_verified -ne $observe -or $report.native_actuation_enabled -or
             $report.performance_claim_allowed -or $null -ne $report.windows_priority) {
@@ -52,7 +52,11 @@ for ($pair = 0; $pair -lt $Pairs; $pair++) {
                 $c.resubmitted_command_buffers -ne 0 -or $c.live_command_buffers -ne 0 -or
                 $c.unresolved_submit_calls -ne 0 -or $c.command_tracking_failures -ne 0 -or
                 $c.command_tracking_overflows -ne 0 -or $c.untracked_command_buffers -ne 0 -or
-                $c.untracked_command_pools -ne 0) {
+                $c.untracked_command_pools -ne 0 -or $c.completed_submit_calls -ne 2 -or
+                $c.completed_buffer_copies -ne 32 -or $c.completed_buffer_copy_bytes -ne 134217728 -or
+                $c.pending_tracked_submits -ne 0 -or $c.abandoned_tracked_submits -ne 0 -or
+                $c.completion_tracking_failures -ne 0 -or $c.ambiguous_fence_waits -ne 0 -or
+                $c.live_fences -ne 0 -or $c.untracked_fences -ne 0) {
                 throw "Buffer lifecycle or recorded-transfer attribution mismatch: $out"
             }
         } elseif ($c.PSObject.Properties | Where-Object { $_.Value -ne 0 }) {

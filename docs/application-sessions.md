@@ -77,9 +77,9 @@ held read-only and the loaded module is checked against the selected hash.
 Path/denylist checks and the same-user named mapping are not a sandbox against
 a malicious application or administrator.
 
-The 560-byte little-endian shared ABI has four uint32 fields (magic `0x4f564746`,
-version 3, size 560, count 66), then aligned int64 owner PID and enable flag,
-then 66 atomic int64 counters. The canonical order is
+The 672-byte little-endian shared ABI has four uint32 fields (magic `0x4f564746`,
+version 4, size 672, count 80), then aligned int64 owner PID and enable flag,
+then 80 atomic int64 counters. The canonical order is
 [`vulkan_observation.h`](../native/include/vulkan_observation.h), mirrored and
 validated by the managed reader and Gateway importer. There are no names or
 JSON payloads in this hot path. JSON is for bounded offline report export.
@@ -88,7 +88,8 @@ Fixed capacities: 16 live instances, 64 devices, 8,192 tracked allocations and
 8,192 tracked buffers. The allocation/buffer tables together have a compile-time
 2 MiB ceiling and reuse fixed slots without allocating on their lookup/churn path.
 Command recording adds 1,024 pools, 4,096 command buffers and 64 secondary
-references per recording; combined resource/command tables stay below 8 MiB.
+references per recording. Completion adds 256 queues and 2,048 fences; combined
+resource/command/completion tables stay below 8 MiB.
 One submit call can attribute at most 512 primary/secondary occurrences. These
 new limits report incomplete coverage while forwarding the original call.
 Instance/device exhaustion returns an explicit out-of-host-memory creation
@@ -115,9 +116,9 @@ invalidate attribution for all supplied buffers, including possible partial
 success. At capacity, the application proceeds and coverage counters increase.
 Counters saturate rather than wrap; `counter_overflows` marks partial totals.
 
-Runtime now exports `fluidruntime-application-session-v3`. Use the matching DLL
+Runtime now exports `fluidruntime-application-session-v4`. Use the matching DLL
 and managed collector; mixed shared ABI versions cannot produce a verified
-session. Gateway `main` imports v1 (32 counters), v2 (46 counters) and v3 (66 counters)
+session. Gateway `main` imports v1 (32), v2 (46), v3 (66) and v4 (80 counters)
 without inventing new evidence for old captures. FluidLink v2 and the Gateway
 DLL C ABI are unchanged.
 
@@ -127,11 +128,17 @@ generation-bound secondary references and replay. A failed or unresolved submit
 never contributes a partial copy total. See [command observation](vulkan-command-observation.md)
 for the exact bounds, counter semantics and unmodeled cases.
 
+V4 adds driver-reported queue completion through existing fences, status queries
+and idle calls. No waits or polling are inserted. Fixed queue prefixes avoid a
+growing pending-submission history. See [completion observation](vulkan-completion-observation.md)
+for generation checks, wait-any ambiguity, external fence exclusions and limits.
+
 - Recorded buffer copy bytes are not executed bytes: command buffers can be
   replayed, discarded or never submitted. Images have counts, not byte estimates.
 - Submitted bytes are accepted, attributed work, not proof of GPU completion,
-  valid resource contents, physical traffic or redundant work. No pending-state,
-  fence-completion or cross-queue dependency model is inferred from these totals.
+  valid resource contents, physical traffic or redundant work. Separate completed
+  totals need observed driver confirmation, which still cannot prove successful
+  computation after device loss. Content and cross-queue dependencies are unmodeled.
 - Allocation bytes are requested sizes, not physical VRAM residency, saved RAM
   or measured PCIe traffic. Host-visible and device-local flags can overlap.
 - Present counts are API calls, not displayed FPS or input latency. Negative
@@ -169,6 +176,7 @@ The new resource-hook checks and raw v2 sessions are in
 [the buffer-hook evidence](evidence/vulkan-buffer-hook.md).
 Command recording/submission validation is recorded in
 [the command-hook evidence](evidence/vulkan-command-hook.md).
+Completion validation is recorded in [the completion-hook evidence](evidence/vulkan-completion-hook.md).
 
 Primary contracts: [Khronos loader/layer interface](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderLayerInterface.md)
 and [Windows SetPriorityClass](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setpriorityclass).

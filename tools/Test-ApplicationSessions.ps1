@@ -36,7 +36,7 @@ function Invoke-Sample([int]$Pair, [bool]$Observe, [int]$Priority = 0) {
         if ($v.presents -ne $Frames -or $v.devices -ne 1 -or $v.active_devices -ne 0 -or
             $v.active_instances -ne 0 -or $v.live_bytes -ne 0 -or $v.api_errors -ne 0 -or
             $v.untracked_allocations -ne 0 -or $v.allocations -ne $v.frees -or
-            $r.schema -ne "fluidruntime-application-session-v3" -or
+            $r.schema -ne "fluidruntime-application-session-v4" -or
             $v.buffers_created -le 0 -or $v.buffers_created -ne $v.buffers_destroyed -or
             $v.live_buffers -ne 0 -or $v.untracked_buffers -ne 0 -or
             $v.buffer_binding_failures -ne 0 -or $v.counter_overflows -ne 0 -or
@@ -44,7 +44,11 @@ function Invoke-Sample([int]$Pair, [bool]$Observe, [int]$Priority = 0) {
             $v.untracked_command_pools -ne 0 -or $v.command_tracking_failures -ne 0 -or
             $v.unresolved_submit_calls -ne 0 -or $v.command_tracking_overflows -ne 0 -or
             $v.failed_submit_calls -ne 0 -or $v.successful_submit_calls -ne $v.submits -or
-            $v.submitted_primary_command_buffers -ne $v.submits -or $v.resubmitted_command_buffers -le 0) {
+            $v.submitted_primary_command_buffers -ne $v.submits -or $v.resubmitted_command_buffers -le 0 -or
+            $v.completed_submit_calls -ne $v.submits -or $v.pending_tracked_submits -ne 0 -or
+            $v.abandoned_tracked_submits -ne 0 -or $v.completion_tracking_failures -ne 0 -or
+            $v.ambiguous_fence_waits -ne 0 -or $v.untracked_fences -ne 0 -or $v.live_fences -ne 0 -or
+            $v.fences_created -ne $v.fences_destroyed) {
             throw "Vulkan observation lifecycle/count mismatch."
         }
     }

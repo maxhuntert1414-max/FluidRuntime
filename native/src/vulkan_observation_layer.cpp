@@ -4,6 +4,7 @@
 #include "vulkan_observation.h"
 #include "vulkan_buffer_tracking.h"
 #include "vulkan_command_tracking.h"
+#include "vulkan_completion_tracking.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -39,7 +40,8 @@ constexpr auto device_names = std::to_array<const char*>({
     "vkQueueSubmit2KHR", "vkQueuePresentKHR", "vkQueueWaitIdle", "vkWaitForFences",
     "vkCreateBuffer", "vkDestroyBuffer", "vkCreateCommandPool", "vkDestroyCommandPool",
     "vkResetCommandPool", "vkAllocateCommandBuffers", "vkFreeCommandBuffers",
-    "vkBeginCommandBuffer", "vkEndCommandBuffer", "vkResetCommandBuffer", "vkCmdExecuteCommands"});
+    "vkBeginCommandBuffer", "vkEndCommandBuffer", "vkResetCommandBuffer", "vkCmdExecuteCommands",
+    "vkCreateFence", "vkDestroyFence", "vkResetFences", "vkGetFenceStatus", "vkDeviceWaitIdle"});
 struct Device {
     bool used{};
     void* dispatch{};
@@ -47,14 +49,18 @@ struct Device {
     PFN_vkGetDeviceProcAddr next{};
     VkPhysicalDeviceMemoryProperties memory{};
     std::array<PFN_vkVoidFunction, device_names.size()> functions{};
+    bool private_fences{true};
+    bool ordered_queues{true};
 };
 std::array<Instance, 16> instances_table{};
 std::array<Device, 64> devices_table{};
 BufferTracker<> resources;
 CommandTracker<> commands;
+CompletionTracker<> completions;
 static_assert(sizeof(resources) <= 2 * 1024 * 1024);
-static_assert(sizeof(resources) + sizeof(commands) <= 8 * 1024 * 1024);
+static_assert(sizeof(resources) + sizeof(commands) + sizeof(completions) <= 8 * 1024 * 1024);
 static_assert(sizeof(SubmissionSnapshot<>) <= 12 * 1024);
+static_assert(sizeof(CompletionTracker<>::DeviceMarkers) <= 12 * 1024);
 static_assert(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT == 1 && VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT == 2);
 template<class T> std::uint64_t resource_id(T handle) {
     return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
@@ -253,7 +259,21 @@ void prepare_submissions(const Device &device, uint32_t count, const SubmitInfo 
     }
 }
 
-VkResult finish_submission(const Device &device, const SubmissionSnapshot<> &snapshot, VkResult value) {
+void completed(const CompletionTotals &totals) {
+    add_bytes(completed_submit_calls, totals.submits);
+    add_bytes(completed_buffer_copies, totals.copies);
+    add_bytes(completed_buffer_copy_bytes, totals.bytes);
+    add(pending_tracked_submits,
+        -static_cast<LONG64>((std::min)(totals.submits, static_cast<std::uint64_t>(INT64_MAX))));
+}
+
+FenceMarker prepare_fence(const Device &device, VkFence fence) {
+    Lock lock;
+    return completions.invalidate_fence(device.dispatch, resource_id(fence));
+}
+
+VkResult finish_submission(const Device &device, VkQueue queue, const FenceMarker &fence,
+                           const SubmissionSnapshot<> &snapshot, VkResult value) {
     if (snapshot.overflow)
         add(command_tracking_overflows);
     if (value != VK_SUCCESS) {
@@ -263,6 +283,13 @@ VkResult finish_submission(const Device &device, const SubmissionSnapshot<> &sna
     add(successful_submit_calls);
     Lock lock;
     const auto totals = commands.commit(device.dispatch, snapshot);
+    const CompletionTotals completion_totals{1, totals ? totals->copies : 0, totals ? totals->bytes : 0};
+    if (!device.ordered_queues || !completions.submit(device.dispatch, resource_id(queue), fence,
+                                                      totals ? &completion_totals : nullptr)) {
+        add(completion_tracking_failures);
+    } else if (totals) {
+        add(pending_tracked_submits);
+    }
     if (!totals) {
         add(unresolved_submit_calls);
         return value;
@@ -327,6 +354,17 @@ VKAPI_ATTR VkResult VKAPI_CALL fgCreateDevice(VkPhysicalDevice physical, const V
     Device data{};
     if (value == VK_SUCCESS) {
         data = {true, key(*output), *output, next, {}};
+        for (uint32_t j = 0; j < info->enabledExtensionCount; ++j) {
+            const auto *extension = info->ppEnabledExtensionNames[j];
+            // External payload import/export can change fence state outside
+            // this process. Opt out for the entire device, not just pNext.
+            if (std::strcmp(extension, "VK_KHR_external_fence_win32") == 0 ||
+                std::strcmp(extension, "VK_KHR_external_fence_fd") == 0)
+                data.private_fences = false;
+            // Completion prefixes require the application's queue serialization.
+            if (std::strcmp(extension, "VK_KHR_internally_synchronized_queues") == 0)
+                data.ordered_queues = false;
+        }
         // Capture the downstream dispatch before the loader installs the top
         // table. Late lookup of DestroyInstance/Device can recurse into us.
         for (size_t j = 0; j < device_names.size(); ++j) data.functions[j] = next(*output, device_names[j]);
@@ -347,6 +385,11 @@ VKAPI_ATTR void VKAPI_CALL fgDestroyDevice(VkDevice handle, const VkAllocationCa
             add(live_bytes, -static_cast<LONG64>((std::min)(entry.bytes, maximum)));
         }, [](const BufferRecord&) { add(live_buffers, -1); });
         add(live_command_buffers, -static_cast<LONG64>(commands.destroy_device(d.dispatch)));
+        completions.destroy_device(d.dispatch, [](std::uint64_t pending) {
+            add_bytes(abandoned_tracked_submits, pending);
+            add(pending_tracked_submits, -static_cast<LONG64>((std::min)(
+                pending, static_cast<std::uint64_t>(INT64_MAX))));
+        }, [] { add(live_fences, -1); });
         for (auto& entry : devices_table) if (entry.handle == handle) entry = {};
     }
     add(active_devices, -1);
@@ -606,19 +649,130 @@ VKAPI_ATTR VkResult VKAPI_CALL fgQueueSubmit(VkQueue h, uint32_t n, const VkSubm
     seen(submits);
     SubmissionSnapshot<> snapshot;
     prepare_submissions(d, n, i, snapshot);
-    return finish_submission(d, snapshot, next(h, n, i, f));
+    const auto fence = prepare_fence(d, f);
+    return finish_submission(d, h, fence, snapshot, next(h, n, i, f));
 }
 #define SUBMIT2(Name) VKAPI_ATTR VkResult VKAPI_CALL fg##Name(VkQueue h, uint32_t n, const VkSubmitInfo2* i, VkFence f) { \
     DEVICE(Name, h); seen(submits); add(submit2_calls); SubmissionSnapshot<> snapshot; \
-    prepare_submissions(d, n, i, snapshot); return finish_submission(d, snapshot, next(h, n, i, f)); }
+    prepare_submissions(d, n, i, snapshot); const auto fence = prepare_fence(d, f); \
+    return finish_submission(d, h, fence, snapshot, next(h, n, i, f)); }
 SUBMIT2(QueueSubmit2)
 SUBMIT2(QueueSubmit2KHR)
 VKAPI_ATTR VkResult VKAPI_CALL fgQueuePresentKHR(VkQueue h, const VkPresentInfoKHR* i) {
     DEVICE(QueuePresentKHR, h); seen(presents); return result(next(h, i));
 }
-VKAPI_ATTR VkResult VKAPI_CALL fgQueueWaitIdle(VkQueue h) { DEVICE(QueueWaitIdle, h); seen(queue_waits); return result(next(h)); }
-VKAPI_ATTR VkResult VKAPI_CALL fgWaitForFences(VkDevice h, uint32_t n, const VkFence* f, VkBool32 all, uint64_t t) {
-    DEVICE(WaitForFences, h); seen(fence_waits); return result(next(h, n, f, all, t));
+VKAPI_ATTR VkResult VKAPI_CALL fgCreateFence(VkDevice h, const VkFenceCreateInfo *info,
+                                             const VkAllocationCallbacks *allocator, VkFence *output) {
+    DEVICE(CreateFence, h);
+    const auto value = next(h, info, allocator, output);
+    if (value == VK_SUCCESS) {
+        seen(fences_created);
+        Lock lock;
+        if (!d.private_fences || !d.ordered_queues || info->pNext ||
+            (info->flags & ~static_cast<VkFenceCreateFlags>(VK_FENCE_CREATE_SIGNALED_BIT)) ||
+            !completions.create_fence(d.dispatch, resource_id(*output)))
+            add(untracked_fences);
+        else
+            add(live_fences);
+    }
+    return result(value);
+}
+
+VKAPI_ATTR void VKAPI_CALL fgDestroyFence(VkDevice h, VkFence fence, const VkAllocationCallbacks *allocator) {
+    DEVICE(DestroyFence, h);
+    if (fence) {
+        seen(fences_destroyed);
+        Lock lock;
+        if (completions.destroy_fence(d.dispatch, resource_id(fence)))
+            add(live_fences, -1);
+    }
+    next(h, fence, allocator);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgResetFences(VkDevice h, uint32_t count, const VkFence *fences) {
+    DEVICE(ResetFences, h);
+    seen(fence_resets);
+    {
+        Lock lock;
+        for (uint32_t i = 0; i < count; ++i)
+            completions.invalidate_fence(d.dispatch, resource_id(fences[i]));
+    }
+    return result(next(h, count, fences));
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgGetFenceStatus(VkDevice h, VkFence fence) {
+    DEVICE(GetFenceStatus, h);
+    seen(fence_status_queries);
+    FenceMarker marker;
+    {
+        Lock lock;
+        marker = completions.fence_marker(d.dispatch, resource_id(fence));
+    }
+    const auto value = next(h, fence);
+    if (value == VK_SUCCESS) {
+        Lock lock;
+        completed(completions.complete_fence(d.dispatch, marker));
+    }
+    return result(value);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgQueueWaitIdle(VkQueue h) {
+    DEVICE(QueueWaitIdle, h);
+    seen(queue_waits);
+    QueueMarker marker;
+    {
+        Lock lock;
+        marker = completions.queue_marker(d.dispatch, resource_id(h));
+    }
+    const auto value = next(h);
+    if (value == VK_SUCCESS) {
+        Lock lock;
+        completed(completions.complete_queue(d.dispatch, marker));
+    }
+    return result(value);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgDeviceWaitIdle(VkDevice h) {
+    DEVICE(DeviceWaitIdle, h);
+    seen(device_waits);
+    CompletionTracker<>::DeviceMarkers markers{};
+    {
+        Lock lock;
+        completions.device_markers(d.dispatch, markers);
+    }
+    const auto value = next(h);
+    if (value == VK_SUCCESS) {
+        Lock lock;
+        for (const auto &marker : markers)
+            completed(completions.complete_queue(d.dispatch, marker));
+    }
+    return result(value);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL fgWaitForFences(VkDevice h, uint32_t n, const VkFence *f, VkBool32 all,
+                                               uint64_t t) {
+    DEVICE(WaitForFences, h);
+    seen(fence_waits);
+    std::array<FenceMarker, 64> markers{};
+    const bool attributable = (all || n == 1) && n <= markers.size();
+    if (attributable) {
+        Lock lock;
+        for (uint32_t i = 0; i < markers.size() && i < n; ++i)
+            markers[i] = completions.fence_marker(d.dispatch, resource_id(f[i]));
+    }
+    const auto value = next(h, n, f, all, t);
+    if (value == VK_SUCCESS) {
+        if (attributable) {
+            Lock lock;
+            for (uint32_t i = 0; i < markers.size() && i < n; ++i)
+                completed(completions.complete_fence(d.dispatch, markers[i]));
+        } else if (!all && n > 1) {
+            add(ambiguous_fence_waits);
+        } else {
+            add(completion_tracking_failures);
+        }
+    }
+    return result(value);
 }
 
 namespace {
@@ -636,7 +790,8 @@ PFN_vkVoidFunction intercepted(const char* name) {
     ENTRY(CmdCopyBufferToImage); ENTRY(CmdCopyImageToBuffer); ENTRY(CmdFillBuffer);
     ENTRY(CmdPipelineBarrier); ENTRY(CmdPipelineBarrier2); ENTRY(CmdPipelineBarrier2KHR);
     ENTRY(QueueSubmit); ENTRY(QueueSubmit2); ENTRY(QueueSubmit2KHR); ENTRY(QueuePresentKHR);
-    ENTRY(QueueWaitIdle); ENTRY(WaitForFences);
+    ENTRY(QueueWaitIdle); ENTRY(WaitForFences); ENTRY(DeviceWaitIdle);
+    ENTRY(CreateFence); ENTRY(DestroyFence); ENTRY(ResetFences); ENTRY(GetFenceStatus);
     return nullptr;
 }
 }

@@ -44,6 +44,15 @@ unsigned next_command_handle{};
 const auto command_pool_handle = reinterpret_cast<VkCommandPool>(uintptr_t{701});
 PFN_vkResetCommandBuffer top_reset_command{};
 VkCommandBuffer reset_during_submit{};
+uintptr_t fence_id{};
+VkResult fence_result = VK_SUCCESS;
+unsigned status_calls{}, wait_calls{}, idle_calls{}, reset_calls{};
+PFN_vkResetFences top_reset_fences{};
+VkFence reset_during_wait{};
+const VkFence *last_fences{};
+uint32_t last_fence_count{};
+VkBool32 last_wait_all{};
+uint64_t last_timeout{};
 void recreate_device();
 _Post_satisfies_(value) void check(bool value) { ++checks; if (!value) throw std::runtime_error("Observation dispatch regression"); }
 VKAPI_ATTR VkResult VKAPI_CALL create_instance(const VkInstanceCreateInfo*, const VkAllocationCallbacks*, VkInstance* out) {
@@ -87,6 +96,43 @@ VKAPI_ATTR VkResult VKAPI_CALL submit2(VkQueue, uint32_t, const VkSubmitInfo2* i
     last_command_info = info;
     ++command_submits;
     return command_submit_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL create_fence(VkDevice, const VkFenceCreateInfo *,
+                                            const VkAllocationCallbacks *, VkFence *output) {
+    if (fence_result == VK_SUCCESS)
+        *output = reinterpret_cast<VkFence>(++fence_id);
+    return fence_result;
+}
+VKAPI_ATTR void VKAPI_CALL destroy_fence(VkDevice, VkFence, const VkAllocationCallbacks *) {}
+VKAPI_ATTR VkResult VKAPI_CALL reset_fences(VkDevice, uint32_t, const VkFence *) {
+    ++reset_calls;
+    return fence_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL fence_status(VkDevice, VkFence) {
+    ++status_calls;
+    return fence_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL wait_fences(VkDevice device, uint32_t count, const VkFence *fences,
+                                           VkBool32 all, uint64_t timeout) {
+    ++wait_calls;
+    last_fences = fences;
+    last_fence_count = count;
+    last_wait_all = all;
+    last_timeout = timeout;
+    if (reset_during_wait) {
+        const auto fence = reset_during_wait;
+        reset_during_wait = nullptr;
+        check(top_reset_fences(device, 1, &fence) == VK_SUCCESS);
+    }
+    return fence_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL queue_idle(VkQueue) {
+    ++idle_calls;
+    return fence_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL device_idle(VkDevice) {
+    ++idle_calls;
+    return fence_result;
 }
 VKAPI_ATTR VkResult VKAPI_CALL create_command_pool(VkDevice, const VkCommandPoolCreateInfo* info,
     const VkAllocationCallbacks*, VkCommandPool* output) {
@@ -180,6 +226,13 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance, const char* name) {
     return nullptr;
 }
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL gdpa(VkDevice, const char* name) {
+    if (!std::strcmp(name, "vkCreateFence")) return reinterpret_cast<PFN_vkVoidFunction>(create_fence);
+    if (!std::strcmp(name, "vkDestroyFence")) return reinterpret_cast<PFN_vkVoidFunction>(destroy_fence);
+    if (!std::strcmp(name, "vkResetFences")) return reinterpret_cast<PFN_vkVoidFunction>(reset_fences);
+    if (!std::strcmp(name, "vkGetFenceStatus")) return reinterpret_cast<PFN_vkVoidFunction>(fence_status);
+    if (!std::strcmp(name, "vkWaitForFences")) return reinterpret_cast<PFN_vkVoidFunction>(wait_fences);
+    if (!std::strcmp(name, "vkQueueWaitIdle")) return reinterpret_cast<PFN_vkVoidFunction>(queue_idle);
+    if (!std::strcmp(name, "vkDeviceWaitIdle")) return reinterpret_cast<PFN_vkVoidFunction>(device_idle);
     if (!std::strcmp(name, "vkDestroyDevice")) return late_lookup ? top_destroy_device : reinterpret_cast<PFN_vkVoidFunction>(destroy_device);
     if (!std::strcmp(name, "vkQueueSubmit")) return reinterpret_cast<PFN_vkVoidFunction>(submit);
     if (!std::strcmp(name, "vkQueueSubmit2") || !std::strcmp(name, "vkQueueSubmit2KHR"))
@@ -433,6 +486,115 @@ void command_hooks(const VkNegotiateLayerInterface &api, VkDevice device,
     check(shared->counters[submitted_secondary_command_buffers] == 404);
     check(shared->counters[submitted_buffer_copies] == 808);
     check(command_submits == 411);
+    const auto idle = reinterpret_cast<PFN_vkDeviceWaitIdle>(api.pfnGetDeviceProcAddr(device, "vkDeviceWaitIdle"));
+    check(shared->counters[completed_submit_calls] == 0);
+    check(idle(device) == VK_SUCCESS);
+    check(shared->counters[completed_submit_calls] == 404);
+    check(shared->counters[completed_buffer_copies] == 808);
+    check(shared->counters[completed_buffer_copy_bytes] == 64640);
+    check(shared->counters[pending_tracked_submits] == 0);
+    testing_commands = false;
+}
+
+void completion_hooks(const VkNegotiateLayerInterface &api, VkDevice device,
+                      fluid::observation::Shared *shared, bool external_fences = false,
+                      bool unordered_queues = false) {
+    using namespace fluid::observation;
+    const auto create =
+        reinterpret_cast<PFN_vkCreateFence>(api.pfnGetDeviceProcAddr(device, "vkCreateFence"));
+    const auto destroy =
+        reinterpret_cast<PFN_vkDestroyFence>(api.pfnGetDeviceProcAddr(device, "vkDestroyFence"));
+    const auto status =
+        reinterpret_cast<PFN_vkGetFenceStatus>(api.pfnGetDeviceProcAddr(device, "vkGetFenceStatus"));
+    const auto wait =
+        reinterpret_cast<PFN_vkWaitForFences>(api.pfnGetDeviceProcAddr(device, "vkWaitForFences"));
+    const auto idle =
+        reinterpret_cast<PFN_vkQueueWaitIdle>(api.pfnGetDeviceProcAddr(device, "vkQueueWaitIdle"));
+    const auto queue_submit =
+        reinterpret_cast<PFN_vkQueueSubmit>(api.pfnGetDeviceProcAddr(device, "vkQueueSubmit"));
+    top_reset_fences = reinterpret_cast<PFN_vkResetFences>(api.pfnGetDeviceProcAddr(device, "vkResetFences"));
+    Handle queue_handle{&device_key};
+    const auto queue = reinterpret_cast<VkQueue>(&queue_handle);
+    VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    std::array<VkFence, 2> fences{};
+    check(create(device, &info, nullptr, &fences[0]) == VK_SUCCESS);
+    check(create(device, &info, nullptr, &fences[1]) == VK_SUCCESS);
+    const auto initial = shared->counters[completed_submit_calls];
+    const auto initial_status_calls = status_calls;
+    const auto initial_wait_calls = wait_calls;
+    const auto initial_idle_calls = idle_calls;
+    const auto initial_reset_calls = reset_calls;
+    testing_commands = true;
+    command_submit_result = VK_SUCCESS;
+    check(queue_submit(queue, 0, nullptr, fences[0]) == VK_SUCCESS);
+    if (external_fences || unordered_queues) {
+        check(shared->counters[live_fences] == 0);
+        check(status(device, fences[0]) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial);
+        check(idle(queue) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + (unordered_queues ? 0 : 1));
+    } else {
+        check(queue_submit(queue, 0, nullptr, fences[1]) == VK_SUCCESS);
+        fence_result = VK_NOT_READY;
+        check(status(device, fences[0]) == VK_NOT_READY);
+        fence_result = VK_TIMEOUT;
+        check(wait(device, 2, fences.data(), VK_TRUE, 17) == VK_TIMEOUT);
+        check(shared->counters[completed_submit_calls] == initial);
+        fence_result = VK_SUCCESS;
+        check(wait(device, 2, fences.data(), VK_FALSE, 123) == VK_SUCCESS);
+        check(last_fences == fences.data() && last_fence_count == 2 && !last_wait_all && last_timeout == 123);
+        check(shared->counters[ambiguous_fence_waits] == 1);
+        check(shared->counters[completed_submit_calls] == initial);
+        check(status(device, fences[1]) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 2);
+        check(wait(device, 2, fences.data(), VK_TRUE, 0) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 2);
+        check(top_reset_fences(device, 2, fences.data()) == VK_SUCCESS);
+        check(queue_submit(queue, 0, nullptr, fences[0]) == VK_SUCCESS);
+        reset_during_wait = fences[0];
+        check(wait(device, 1, fences.data(), VK_FALSE, UINT64_MAX) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 2);
+        check(queue_submit(queue, 0, nullptr, fences[0]) == VK_SUCCESS);
+        std::array<VkFence, 65> oversized{};
+        oversized.fill(fences[0]);
+        check(wait(device, 65, oversized.data(), VK_TRUE, 5) == VK_SUCCESS);
+        check(shared->counters[completion_tracking_failures] == 1);
+        check(shared->counters[completed_submit_calls] == initial + 2);
+        check(wait(device, 1, fences.data(), VK_FALSE, 0) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 4);
+        check(top_reset_fences(device, 1, fences.data()) == VK_SUCCESS);
+        command_submit_result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        check(queue_submit(queue, 0, nullptr, fences[0]) == VK_ERROR_OUT_OF_HOST_MEMORY);
+        command_submit_result = VK_SUCCESS;
+        check(status(device, fences[0]) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 4);
+        check(queue_submit(queue, 0, nullptr, fences[0]) == VK_SUCCESS);
+        fence_result = VK_ERROR_DEVICE_LOST;
+        check(idle(queue) == VK_ERROR_DEVICE_LOST);
+        check(shared->counters[completed_submit_calls] == initial + 4);
+        fence_result = VK_SUCCESS;
+        // Destroy/recreate cannot revive an old payload; idle still owns the prefix.
+        destroy(device, fences[0], nullptr);
+        fence_id = reinterpret_cast<uintptr_t>(fences[0]) - 1;
+        check(create(device, &info, nullptr, &fences[0]) == VK_SUCCESS);
+        check(status(device, fences[0]) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 4);
+        check(idle(queue) == VK_SUCCESS);
+        check(shared->counters[completed_submit_calls] == initial + 5);
+        check(status_calls == initial_status_calls + 4); // No injected polling.
+        check(wait_calls == initial_wait_calls + 6);
+        check(idle_calls == initial_idle_calls + 2);
+        check(reset_calls == initial_reset_calls + 3);
+        info.pNext = &info;
+        VkFence unknown{};
+        check(create(device, &info, nullptr, &unknown) == VK_SUCCESS);
+        check(shared->counters[untracked_fences] == 1);
+        destroy(device, unknown, nullptr);
+        check(queue_submit(queue, 0, nullptr, nullptr) == VK_SUCCESS); // Retire, don't infer completion.
+    }
+    destroy(device, fences[0], nullptr);
+    destroy(device, fences[1], nullptr);
+    check(shared->counters[live_fences] == 0);
     testing_commands = false;
 }
 } // namespace
@@ -493,6 +655,12 @@ int main(int argc, char **argv) {
             VkDeviceCreateInfo dcreate{};
             dcreate.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
             dcreate.pNext = &dchain;
+            const char *restricted_extension = cycle == 1 ? "VK_KHR_external_fence_win32" :
+                "VK_KHR_internally_synchronized_queues";
+            if (cycle == 1 || cycle == 2) {
+                dcreate.enabledExtensionCount = 1;
+                dcreate.ppEnabledExtensionNames = &restricted_extension;
+            }
             VkDevice device{};
             const auto cd = reinterpret_cast<PFN_vkCreateDevice>(api.pfnGetInstanceProcAddr(instance, "vkCreateDevice"));
             check(cd(reinterpret_cast<VkPhysicalDevice>(instance), &dcreate, nullptr, &device) == VK_SUCCESS);
@@ -517,7 +685,9 @@ int main(int argc, char **argv) {
                 check(shared->counters[fluid::observation::live_bytes] == 0);
                 buffer_hooks(api, device, shared);
                 command_hooks(api, device, shared);
+                completion_hooks(api, device, shared);
             }
+            if (cycle == 1 || cycle == 2) completion_hooks(api, device, shared, cycle == 1, cycle == 2);
             const auto queue_submit = reinterpret_cast<PFN_vkQueueSubmit>(api.pfnGetDeviceProcAddr(device, "vkQueueSubmit"));
             check(queue_submit(reinterpret_cast<VkQueue>(device), 0, nullptr, VK_NULL_HANDLE) == VK_ERROR_DEVICE_LOST);
             // Simulate a loader whose late lookup routes through the top table.
@@ -538,7 +708,9 @@ int main(int argc, char **argv) {
             check(destroyed_instances == cycle + 1 && destroyed_devices == cycle + 1 + (cycle == 99 ? 1 : 0));
         }
         check(submits == 100);
-        check(shared->counters[fluid::observation::api_errors] == 104);
+        check(shared->counters[fluid::observation::api_errors] == 106);
+        check(shared->counters[fluid::observation::pending_tracked_submits] == 0);
+        check(shared->counters[fluid::observation::abandoned_tracked_submits] == 1);
         check(shared->counters[fluid::observation::active_devices] == 0);
         check(shared->counters[fluid::observation::allocations] == 6);
         FreeLibrary(module);

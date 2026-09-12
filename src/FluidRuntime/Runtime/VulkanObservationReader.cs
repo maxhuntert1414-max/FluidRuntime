@@ -5,8 +5,8 @@ namespace FluidRuntime.Runtime;
 internal sealed class VulkanObservationReader : IDisposable
 {
     internal const uint Magic = 0x4f564746;
-    internal const int Version = 3;
-    internal const int Size = 560;
+    internal const int Version = 4;
+    internal const int Size = 672;
     internal static readonly string[] Counters = ["instances", "devices", "allocations", "frees",
         "allocation_bytes", "live_bytes", "peak_bytes", "host_visible_bytes", "device_local_bytes",
         "maps", "flushes", "invalidates", "buffer_binds", "buffer_copies", "buffer_copy_bytes",
@@ -22,7 +22,11 @@ internal sealed class VulkanObservationReader : IDisposable
         "command_execute_calls", "command_tracking_failures", "successful_submit_calls", "failed_submit_calls",
         "submitted_primary_command_buffers", "submitted_secondary_command_buffers", "resubmitted_command_buffers",
         "submitted_buffer_copies", "submitted_buffer_copy_bytes", "unresolved_submit_calls",
-        "command_tracking_overflows", "untracked_command_pools"];
+        "command_tracking_overflows", "untracked_command_pools",
+        "fences_created", "fences_destroyed", "live_fences", "untracked_fences", "fence_resets",
+        "fence_status_queries", "device_waits", "ambiguous_fence_waits", "completion_tracking_failures",
+        "completed_submit_calls", "completed_buffer_copies", "completed_buffer_copy_bytes",
+        "pending_tracked_submits", "abandoned_tracked_submits"];
     private readonly MemoryMappedFile mapping;
     private readonly MemoryMappedViewAccessor view;
     internal string Name { get; } = "Local\\FluidRuntimeObserve-" + Guid.NewGuid().ToString("N");

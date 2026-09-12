@@ -88,13 +88,15 @@ public sealed class ApplicationSessionTests
         using var reader = new VulkanObservationReader();
         using var mapping = MemoryMappedFile.OpenExisting(reader.Name);
         using var writer = mapping.CreateViewAccessor();
-        Assert.Equal(66, reader.Read(42).Count);
-        Assert.Equal(560, VulkanObservationReader.Size);
-        Assert.Equal(3, writer.ReadInt32(4));
+        Assert.Equal(80, reader.Read(42).Count);
+        Assert.Equal(672, VulkanObservationReader.Size);
+        Assert.Equal(4, writer.ReadInt32(4));
         writer.Write(32 + 36 * 8, 4096L);
         Assert.Equal(4096, reader.Read(42)["host_to_device_copy_bytes"]);
         writer.Write(32 + 62 * 8, 8192L);
         Assert.Equal(8192, reader.Read(42)["submitted_buffer_copy_bytes"]);
+        writer.Write(32 + 77 * 8, 4096L);
+        Assert.Equal(4096, reader.Read(42)["completed_buffer_copy_bytes"]);
         writer.Write(16, 42L);
         writer.Write(32 + 19 * 8, 123L);
         Assert.Equal(123, reader.Read(42)["presents"]);
@@ -111,10 +113,13 @@ public sealed class ApplicationSessionTests
     [Theory]
     [InlineData(4, 1)]
     [InlineData(4, 2)]
+    [InlineData(4, 3)]
     [InlineData(8, 288)]
     [InlineData(8, 400)]
+    [InlineData(8, 560)]
     [InlineData(12, 32)]
     [InlineData(12, 46)]
+    [InlineData(12, 66)]
     public void Observation_rejects_legacy_or_inconsistent_shared_layout(int offset, int value)
     {
         if (!OperatingSystem.IsWindows()) return;
