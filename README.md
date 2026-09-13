@@ -13,6 +13,18 @@ FluidRuntime is the actuation companion to
 diagnoses probable waste and makes bounded decisions; Runtime proves whether an
 action can be applied without changing the result.
 
+## Daily Terminal Use
+
+```powershell
+.\fluidruntime.exe processes
+.\fluidruntime.exe monitor --pid 1234
+```
+
+Continuous CPU/RAM/GPU monitoring, Ctrl+C to stop, bounded rolling JSON report.
+No Python, ledger or administrator required in the portable package.
+**Read-only: monitoring is not automatic optimization.**
+[Build the portable package and get started](docs/daily-use.md).
+
 ## Current Status
 
 | Area | State |

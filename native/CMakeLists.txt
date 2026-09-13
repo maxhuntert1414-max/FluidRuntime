@@ -124,6 +124,17 @@ if(FLUIDRUNTIME_ENABLE_VULKAN)
 endif()
 
 enable_testing()
+foreach(value -1 4294967296)
+    add_test(NAME fluidruntime-native-probe-rejects-pid-${value}
+        COMMAND fluidruntime-native-probe --pid ${value})
+    set_tests_properties(fluidruntime-native-probe-rejects-pid-${value} PROPERTIES WILL_FAIL TRUE)
+endforeach()
+add_test(NAME fluidruntime-native-probe-rejects-unbound-stream
+    COMMAND fluidruntime-native-probe --pid 1 --stream --interval-ms 1000)
+set_tests_properties(fluidruntime-native-probe-rejects-unbound-stream PROPERTIES WILL_FAIL TRUE)
+add_test(NAME fluidruntime-native-probe-rejects-unbounded-stream
+    COMMAND fluidruntime-native-probe --self-test --stream --interval-ms 10000 --samples 100)
+set_tests_properties(fluidruntime-native-probe-rejects-unbounded-stream PROPERTIES WILL_FAIL TRUE)
 if(FLUIDRUNTIME_ENABLE_VULKAN)
     add_test(NAME fluidruntime-vulkan-observation-dispatch
         COMMAND fluidruntime-vulkan-observation-tests $<TARGET_FILE:fluidruntime-vulkan-observe>)

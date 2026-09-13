@@ -41,7 +41,13 @@ jobs:
             tests/FluidRuntime.Tests/GatewayReadbackTests.cs `
             src/FluidRuntime/Runtime/VulkanObservationReader.cs `
             src/FluidRuntime/Runtime/ApplicationSessionRunner.cs `
-            tests/FluidRuntime.Tests/ApplicationSessionTests.cs
+            tests/FluidRuntime.Tests/ApplicationSessionTests.cs `
+            src/FluidRuntime/Cli/DailyMonitorOptions.cs `
+            src/FluidRuntime/Native/NativeProbeStream.cs `
+            src/FluidRuntime/Native/NativeProbeReport.cs `
+            src/FluidRuntime/Runtime/DailyMonitorReport.cs `
+            src/FluidRuntime/Runtime/DailyMonitorRunner.cs `
+            tests/FluidRuntime.Tests/DailyMonitorTests.cs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet format whitespace tools/FluidGateway.BackendBenchmark/FluidGateway.BackendBenchmark.csproj `
             --no-restore --verify-no-changes --include tools/FluidGateway.BackendBenchmark/Program.cs
@@ -67,6 +73,16 @@ jobs:
           /p:TreatWarningsAsErrors=true
       - name: Test native probe
         run: ctest --test-dir native/build -C Release --output-on-failure
+      - name: Test daily monitoring with real native telemetry
+        shell: pwsh
+        run: |
+          $env:FLUIDRUNTIME_NATIVE = (Resolve-Path native/build/Release).Path
+          dotnet test FluidRuntime.slnx -c Release --no-build --filter FullyQualifiedName~DailyMonitorTests
+      - name: Verify daily portable packaging
+        shell: pwsh
+        run: |
+          ./tools/Publish-Daily.ps1 -OutputDirectory artifacts/daily-ci-package
+          ./tools/Test-DailyPackage.ps1 -PackageDirectory artifacts/daily-ci-package -Seconds 5
       - name: Analyze cooperative Vulkan library and owned target
         run: >-
           cmake --build native/build --config Release

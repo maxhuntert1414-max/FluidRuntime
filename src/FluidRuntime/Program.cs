@@ -11,6 +11,8 @@ public static class RuntimeApplication
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length == 0 || args[0] is "monitor" or "processes")
+            return await DailyMonitorRunner.RunCommandAsync(args);
         if (args.Length > 0 && args[0] == "app-session")
             return await ApplicationSessionRunner.RunCommandAsync(args);
         if (args.Length > 0 && args[0] == "windows-priority-lease")

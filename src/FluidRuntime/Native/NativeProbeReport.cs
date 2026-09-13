@@ -43,6 +43,9 @@ public sealed record NativeProbeReport
     [JsonPropertyName("captured_at_unix_ms")]
     public long CapturedAtUnixMs { get; init; }
 
+    [JsonPropertyName("process_start_time_filetime")]
+    public long ProcessStartTimeFileTime { get; init; }
+
     [JsonPropertyName("sample_interval_ms")]
     public int SampleIntervalMs { get; init; }
 

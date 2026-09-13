@@ -4,7 +4,13 @@
 #include <psapi.h>
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cmath>
+#include <cstdint>
+#include <fcntl.h>
 #include <iomanip>
+#include <io.h>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -59,6 +65,7 @@ struct CounterResult {
 
 struct ProbeSnapshot {
     unsigned long long captured_at_unix_ms{};
+    unsigned long long process_start_time_filetime{};
     ProcessSnapshot process;
     std::vector<CounterResult> counters;
 };
@@ -136,35 +143,28 @@ std::string status_hex(PDH_STATUS status) {
     return output.str();
 }
 
-std::optional<ProcessSnapshot> query_process(unsigned long process_id) {
-    UniqueHandle process(OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
-        FALSE,
-        process_id));
-    if (process.get() == nullptr) {
+std::optional<ProcessSnapshot> query_process(HANDLE process) {
+    if (WaitForSingleObject(process, 0) != WAIT_TIMEOUT) {
         return std::nullopt;
     }
 
     std::wstring image_path(32768, L'\0');
     unsigned long image_path_size = static_cast<unsigned long>(image_path.size());
-    if (!QueryFullProcessImageNameW(
-            process.get(), 0, image_path.data(), &image_path_size)) {
+    if (!QueryFullProcessImageNameW(process, 0, image_path.data(), &image_path_size)) {
         return std::nullopt;
     }
     image_path.resize(image_path_size);
 
     PROCESS_MEMORY_COUNTERS_EX memory{};
     memory.cb = sizeof(memory);
-    if (!GetProcessMemoryInfo(
-            process.get(),
-            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
-            sizeof(memory))) {
+    if (!GetProcessMemoryInfo(process, reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory),
+                              sizeof(memory))) {
         return std::nullopt;
     }
 
     return ProcessSnapshot{
         .image_path = std::move(image_path),
-        .priority_class = GetPriorityClass(process.get()),
+        .priority_class = GetPriorityClass(process),
         .page_fault_count = memory.PageFaultCount,
         .working_set_bytes = memory.WorkingSetSize,
         .private_bytes = memory.PrivateUsage,
@@ -216,6 +216,12 @@ CounterResult read_counter(const CounterHandle& counter) {
         return result;
     }
 
+    // Bound allocations even if the driver's wildcard instance list grows.
+    if (buffer_size > 4 * 1024 * 1024) {
+        result.status = static_cast<PDH_STATUS>(PDH_MEMORY_ALLOCATION_FAILURE);
+        return result;
+    }
+
     std::vector<unsigned char> buffer(buffer_size);
     auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
     status = PdhGetFormattedCounterArrayW(
@@ -239,6 +245,9 @@ CounterResult read_counter(const CounterHandle& counter) {
             continue;
         }
 
+        if (!std::isfinite(items[index].FmtValue.doubleValue)) {
+            continue;
+        }
         const auto value = std::max(0.0, items[index].FmtValue.doubleValue);
         sum += value;
         peak = std::max(peak, value);
@@ -360,10 +369,10 @@ void write_json(
            << "  \"self_test\": " << (self_test ? "true" : "false") << ",\n"
            << "  \"pid\": " << process_id << ",\n"
            << "  \"captured_at_unix_ms\": " << snapshot.captured_at_unix_ms << ",\n"
+           << "  \"process_start_time_filetime\": " << snapshot.process_start_time_filetime << ",\n"
            << "  \"sample_interval_ms\": " << interval_ms << ",\n"
            << "  \"process\": {\n"
-           << "    \"image_path\": \""
-           << json_escape(wide_to_utf8(process.image_path)) << "\",\n"
+           << "    \"image_path\": \"" << json_escape(wide_to_utf8(process.image_path)) << "\",\n"
            << "    \"priority_class\": " << process.priority_class << ",\n"
            << "    \"page_fault_count\": " << process.page_fault_count << ",\n"
            << "    \"working_set_bytes\": " << process.working_set_bytes << ",\n"
@@ -444,13 +453,18 @@ void write_series_json(
 void print_usage() {
     std::wcerr << L"Usage: fluidruntime-native-probe --pid <id> "
                   L"[--interval-ms <milliseconds>] [--samples <count>]\n"
+                  L"       [--stream --start-time <creation FILETIME>]\n"
                   L"       fluidruntime-native-probe --self-test\n";
 }
 
 std::optional<unsigned long> parse_positive(const wchar_t* value) {
+    if (*value < L'0' || *value > L'9') {
+        return std::nullopt;
+    }
     wchar_t* end{};
+    errno = 0;
     const auto parsed = wcstoul(value, &end, 10);
-    if (end == value || *end != L'\0' || parsed == 0) {
+    if (end == value || *end != L'\0' || parsed == 0 || errno == ERANGE) {
         return std::nullopt;
     }
     return parsed;
@@ -463,6 +477,8 @@ int wmain(int argc, wchar_t* argv[]) {
     unsigned long interval_ms = 250;
     unsigned long sample_count = 1;
     bool self_test = false;
+    bool stream = false;
+    unsigned long long expected_start_time = 0;
 
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument(argv[index]);
@@ -470,6 +486,18 @@ int wmain(int argc, wchar_t* argv[]) {
             self_test = true;
             process_id = GetCurrentProcessId();
             interval_ms = 50;
+        } else if (argument == L"--stream") {
+            stream = true;
+        } else if (argument == L"--start-time" && index + 1 < argc) {
+            const auto *value = argv[++index];
+            wchar_t *end{};
+            errno = 0;
+            expected_start_time = wcstoull(value, &end, 10);
+            if (*value < L'0' || *value > L'9' || *end != L'\0' || expected_start_time == 0 ||
+                errno == ERANGE) {
+                print_usage();
+                return 2;
+            }
         } else if (argument == L"--pid" && index + 1 < argc) {
             const auto parsed = parse_positive(argv[++index]);
             if (!parsed.has_value()) {
@@ -500,9 +528,29 @@ int wmain(int argc, wchar_t* argv[]) {
         }
     }
 
-    if (process_id == 0) {
+    if (process_id == 0 || (stream && (interval_ms < 1000 ||
+                                       static_cast<unsigned long long>(interval_ms) * sample_count > 100000 ||
+                                       (expected_start_time == 0 && !self_test)))) {
         print_usage();
         return 2;
+    }
+
+    // Hold the original object for the whole session; never reopen a recycled PID.
+    UniqueHandle target(
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ | SYNCHRONIZE, FALSE, process_id));
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (target.get() == nullptr || !GetProcessTimes(target.get(), &created, &exited, &kernel, &user)) {
+        std::cerr << "Unable to open target process identity.\n";
+        return 3;
+    }
+    const auto start_time =
+        (static_cast<unsigned long long>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    if (expected_start_time != 0 && expected_start_time != start_time) {
+        std::cerr << "Target process creation time mismatch.\n";
+        return 3;
+    }
+    if (stream && _setmode(_fileno(stdout), _O_BINARY) == -1) {
+        return 3;
     }
 
     GpuCounterSession gpu_counters(process_id);
@@ -510,19 +558,44 @@ int wmain(int argc, wchar_t* argv[]) {
     snapshots.reserve(static_cast<size_t>(sample_count));
     for (unsigned long index = 0; index < sample_count; ++index) {
         auto counters = gpu_counters.sample(interval_ms);
-        auto process = query_process(process_id);
+        auto process = query_process(target.get());
         if (!process.has_value()) {
             std::cerr << "Unable to query process " << process_id
                       << "; Win32 error=" << GetLastError() << "\n";
             return 3;
         }
-        snapshots.push_back(ProbeSnapshot{
+        ProbeSnapshot snapshot{
             .captured_at_unix_ms = unix_time_ms(),
+            .process_start_time_filetime = start_time,
             .process = std::move(*process),
             .counters = std::move(counters),
-        });
+        };
+        if (stream) {
+            // Private telemetry framing: uint32 LE length, then existing UTF-8 JSON.
+            // This is not a new FluidLink version and never carries authority.
+            std::ostringstream payload;
+            write_json(payload, process_id, interval_ms, self_test, snapshot);
+            const auto bytes = payload.str();
+            if (bytes.empty() || bytes.size() > 256 * 1024) {
+                return 3;
+            }
+            const auto size = static_cast<std::uint32_t>(bytes.size());
+            const std::array<char, 4> header{static_cast<char>(size), static_cast<char>(size >> 8),
+                                             static_cast<char>(size >> 16), static_cast<char>(size >> 24)};
+            std::cout.write(header.data(), header.size());
+            std::cout.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            std::cout.flush();
+            if (!std::cout) {
+                return 3;
+            }
+        } else {
+            snapshots.push_back(std::move(snapshot));
+        }
     }
 
+    if (stream) {
+        return 0;
+    }
     if (sample_count == 1) {
         write_json(std::cout, process_id, interval_ms, self_test, snapshots.front());
         std::cout << '\n';
