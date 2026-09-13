@@ -185,6 +185,9 @@ internal static class DailyMonitorRunner
 
     internal static string SafeText(string text) => new(text.Take(240).Select(c => char.IsControl(c) ? ' ' : c).ToArray());
 
+    internal static string FormatProcessRow(int pid, long workingSetBytes, string name) =>
+        FormattableString.Invariant($"{pid,6} {workingSetBytes / (1024d * 1024),9:F1}   {SafeText(name)}");
+
     private static void Render(DailyMonitorSample sample)
     {
         static string Number(double? value) => value?.ToString("F1", CultureInfo.InvariantCulture) ?? "NA";
@@ -220,7 +223,7 @@ internal static class DailyMonitorRunner
         }
         Console.WriteLine("   PID   RAM MiB   Process (current Windows session)");
         foreach (var row in rows.OrderByDescending(r => r.Ram))
-            Console.WriteLine($"{row.Pid,6} {row.Ram / (1024d * 1024):9:F1}   {row.Name}");
+            Console.WriteLine(FormatProcessRow(row.Pid, row.Ram, row.Name));
         Console.WriteLine("\nSelect explicitly: fluidruntime monitor --pid <PID>");
         return 0;
     }

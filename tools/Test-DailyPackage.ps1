@@ -22,6 +22,10 @@ try {
     # Child resolves neither dotnet, Python, nor the Visual Studio/ASAN runtimes.
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
     $env:DOTNET_ROOT = Join-Path $package 'no-system-dotnet'
+    $rows = @(& $runtime processes --name (Get-Process -Id $PID).ProcessName)
+    if ($LASTEXITCODE -or -not ($rows | Where-Object { $_ -match "^\s*$PID\s+\d+\.\d\s+" })) {
+        throw 'Portable process list did not render the target PID and numeric RAM.'
+    }
     & $runtime monitor --pid $PID --seconds $Seconds --out $report
     if ($LASTEXITCODE) { throw 'Portable monitoring failed.' }
 } finally {

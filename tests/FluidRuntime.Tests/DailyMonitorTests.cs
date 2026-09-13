@@ -83,6 +83,12 @@ public sealed class DailyMonitorTests
     }
 
     [Fact]
+    public void Process_list_formats_numeric_ram_with_stable_alignment()
+    {
+        Assert.Equal("    42       1.5   app", DailyMonitorRunner.FormatProcessRow(42, 1572864, "app"));
+    }
+
+    [Fact]
     public async Task Framing_accepts_fragmented_utf8()
     {
         var bytes = Encoding.UTF8.GetBytes("{\"text\":\"a\\nb\"}");

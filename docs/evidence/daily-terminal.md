@@ -8,9 +8,9 @@ the existing application-session/priority watchdog gates are unchanged.
 
 | Surface | Result |
 | --- | --- |
-| Managed Release / Debug | 311 tests each, zero skips, trusted Gateway DLL/native integrations enabled |
+| Managed Release / Debug | 312 tests each, zero skips, trusted Gateway DLL/native integrations enabled |
 | Native Release / Debug / ASAN | 39 CTest tests each, zero failures |
-| New daily managed tests | 28, including real native streaming |
+| New daily managed tests | 29, including real native streaming and process-table rendering |
 | Static-MSVC Release probe | `/analyze`, warnings as errors, passed |
 | Gateway Python regression | 343 passed; Gateway change is documentation only |
 | Portable renewal validation | 115-second owned-shell run, 112 samples, final JSON 35,819 bytes |
