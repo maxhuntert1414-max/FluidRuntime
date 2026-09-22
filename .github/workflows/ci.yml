@@ -73,6 +73,15 @@ jobs:
           /p:TreatWarningsAsErrors=true
       - name: Test native probe
         run: ctest --test-dir native/build -C Release --output-on-failure
+      - name: Analyze shared-memory foundation
+        run: >-
+          cmake --build native/build --config Release
+          --target fluidruntime-memory-coherence-tests fluidruntime-memory-readiness --
+          /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
+          /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
+      - name: Validate memory foundation evidence
+        shell: pwsh
+        run: ./tools/Test-MemoryFoundation.ps1 -NativeDirectory native/build/Release
       - name: Test daily monitoring with real native telemetry
         shell: pwsh
         run: |

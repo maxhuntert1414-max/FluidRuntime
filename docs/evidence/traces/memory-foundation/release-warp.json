@@ -1,0 +1,21 @@
+{
+    "mode":  "fluidruntime-memory-foundation-v0.1",
+    "foundation_passed":  true,
+    "unified_memory_active":  false,
+    "third_party_authority":  false,
+    "adapter":  "Microsoft Basic Render Driver",
+    "hardware":  false,
+    "uma":  true,
+    "cache_coherent_uma":  true,
+    "gpu_upload_heap_supported":  null,
+    "local_budget_bytes":  7861376717,
+    "nonlocal_budget_bytes":  0,
+    "cross_process_read_only_mapping":  true,
+    "payload_bytes":  16384,
+    "verified_roundtrips":  4,
+    "logical_gpu_copy_bytes":  131072,
+    "logical_gpu_bytes_omitted":  0,
+    "coherence_state_bytes":  6784,
+    "debug_layer_enabled":  true,
+    "debug_errors":  0
+}

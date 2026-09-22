@@ -25,6 +25,10 @@ No Python, ledger or administrator required in the portable package.
 **Read-only: monitoring is not automatic optimization.**
 [Build the portable package and get started](docs/daily-use.md).
 
+Next memory milestone: [versioned shared-memory foundation](docs/shared-memory-foundation.md),
+with native ownership checks and real RAM/D3D12 roundtrip validation. This prepares
+a cooperative shared arena; it does not enable unified memory in games.
+
 ## Current Status
 
 | Area | State |
