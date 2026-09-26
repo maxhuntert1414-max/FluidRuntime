@@ -256,12 +256,15 @@ public sealed class DailyMonitorTests
             foreach (var exists in new[] { false, true })
             {
                 if (exists) await File.WriteAllTextAsync(fake, "not an executable");
-                var report = await DailyMonitorRunner.RunAsync(new(Environment.ProcessId, 1000, 2, output, fake), null, default);
+                // Observe the fallback before stopping; a fixed duration can expire during CI startup.
+                using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                var report = await DailyMonitorRunner.RunAsync(new(Environment.ProcessId, 1000, 0, output, fake),
+                    _ => stop.Cancel(), stop.Token);
                 Assert.Equal("stopped", report.State);
                 Assert.Equal("unavailable", report.GpuStatus);
-                Assert.Equal("duration", report.StopReason);
+                Assert.Equal("cancelled", report.StopReason);
                 Assert.NotNull(report.Warning);
-                Assert.NotEmpty(report.Samples);
+                Assert.Single(report.Samples);
                 Assert.All(report.Samples, s => Assert.Null(s.GpuEnginePeakPercent));
             }
         }
