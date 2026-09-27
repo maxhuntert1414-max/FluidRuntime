@@ -1,5 +1,9 @@
 # Shared Memory Foundation
 
+The next milestone is now implemented as the opt-in
+[cooperative D3D12 shared arena](shared-arena.md). This page describes its unchanged
+lower-level coherence foundation; the original laboratory/evidence remain available.
+
 Status: foundation for a **cooperative D3D12 buffer arena**, not unified memory
 enabled in games. The daily monitor, Gateway backends and FluidLink contracts
 are unchanged. No new actuation authority or global hooks are introduced.
@@ -97,10 +101,13 @@ the isolated, one-shot laboratory. Allocation generations and operation serials
 never wrap or reset within a session. The numeric `Access` values are private
 implementation constants, not newly allocated FluidLink opcodes.
 
-## Next Implementation Contract
+## Arena Implementation Contract
 
-The first shared arena will support **registered cooperative linear buffers on
-one D3D12 device/queue**, with an explicit 64-MiB total arena cap and 64 live slots.
+The implemented [shared arena](shared-arena.md) supports **cooperative linear
+buffers on one D3D12 device/queue**, with 64 live slots and a 64-MiB charged-backing
+cap. The charge covers section pages and driver-reported GPU allocation sizes,
+not all process/driver memory. The points below preserve the design requirements;
+future policy integration is not enabled by the current local read protocol.
 Vulkan, D3D11, textures, multiple adapters/queues, sparse residency, automatic
 third-party capture and transparent page-fault migration are not v1 features.
 
@@ -131,7 +138,7 @@ third-party capture and transparent page-fault migration are not v1 features.
    interrupted writes, exact GPU contents and bounded cleanup. Benchmark staging
    bytes, GPU copy bytes, CPU time, allocations and p50/p95/p99 independently.
 
-These prerequisites let implementation begin for the **cooperative prototype**.
+These requirements bound the implemented **cooperative prototype**.
 They do not certify production shared-memory optimization or arbitrary-game support.
 See [architecture decision](architecture/shared-memory-v1.md) and
 [measured evidence](evidence/memory-foundation.md).

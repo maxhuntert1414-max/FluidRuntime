@@ -2,6 +2,10 @@
 
 Status: accepted for the first cooperative prototype; 2026-09-19.
 
+Implementation update, 2026-09-27: the [D3D12 shared arena](../shared-arena.md)
+now wraps this core in an opt-in native DLL. The original decision and hardware
+limits below still apply; managed integration and automatic copy reuse are not enabled.
+
 ## Context
 
 FluidRuntime already observes graphics transfers and completion. Shared OS pages
@@ -18,8 +22,9 @@ driver-handle equality. Metadata never lives in writable peer mappings.
 Only one GPU ticket is outstanding per session until submission ordering can be
 proved by the owning backend; independent host operations can still overlap.
 
-The internal C++20 core is consumed by real D3D12 validation now. The future
-arena will wrap it in a C ABI; no new protocol or ABI is declared stable here.
+The internal C++20 core is consumed by real D3D12 validation and the arena.
+Its [versioned C ABI](../shared-arena-abi.md) is specified separately; this ADR
+does not define a new FluidLink capability or GPU-control authority.
 CPU sections and GPU resources remain different objects with explicit transfers.
 
 | Alternative | Trade-off | Decision |

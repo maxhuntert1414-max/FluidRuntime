@@ -82,6 +82,15 @@ jobs:
       - name: Validate memory foundation evidence
         shell: pwsh
         run: ./tools/Test-MemoryFoundation.ps1 -NativeDirectory native/build/Release
+      - name: Analyze shared arena ABI and owned laboratory
+        run: >-
+          cmake --build native/build --config Release
+          --target fluidruntime-memory-arena-lab fluidruntime-memory-arena-fault-tests --
+          /m:1 /nr:false /t:Rebuild /p:RunCodeAnalysis=true
+          /p:CodeAnalysisTreatWarningsAsErrors=true /p:TreatWarningsAsErrors=true
+      - name: Validate shared arena evidence
+        shell: pwsh
+        run: ./tools/Test-SharedArena.ps1 -NativeDirectory native/build/Release
       - name: Test daily monitoring with real native telemetry
         shell: pwsh
         run: |

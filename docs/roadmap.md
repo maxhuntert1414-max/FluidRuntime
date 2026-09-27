@@ -6,7 +6,31 @@ presentation. Software cannot turn discrete PC hardware into physically unified
 memory, but it can make earlier decisions, reuse data, avoid redundant work, and
 coordinate the interfaces the operating system and graphics APIs expose.
 
-## Delivered
+## Current Focus
+
+The native Gateway server/DLL, FluidLink 0.5, read-only daily terminal and Vulkan
+lifetime/command/completion observation are implemented on `main`. The latest
+addition is the [cooperative D3D12 shared arena](shared-arena.md): a bounded native
+C ABI, local host leases, identity-bound read-only peers and allocation reuse.
+See [status](STATUS.md) and [arena evidence](evidence/shared-arena.md) for limits.
+
+The next memory step is **trusted client integration**, not transparent migration:
+
+1. Add a managed/native client with deterministic lease disposal and explicit
+   binding to registered resources. Keep the daily monitor read-only.
+2. Prove exact contents, alias invalidation, disconnect/timeout cleanup and
+   bounded memory over sustained real workloads before widening access.
+3. Measure complete batch costs, including setup, against a baseline that already
+   pools buffers. Authorize replica reuse or skipped transfers only through a
+   separately reviewed policy, rollback and negotiated capability.
+
+D3D11/Vulkan arenas, textures, cross-queue ownership and third-party actuation
+remain later work. Shared RAM mappings alone do not make GPU memory coherent.
+
+## Milestone History
+
+The numbers below describe implementation milestones, not a promise that each
+has a downloadable release. Current packaging status is in [Project status](STATUS.md).
 
 - **v0.1:** consume FluidGateway ledgers and generate advisory runtime actions.
 - **v0.2:** read-only native PID, process-memory, VRAM, and GPU-engine probe.
@@ -161,7 +185,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
 - Measure CPU-shadow construction and reuse thresholds for smaller candidate
   sets so the proof cost never silently exceeds the avoided work.
 
-### v0.22: Cooperative Vulkan Backend
+### Delivered v0.22: Cooperative Vulkan Backend
 
 - Implemented: private two-lane buffer-copy library, frozen source snapshots,
   exact-copy elision, FluidLink domain-separated authority, native ring evidence,
@@ -170,7 +194,7 @@ coordinate the interfaces the operating system and graphics APIs expose.
   layer. Private resource ownership makes the first action provable; it does
   not pretend to cover arbitrary engine command streams.
 
-### v0.23: Application Observation And Windows Lease
+### Delivered v0.23: Application Observation And Windows Lease
 
 - Delivered explicit, launch-scoped Vulkan observation for selected x64 apps;
   unmodified Khronos `vkcube` and `vkcubepp` are the current compatibility evidence.

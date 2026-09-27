@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(FluidRuntimeNativeProbe VERSION 0.23.0 LANGUAGES CXX)
+project(FluidRuntimeNativeProbe VERSION 0.23.0 LANGUAGES C CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "FluidRuntime native probe currently requires Windows.")
@@ -45,6 +45,25 @@ target_link_libraries(fluidruntime-memory-coherence-tests PRIVATE fluidruntime-m
 add_executable(fluidruntime-memory-readiness src/memory_readiness.cpp)
 configure_fluidruntime_native_target(fluidruntime-memory-readiness)
 target_link_libraries(fluidruntime-memory-readiness PRIVATE fluidruntime-memory-core d3d12 dxgi)
+
+add_library(fluidruntime-memory-arena SHARED src/memory_arena.cpp)
+configure_fluidruntime_native_target(fluidruntime-memory-arena)
+target_compile_definitions(fluidruntime-memory-arena PRIVATE FLUID_MEMORY_ARENA_EXPORTS)
+target_link_libraries(fluidruntime-memory-arena PRIVATE fluidruntime-memory-core d3d12 dxgi bcrypt)
+set_target_properties(fluidruntime-memory-arena PROPERTIES
+    OUTPUT_NAME FluidMemoryArena MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+add_executable(fluidruntime-memory-arena-lab src/memory_arena_lab.cpp src/memory_arena_abi_c.c)
+configure_fluidruntime_native_target(fluidruntime-memory-arena-lab)
+target_include_directories(fluidruntime-memory-arena-lab PRIVATE include)
+target_link_libraries(fluidruntime-memory-arena-lab PRIVATE fluidruntime-memory-arena bcrypt d3d12)
+set_target_properties(fluidruntime-memory-arena-lab PROPERTIES C_STANDARD 11
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+add_executable(fluidruntime-memory-arena-fault-tests src/memory_arena_fault_tests.cpp)
+configure_fluidruntime_native_target(fluidruntime-memory-arena-fault-tests)
+target_compile_definitions(fluidruntime-memory-arena-fault-tests PRIVATE FLUID_MEMORY_ARENA_EXPORTS)
+target_link_libraries(fluidruntime-memory-arena-fault-tests PRIVATE fluidruntime-memory-core d3d12 dxgi bcrypt)
 
 add_executable(fluidruntime-d3d12-observation src/d3d12_observation.cpp)
 configure_fluidruntime_native_target(fluidruntime-d3d12-observation)
@@ -134,6 +153,10 @@ if(FLUIDRUNTIME_ENABLE_VULKAN)
 endif()
 
 enable_testing()
+add_test(NAME fluidruntime-memory-arena-warp COMMAND fluidruntime-memory-arena-lab --warp)
+set_tests_properties(fluidruntime-memory-arena-warp PROPERTIES TIMEOUT 60)
+add_test(NAME fluidruntime-memory-arena-faults COMMAND fluidruntime-memory-arena-fault-tests)
+set_tests_properties(fluidruntime-memory-arena-faults PROPERTIES TIMEOUT 30)
 add_test(NAME fluidruntime-memory-coherence COMMAND fluidruntime-memory-coherence-tests)
 set_tests_properties(fluidruntime-memory-coherence PROPERTIES TIMEOUT 30)
 add_test(NAME fluidruntime-memory-readiness-warp COMMAND fluidruntime-memory-readiness --warp)

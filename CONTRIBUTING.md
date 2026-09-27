@@ -20,6 +20,10 @@ Read [native Gateway integration](docs/native-gateway.md) before changing the li
 authorization path. Owned GPU labs are separate from third-party applications;
 passing an owned lab does not establish general game compatibility or FPS gains.
 
+For memory work, start with the [arena lifecycle](docs/shared-arena.md) and
+[C ABI](docs/shared-arena-abi.md). Run `tools/Test-SharedArena.ps1` against the
+built native directory; WARP is the default and hardware testing is explicit.
+
 ## Code Map
 
 - `src/FluidLink`: wire codec, client and strict contract validation.

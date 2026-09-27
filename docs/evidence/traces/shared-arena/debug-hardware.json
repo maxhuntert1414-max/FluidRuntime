@@ -1,0 +1,43 @@
+{
+    "mode":  "fluidruntime-shared-arena-v1",
+    "passed":  true,
+    "hardware":  true,
+    "checks":  21417,
+    "uma":  false,
+    "debug_layer_enabled":  true,
+    "debug_errors":  0,
+    "trial_pairs":  30,
+    "operations_per_arm":  240,
+    "payload_bytes":  16384,
+    "backing_budget_bytes":  67108864,
+    "peak_charged_bytes":  212992,
+    "content_equivalent":  true,
+    "read_only_peer_verified":  true,
+    "gpu_bytes_omitted":  0,
+    "unified_memory_active":  false,
+    "third_party_authority":  false,
+    "baseline":  {
+                     "p50_us":  2976.4,
+                     "p95_us":  3499.32,
+                     "p99_us":  3740.53,
+                     "batch_p50_us":  24718.9,
+                     "cpu_us_per_operation":  130.208,
+                     "cpu_cycles_per_operation":  2995890,
+                     "operations_per_second":  325.329,
+                     "backing_allocations":  960,
+                     "cpu_copy_bytes":  7864320,
+                     "gpu_copy_bytes":  7864320
+                 },
+    "reused":  {
+                   "p50_us":  768.45,
+                   "p95_us":  870.44,
+                   "p99_us":  1038.8,
+                   "batch_p50_us":  6171.75,
+                   "cpu_us_per_operation":  65.1042,
+                   "cpu_cycles_per_operation":  1149070,
+                   "operations_per_second":  1309.76,
+                   "backing_allocations":  120,
+                   "cpu_copy_bytes":  7864320,
+                   "gpu_copy_bytes":  7864320
+               }
+}

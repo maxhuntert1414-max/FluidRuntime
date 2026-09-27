@@ -1,169 +1,95 @@
 # FluidRuntime
 
-**A Windows research runtime for finding and safely removing redundant work
-between CPU, GPU, RAM, VRAM, and the graphics pipeline.**
+**Less redundant work between CPU, GPU and memory.**
 
-[![Version](https://img.shields.io/badge/version-0.23.0-ef6c35)](src/FluidRuntime/FluidRuntime.csproj)
 [![CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml)
-[![FluidLink](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
+[![FluidLink interop](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml/badge.svg)](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
+[![MIT](https://img.shields.io/badge/license-MIT-2f855a)](LICENSE)
+[![Windows x64](https://img.shields.io/badge/platform-Windows_x64-0078d4)](docs/daily-use.md)
 
-FluidRuntime is the actuation companion to
-[FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway). Gateway
-diagnoses probable waste and makes bounded decisions; Runtime proves whether an
-action can be applied without changing the result.
+A Windows runtime for process monitoring, cooperative graphics experiments and
+bounded memory sharing. Native work runs in **C++20**; **C#/.NET** coordinates
+identity, budgets, expiry and rollback.
+[FluidGateway](https://github.com/maxhuntert1414-max/FluidGateway) supplies diagnosis
+and policy. FluidRuntime validates and executes the allowed action.
 
-## Daily Terminal Use
+[Get started](#try-it) | [Documentation](docs/README.md) | [Evidence](docs/STATUS.md) | [Roadmap](docs/roadmap.md) | [Contribute](CONTRIBUTING.md)
+
+## Try It
+
+From a source checkout on Windows with the **.NET 10 SDK**:
 
 ```powershell
-.\fluidruntime.exe processes
-.\fluidruntime.exe monitor --pid 1234
+dotnet run --project src/FluidRuntime -c Release -- processes
+dotnet run --project src/FluidRuntime -c Release -- monitor --pid 1234 --cpu-only
 ```
 
-Continuous CPU/RAM/GPU monitoring, Ctrl+C to stop, bounded rolling JSON report.
-No Python, ledger or administrator required in the portable package.
-**Read-only: monitoring is not automatic optimization.**
-[Build the portable package and get started](docs/daily-use.md).
+Replace `1234` with a PID from the list. This monitors CPU/RAM, writes a bounded
+JSON report and stops with Ctrl+C without closing the application.
+**Monitoring is read-only, not automatic optimization.**
 
-Next memory milestone: [versioned shared-memory foundation](docs/shared-memory-foundation.md),
-with native ownership checks and real RAM/D3D12 roundtrip validation. This prepares
-a cooperative shared arena; it does not enable unified memory in games.
+For GPU/VRAM counters and use without Python or a separate .NET installation,
+[build the portable package](docs/daily-use.md#build-a-portable-package).
+The current daily package is source-built; the older tagged release is not a
+download of all features on `main`.
 
-## Current Status
+## What Works Today
 
-| Area | State |
+| Capability | Scope |
 | --- | --- |
-| FluidLink v2 | Strict binary protocol; pooled buffers and caller-owned encoding in package 0.5.0 |
-| FluidLink batch | 129 logical operations in one ordered request/vector pair |
-| Native Gateway | Default C++20 endpoint in lab scripts; same PID/hash and authority checks |
-| In-process Gateway | Opt-in hash-pinned C++ DLL; same FluidLink validation and native gates |
-| D3D11 | Reversible copy, readback, staging upload, and direct upload labs |
-| Gateway readback | GPU-to-staging copy authorization through server or DLL; read maps remain forwarded |
-| D3D12 | Gateway-authorized multi-lane buffer elision with queue/fence provenance |
-| Native telemetry | Persistent read-only process, RAM, VRAM, and GPU-engine series |
-| Vulkan | Native cooperative buffer-copy library, FluidLink authorization, exact readback and rollback |
-| Third-party Vulkan | Opt-in memory/command hooks and [fence/queue completion evidence](docs/vulkan-completion-observation.md); original GPU calls preserved |
-| Windows integration | Optional Normal -> AboveNormal priority lease with independent rollback watchdog |
-| General game optimization | Not established; external GPU operations are never removed |
+| **Daily monitoring** | CPU/RAM plus optional native GPU-engine and dedicated/shared memory counters |
+| **D3D11 / D3D12 / Vulkan** | Owned workloads with exact-content copy elision, invalidation and original-copy fallback |
+| **Application observation** | Opt-in Vulkan launch layer; tracks memory, commands and completion without removing external GPU calls |
+| **Shared arena v1** | Experimental D3D12 buffer DLL, C ABI, 64 slots, 64 MiB charged backing and verified read-only peers |
+| **Gateway connection** | Isolated FluidLink server or opt-in in-process DLL using the same decision core |
+| **Windows priority lease** | Explicit, short Normal-to-AboveNormal lease with an independent restoration watchdog |
 
-## Application Sessions
+See [current status](docs/STATUS.md) for versions, validation and compatibility limits.
 
-[Native C++ Gateway setup and validation](docs/native-gateway.md) keeps Python
-outside the online decision path; offline diagnosis remains in FluidGateway.
-[In-process setup and A/B validation](docs/inprocess-gateway.md) removes localhost
-transport when explicitly selected. The isolated server remains the default.
-[FluidLink optimization and Gateway readback](docs/fluidlink-v0.5-readback.md)
-documents the new controlled GPU-to-CPU path and its failure boundaries.
+## Memory Work, With Evidence
 
-The v0.23 source on `main` can observe a selected x64 Vulkan application through
-an explicit loader layer, collect CPU/RAM and Vulkan counters, and send the
-result to Gateway's `analyze-app` report. No global installation is required.
-Windows priority changes are **off by default** and limited to a short,
-explicitly requested lease. Protected/anti-cheat applications are unsupported.
+The [shared arena](docs/shared-arena.md) owns CPU sections and
+UPLOAD/DEFAULT/READBACK buffers, tracks content versions and makes access lifetime
+explicit. Expired leases or unproven GPU completion stop new work.
 
-[Build and run a session](docs/application-sessions.md) |
-[Test evidence and limitations](docs/evidence/v0.23.0-application-integration.md).
+Its allocation-reuse lab creates **120 backing objects instead of 960** across
+the measured workload: **87.5% fewer creations**. Both arms still perform the
+same CPU/GPU copies and compare every byte.
+[Methodology, timing results and raw reports](docs/evidence/shared-arena.md).
 
-## Persistent Native Telemetry
+This is a foundation for smarter data reuse, **not physical unified memory**.
+It is not loaded by the daily monitor or applied automatically to other programs.
 
-`fluidruntime inspect` can collect up to 100 native GPU/VRAM snapshots without
-launching a probe process per sample. The native probe keeps one bounded PDH
-session alive, reuses its counters, and emits an ordered
-`native_probe_samples` series. The default remains one snapshot.
+## How the Pieces Fit
 
-```powershell
-fluidruntime inspect --ledger ledger.json --out report.json --pid 1234 `
-  --samples 30 --interval-ms 1000 `
-  --native-probe fluidruntime-native-probe.exe --native-probe-samples 30
+```mermaid
+flowchart LR
+    G["FluidGateway: diagnosis and policy"] <--> T["FluidLink: server or in-process"]
+    T <--> R["FluidRuntime: identity and safety gates"]
+    R --> N["Owned D3D11 / D3D12 / Vulkan execution"]
+    M["Daily monitor / Vulkan observation"] --> E["Evidence and reports"]
+    A["Shared arena: opt-in native client"] --> E
 ```
 
-This path is observational and read-only. It does not inject, hook, schedule,
-change residency, or optimize the target process.
+The arena's local read-descriptor protocol is separate from FluidLink and grants
+no new GPU-control authority. [Architecture and contracts](docs/architecture.md).
 
-## Native Vulkan
+## Direction and Boundaries
 
-The v0.22 backend removes proven redundant `vkCmdCopyBuffer` calls from an
-owned RAM -> device-local memory -> RAM workload. Two isolated lanes retain
-exact content through source changes, fills, invalidation, reset and revocation.
-FluidGateway authorizes a bounded policy through the existing binary FluidLink
-contract; the native library makes the final decision.
+The goal is to coordinate data lifetime and processing with less redundant work,
+especially where memory and hardware are constrained. Next comes trusted
+managed/native arena integration, then separately authorized reuse with measured
+benefit and a working fallback.
 
-This is a reusable **cooperative library**, not a Vulkan interception layer for
-arbitrary games. It owns its Vulkan objects, installs nothing globally, and
-does not remove required barriers or fences. Logical bytes omitted are not
-physical PCIe traffic, VRAM savings, or proof of higher FPS.
+Today this is **not** a general game optimizer, driver, replacement Windows
+scheduler or existing-process injector. Protected/anti-cheat applications are
+unsupported. Synthetic results do not establish FPS, input-delay, power or
+physical PCIe savings. [Full roadmap](docs/roadmap.md).
 
-[Build, run and understand the boundary](docs/vulkan-native.md).
-[Measurements and validation](docs/evidence/v0.22.0-vulkan-native.md).
+## Build With Us
 
-## How It Fits
+Start with [contributing](CONTRIBUTING.md) for setup, formatting and test gates.
+Useful contributions include reproducible bug reports, compatibility traces,
+failure-path tests and documentation. Negative results are welcome too.
 
-```text
-PresentMon + Windows telemetry
-             |
-        FluidGateway
-      diagnosis + policy
-             |
-       FluidLink binary IPC
-             |
-        FluidRuntime
- proof + bounded owned action
-             |
-   native D3D11/D3D12/Vulkan labs
-```
-
-## Verify Locally
-
-Requirements: Windows, Python 3.11+, .NET 10 SDK, CMake, and an x64 C++
-toolchain for the full test suite. Native positive operation does not need Python;
-reference comparisons and fault fixtures do. See [Gateway setup](docs/native-gateway.md).
-
-```powershell
-dotnet test FluidRuntime.slnx -c Debug
-dotnet build FluidRuntime.slnx -c Release -warnaserror
-cmake -S ../FluidGateway/native -B ../FluidGateway/native/build -A x64
-cmake --build ../FluidGateway/native/build --config Release
-cmake -S native -B native/build -A x64
-cmake --build native/build --config Release
-
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File tools/Test-FluidLinkIntegration.ps1 `
-  -GatewayPath ..\FluidGateway
-
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File tools/Test-GatewayManagedD3D12Copy.ps1 `
-  -GatewayPath ..\FluidGateway `
-  -CandidateActionCount 128 `
-  -TrialPairs 2 -WarmupPairs 0 -Hardware $false
-```
-
-## Safety Boundary
-
-FluidRuntime does not remotely inject into existing processes, alter drivers,
-replace the Windows scheduler, control physical residency, or promise unified-
-memory behavior in software. GPU intervention is limited to owned deterministic
-targets. Third-party Vulkan observation forwards calls unchanged; the separate
-Windows priority lease never requests High/Realtime priority or global changes.
-
-Lab commands use disposable owned workloads. `app-session` launches only the
-selected application and leaves it running when capture stops. The observation
-layer stays loaded until that application exits; stopping capture is not an unload.
-
-## Documentation
-
-- [Code review and regression evidence](docs/evidence/2026-09-05-code-review.md)
-- [Current status and release gate](docs/STATUS.md)
-- [Architecture and trust boundaries](docs/architecture.md)
-- [Roadmap](docs/roadmap.md)
-- [Native Vulkan library and lab](docs/vulkan-native.md)
-- [v0.21 generalized D3D12 transfer evidence](docs/evidence/v0.21.0-d3d12-transfer-core.md)
-- [v0.21.1 local-use hardening evidence](docs/evidence/v0.21.1-local-use-hardening.md)
-- [v0.21.2 CI portability evidence](docs/evidence/v0.21.2-ci-portability.md)
-- [v0.20 single-lane D3D12 evidence](docs/evidence/v0.20.0-d3d12-copy-elision.md)
-- [v0.19 end-to-end authorization evidence](docs/evidence/v0.19.0-end-to-end-authorization.md)
-- [v0.18 resilience and 128-action evidence](docs/evidence/v0.18.0-resilience-update-upload-128.md)
-- [FluidLink v0.17 batch evidence](docs/evidence/v0.17.0-fluidlink-operation-batch.md)
-- [D3D12 observation evidence](docs/evidence/v0.16.0-d3d12-observation.md)
-- [Project handoff briefing](docs/BRIEFING-CLAUDE-CODE.md)
-
-FluidRuntime is open source under the [MIT License](LICENSE).
+Open source under the [MIT License](LICENSE).

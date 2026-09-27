@@ -3,7 +3,9 @@
 FluidRuntime is the live observation and bounded actuation half of the Fluid
 project. FluidGateway turns PresentMon traces into ranked evidence and an
 operational ledger. FluidRuntime combines that ledger with live process,
-memory, GPU, and graphics API telemetry.
+memory, GPU, and graphics API telemetry. Online decisions use the same Gateway
+C++20 core through either an isolated FluidLink server or an in-process DLL;
+Python remains available for offline analysis and reference behavior.
 
 ```mermaid
 flowchart LR
@@ -22,6 +24,11 @@ flowchart LR
     P --> C[Shared-memory control block]
     C -. owned lab opt-in only .-> D3D
     C -. owned D3D12 opt-in only .-> D12H
+    C -. owned Vulkan opt-in only .-> VK[Cooperative Vulkan library]
+    VK --> MR
+    APP[Explicit Vulkan launch layer] --> OBS[Read-only application evidence]
+    ARENA[Opt-in native arena client] --> MEM[FluidMemoryArena C ABI]
+    MEM --> COH[Bounded coherence and D3D12 buffers]
 ```
 
 ## Components
@@ -35,12 +42,17 @@ An optional independent Windows watchdog changes Normal to AboveNormal for a
 bounded lease and restores it on expiration/capture stop. It never authorizes
 GPU changes. See [the full session contract](application-sessions.md).
 
-- `FluidGateway`: offline diagnosis, trace ingestion, policy modeling, and the
-  operational ledger contract.
+- `FluidGateway`: offline diagnosis, trace ingestion, policy modeling, the
+  operational ledger contract and shared online C++20 decision core.
 - `FluidRuntime`: .NET CLI, identity checks, telemetry aggregation, decision
   plans, report validation, and future safety policy.
-- `FluidLink`: dependency-free .NET client and cross-repository contract for
-  loopback binary request/response transport with numeric opcodes.
+- `FluidLink`: dependency-free .NET client and cross-repository contract with
+  numeric opcodes, bounded batches, loopback transport and a Gateway DLL backend.
+- `FluidMemoryArena`: opt-in native C ABI over the existing coherence core,
+  owning CPU sections and D3D12 staging/device buffers. It is separate from the
+  managed control path; no automatic arena enrollment exists.
+- Cooperative Vulkan library: private owned transfer lanes with exact-content
+  checks and revocation. The external Vulkan launch layer only observes calls.
 - `fluidruntime-native-probe`: read-only Windows process, memory, WDDM VRAM,
   and GPU-engine counters for one PID. Optional bounded series reuse one PDH
   query and counter set instead of launching one process per snapshot.
@@ -59,7 +71,26 @@ GPU changes. See [the full session contract](application-sessions.md).
 - `fluidruntime-hook-target`: owned deterministic workload used to prove hook
   installation, event delivery, validation, and complete rollback.
 
+## Cooperative Shared Arena
+
+The [arena](shared-arena.md) exposes opaque handles, fixed-width descriptors and
+caller-held leases through an [exception-contained C ABI](shared-arena-abi.md).
+One live arena per loaded DLL instance is bounded to 64 slots and 64 MiB of charged
+backing. Clients must load only one instance per process. The charge includes
+section pages and driver-reported buffer allocation sizes, not all driver or
+process memory.
+
+Local writes invalidate older replicas. A remote read pins its buffer until the
+verified peer exits; it cannot authorize GPU work. The local read-descriptor
+protocol is not FluidLink. Unknown GPU completion closes admissions and retains
+backing until completion or device removal can be established. All CPU/GPU copies
+remain; neither the daily monitor nor external application observation loads it.
+
 ## FluidLink Control Transport
+
+The following wire history remains normative for the compatible profiles. The
+native server and DLL support v2; legacy v1/JSONL stay on the Python reference
+server. See [current backend selection](inprocess-gateway.md).
 
 Version 0.14.0 promotes FluidLink v2 on the separate user-space path between the
 Gateway policy plane and the managed runtime. The fixed 56-byte little-endian

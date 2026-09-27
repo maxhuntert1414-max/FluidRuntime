@@ -1,8 +1,35 @@
 # Project Status
 
-## Native Gateway Promotion: v0.68.0
+## Current Source: 2026-09-27
 
-Gateway v0.68.0 is published and pinned by the interop workflow. Lab scripts now
+`main` contains the v0.23 application path and the later native Gateway, daily
+terminal, Vulkan lifetime/completion and cooperative-memory milestones.
+The latest Runtime tag remains **v0.21.2**; it is not a packaged download of all
+current features. The Gateway integration pins **v0.69.0** and FluidLink is **0.5.0**.
+
+| Surface | Current boundary |
+| --- | --- |
+| [Daily terminal](daily-use.md) | Read-only CPU/RAM and optional native GPU counters; source-built portable package |
+| Owned D3D11/D3D12/Vulkan labs | Explicit authorization, exact-content validation and original-copy fallback |
+| [Application sessions](application-sessions.md) | Opt-in Vulkan observation; unmodified Khronos cubes are the current external compatibility evidence |
+| [In-process Gateway](inprocess-gateway.md) | Optional shared C++ decision core; isolated server remains available |
+| [Shared arena v1](shared-arena.md) | Opt-in D3D12 DLL with bounded backing and read-only peer grants; no copy elision or daily integration |
+
+The arena's [current evidence](evidence/shared-arena.md) records Release/Debug/ASAN
+validation, fault controls and allocation-reuse measurements. It does not show
+physical unified memory or a gain in game FPS. No background service, global
+hook or system setting is enabled by this milestone.
+
+[Documentation index](README.md) | [Roadmap](roadmap.md) |
+[Runtime CI](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/ci.yml) |
+[FluidLink interop](https://github.com/maxhuntert1414-max/FluidRuntime/actions/workflows/fluidlink.yml)
+
+The sections below retain historical results and version-specific test counts.
+They do not replace the current scope or the exact-commit CI result.
+
+## Historical Native Gateway Promotion: v0.68.0
+
+Gateway v0.68.0 was published and pinned by the interop workflow. Lab scripts
 default to Native, preserving explicit Python selection and all PID/hash,
 content, expiry, budget and rollback gates. CI covers both backends separately,
 including D3D11/D3D12 faults and native operation without Python on the child PATH.
@@ -28,14 +55,14 @@ cross-process/native/application regressions. See
 [review evidence and remaining work](evidence/2026-09-05-code-review.md).
 No broader game-performance or third-party GPU-actuation claim is introduced.
 
-## Current Development: v0.23 Application Integration
+## Historical v0.23 Application Integration
 
 `main` adds opt-in third-party Vulkan launch observation and a separately
 authorized Windows priority lease. It does not authorize external GPU copy
 elision. See [application sessions](application-sessions.md) and
 [the v0.23 evidence](evidence/v0.23.0-application-integration.md) for reproduction,
 measured coverage, overhead limits and the collector-crash restoration test.
-The FluidLink contract is unchanged. The pinned Gateway v0.68.0 includes the
+The FluidLink contract was unchanged. The then-pinned Gateway v0.68.0 includes the
 `analyze-app` importer as well as the native online endpoint.
 
 ## Previous Milestone: v0.22 Native Vulkan
